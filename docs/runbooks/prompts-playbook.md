@@ -330,7 +330,7 @@ filtros es WP-G04.
 ```
 Tomá WP-<id> del backlog.
 
-Leé primero: <documentos del área>.
+Leé primero: .claude/rules/<área>.md y <documentos del área>.
 
 Objetivo: <una frase, tomada del backlog>.
 
@@ -506,6 +506,7 @@ Si notás que ignora una instrucción, `/context` es el primer diagnóstico: cas
 - **Los imports `@archivo.md` cargan al arranque**, así que importar los diez documentos de `docs/` no ahorra contexto: lo consume igual. No lo hagas.
 - **Después de `/compact`**, el `CLAUDE.md` de la raíz se reinyecta solo; las reglas por ruta recargan cuando vuelve a tocar archivos que coincidan. Lo que se pierde es lo que dijiste solo en la conversación. Si una instrucción importa, va a un archivo.
 - **La memoria automática está activa por defecto** y guarda correcciones tuyas entre sesiones. Es útil, pero no reemplaza a `CLAUDE.md`: lo que tiene que valer siempre va escrito, no delegado a que lo recuerde.
+- **El auto-load de `.claude/rules/` no se pudo verificar en la extensión de VS Code.** Hay reportes conocidos de que las reglas con `paths:` no se inyectan ahí, a diferencia de la CLI. Las reglas siguen versionadas — funcionan en la CLI y no cuestan nada mantenerlas — pero no asumas que van a cargar solas: el prompt de cada tarea tiene que nombrar el archivo de regla del área junto con los documentos (ver la plantilla de la sección 3).
 
 ---
 
