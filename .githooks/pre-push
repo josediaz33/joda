@@ -1,0 +1,16 @@
+#!/bin/sh
+# Bloquea el empuje directo a main. Es la protección barata mientras no hay
+# GitHub Pro/repo público (que habilitarían branch protection del lado del
+# servidor) ni CI (que habilitaría required_status_checks, ver WP-A02 en
+# docs/backlog.md). No protege contra alguien decidido — se saltea con
+# --no-verify — protege contra el "git push origin main" por costumbre, que
+# es el riesgo real hoy. Ver CONTRIBUTING.md § Entorno local y § Despliegue.
+protegida="refs/heads/main"
+while read -r _ _ ref_remoto _; do
+  if [ "$ref_remoto" = "$protegida" ]; then
+    echo "Bloqueado: main no recibe empujes directos. Usá una rama y un PR." >&2
+    echo "Si es deliberado: git push --no-verify" >&2
+    exit 1
+  fi
+done
+exit 0
