@@ -1,0 +1,8 @@
+#!/bin/sh
+# Quita cualquier trailer de atribución de Claude Code que se haya colado en
+# el mensaje de commit, incluso si el ajuste de attribution/includeCoAuthoredBy
+# de ~/.claude/settings.json no se respetó. Ver CONTRIBUTING.md § Entorno local.
+sed -i -e '/^Co-Authored-By: Claude/d' \
+       -e '/^Co-authored-by: Claude/d' \
+       -e '/^🤖 Generated with \[Claude Code\]/d' \
+       -e '/^Claude-Session:/d' "$1"

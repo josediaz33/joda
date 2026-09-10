@@ -31,7 +31,16 @@ const DOMAIN_PURITY_MESSAGE =
 
 export default [
   {
-    ignores: ["**/dist/**", "**/.turbo/**", "**/coverage/**", "**/node_modules/**"],
+    ignores: [
+      "**/dist/**",
+      "**/.turbo/**",
+      "**/coverage/**",
+      "**/node_modules/**",
+      // Fixture con violaciones a propósito (ver test/boundaries.test.ts):
+      // se lintea por la API de Node con una ruta virtual, nunca como
+      // archivo real de este paquete.
+      "packages/config/test/fixtures/**",
+    ],
   },
 
   js.configs.recommended,

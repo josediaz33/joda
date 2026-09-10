@@ -9,6 +9,7 @@ Flujo de trabajo, convenciones y criterios de aceptación. Aplica igual a person
 ```bash
 # requisitos: Node 22+, pnpm 9+, Docker
 git clone <repo> && cd joda
+git config core.hooksPath .githooks   # activa .githooks/commit-msg, ver abajo
 cp .env.example .env          # completar valores
 pnpm install
 docker compose up -d          # postgres + redis
@@ -24,6 +25,23 @@ Verificación de que quedó bien:
 pnpm db:test        # 18/18 invariantes en verde
 pnpm test:domain    # dominio en verde
 ```
+
+### Hooks de Git
+
+`.githooks/commit-msg` va versionado en el repo y quita cualquier trailer de
+atribución de un asistente de IA que se haya colado en el mensaje de commit
+(`Co-Authored-By: Claude...`, `🤖 Generated with...`, `Claude-Session:...`),
+incluso si la configuración del asistente para omitirlo no se respetó. `git
+config core.hooksPath .githooks` (arriba, en el clonado) lo activa — es
+configuración local de cada clon, no algo que Git active solo.
+
+### Decisiones de versión (WP-A01)
+
+- **ESLint 9.39.5, no 10.x:** ESLint 10 exige Node ≥22.13 dentro de la línea
+  22.x; este repo solo pide "Node 22+" a secas. Reevaluar cuando se suba el
+  piso de Node del proyecto.
+- **pnpm 9.15.4, no la última 12.x:** cumple el "pnpm 9+" de arriba sin forzar
+  una migración de major que ningún paquete de trabajo pidió todavía.
 
 ---
 
