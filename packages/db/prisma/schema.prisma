@@ -1,0 +1,25 @@
+// =============================================================
+// schema.prisma — SE GENERA POR INTROSPECCIÓN, no se edita a mano.
+//
+//   export DATABASE_URL="postgresql://user:pass@host:5432/joda?schema=app"
+//   npx prisma db pull      # regenera este archivo desde las migraciones
+//   npx prisma generate     # cliente tipado para apps/api
+//
+// La fuente de verdad del esquema es packages/db/migrations/*.sql.
+// Prisma no puede expresar constraint triggers diferidos, políticas RLS,
+// dominios, columnas generadas ni FK compuestas: si el esquema lo definiera
+// Prisma, todo eso desaparecería.
+// =============================================================
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["multiSchema", "views"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  schemas  = ["app", "public"]
+}
+
+// Los 61 modelos se materializan al correr `prisma db pull`.

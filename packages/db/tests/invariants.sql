@@ -1,0 +1,192 @@
+-- =====================================================================
+-- invariants.sql — cada prueba INTENTA una operación inválida y espera
+-- que la base la rechace. Un invariante que nunca se probó es una creencia.
+-- Se ejecuta después de smoke_business_flow.sql.
+-- =====================================================================
+SET search_path = app, public;
+
+CREATE TEMP TABLE results (n int, nombre text, esperado text, resultado text);
+
+CREATE OR REPLACE FUNCTION pg_temp.expect_fail(
+  p_n int, p_nombre text, p_sql text
+) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  BEGIN
+    EXECUTE p_sql;
+    INSERT INTO results VALUES (p_n, p_nombre, 'rechazo', 'FALLO — fue aceptado');
+  EXCEPTION WHEN others THEN
+    INSERT INTO results VALUES (p_n, p_nombre, 'rechazo',
+      'OK — ' || left(replace(SQLERRM, E'\n', ' '), 62));
+  END;
+END $$;
+
+-- 1 ─ El ledger no se edita
+SELECT pg_temp.expect_fail(1, 'UPDATE sobre inventory_movements',
+  $$UPDATE app.inventory_movements SET qty = 999 WHERE id = 1$$);
+
+-- 2 ─ El ledger no se borra
+SELECT pg_temp.expect_fail(2, 'DELETE sobre inventory_movements',
+  $$DELETE FROM app.inventory_movements WHERE id = 1$$);
+
+-- 3 ─ No se puede vender lo que no hay (sobreventa)
+SELECT pg_temp.expect_fail(3, 'Sobreventa: 200 ml de un lote con 114,65',
+  $$INSERT INTO app.inventory_movements
+      (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '99999999-0000-0000-0000-000000000002',
+            '55555555-0000-0000-0000-000000000002', -200, 'ml', 'sale')$$);
+
+-- 4 ─ Signo incoherente con el tipo de movimiento
+SELECT pg_temp.expect_fail(4, 'Venta con cantidad positiva',
+  $$INSERT INTO app.inventory_movements
+      (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '99999999-0000-0000-0000-000000000002',
+            '55555555-0000-0000-0000-000000000002', 5, 'ml', 'sale')$$);
+
+-- 5 ─ Unidad de medida incompatible con el lote
+SELECT pg_temp.expect_fail(5, 'Movimiento en unidades sobre lote en ml',
+  $$INSERT INTO app.inventory_movements
+      (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '99999999-0000-0000-0000-000000000002',
+            '55555555-0000-0000-0000-000000000002', -1, 'unit', 'sale')$$);
+
+-- 6 ─ Un frasco abierto para decantar no se vende sellado
+SELECT pg_temp.expect_fail(6, 'Venta de sellado desde lote abierto',
+  $$INSERT INTO app.inventory_movements
+      (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '99999999-0000-0000-0000-000000000001',
+            '55555555-0000-0000-0000-000000000001', -1, 'unit', 'sale')$$);
+
+-- 7 ─ Asiento descuadrado (se detecta al COMMIT, no antes)
+SELECT pg_temp.expect_fail(7, 'Asiento con debe <> haber',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo)
+      VALUES ('f0000000-0000-0000-0000-0000000000ff',
+              '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 99, current_date,
+              'draft', 'Asiento descuadrado a propósito');
+      INSERT INTO app.journal_lines (entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT 'f0000000-0000-0000-0000-0000000000ff', id, 100000, 0
+        FROM app.chart_of_accounts WHERE code = '1.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+      INSERT INTO app.journal_lines (entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT 'f0000000-0000-0000-0000-0000000000ff', id, 0, 70000
+        FROM app.chart_of_accounts WHERE code = '4.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+      SET CONSTRAINTS app.trg_journal_balanced IMMEDIATE;
+    END $x$
+  $$);
+
+-- 8 ─ Una línea contable no puede ser débito y crédito a la vez
+SELECT pg_temp.expect_fail(8, 'Línea con debe y haber simultáneos',
+  $$INSERT INTO app.journal_lines (entry_id, account_id, debit_pyg, credit_pyg)
+    SELECT 'f0000000-0000-0000-0000-000000000001', id, 5000, 5000
+      FROM app.chart_of_accounts WHERE code = '1.1.01.001'
+       AND tenant_id = '11111111-1111-1111-1111-111111111111'$$);
+
+-- 9 ─ Un asiento contabilizado no se modifica
+SELECT pg_temp.expect_fail(9, 'Editar línea de asiento ya contabilizado',
+  $$UPDATE app.journal_lines SET debit_pyg = 1
+     WHERE entry_id = 'f0000000-0000-0000-0000-000000000001'$$);
+
+-- 10 ─ Webhook de pago duplicado (Bancard reintenta)
+SELECT pg_temp.expect_fail(10, 'Evento de pago repetido',
+  $$INSERT INTO app.payment_events
+      (tenant_id, provider, external_event_id, payload)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'bancard', 'EVT-889231-01',
+            '{"replay":true}')$$);
+
+-- 11 ─ Coherencia de vertical: un reloj no puede tener detalles de perfume
+SELECT pg_temp.expect_fail(11, 'perfume_details sobre un producto watch',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.products (id, tenant_id, kind, slug, name, status)
+      VALUES ('44444444-0000-0000-0000-00000000bbbb',
+              '11111111-1111-1111-1111-111111111111', 'watch', 'seiko-skx', 'Seiko SKX', 'draft');
+      INSERT INTO app.perfume_details
+        (product_id, concentration, nominal_volume_ml, olfactory_family)
+      VALUES ('44444444-0000-0000-0000-00000000bbbb', 'edp', 100, 'Acuática');
+    END $x$
+  $$);
+
+-- 12 ─ Una seña no puede aplicarse por más de lo recibido
+SELECT pg_temp.expect_fail(12, 'Seña sobre-aplicada',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.customer_deposits
+        (id, tenant_id, customer_id, amount_pyg, applied_pyg)
+      VALUES ('ab000000-0000-0000-0000-000000000001',
+              '11111111-1111-1111-1111-111111111111',
+              'aaaaaaaa-0000-0000-0000-000000000001', 500000, 800000);
+    END $x$
+  $$);
+
+-- 13 ─ Las capas de costo tienen que cuadrar con el costo del movimiento
+SELECT pg_temp.expect_fail(13, 'Asignación de costo que no cuadra',
+  $$DO $x$
+    DECLARE v_mov bigint;
+    BEGIN
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000002', -1, 'ml', 'sale', 11972)
+      RETURNING id INTO v_mov;
+      INSERT INTO app.movement_cost_allocations
+        (movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+      VALUES (v_mov, '99999999-0000-0000-0000-000000000002', 1, 5000, 5000);
+      SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE;
+    END $x$
+  $$);
+
+-- 14 ─ Una nota de crédito sin documento de referencia
+SELECT pg_temp.expect_fail(14, 'Nota de crédito huérfana',
+  $$INSERT INTO app.fiscal_documents (tenant_id, doc_type, status, total_pyg)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'nota_credito', 'draft', 0)$$);
+
+-- 15 ─ Un documento fiscal aprobado sin CDC
+SELECT pg_temp.expect_fail(15, 'Documento aprobado sin CDC',
+  $$INSERT INTO app.fiscal_documents (tenant_id, doc_type, status, total_pyg)
+    VALUES ('11111111-1111-1111-1111-111111111111', 'factura', 'approved', 0)$$);
+
+-- 16 ─ Total de pedido incoherente con sus componentes
+SELECT pg_temp.expect_fail(16, 'Total de pedido que no cierra',
+  $$INSERT INTO app.sale_orders
+      (tenant_id, channel_id, code, subtotal_pyg, discount_pyg, shipping_pyg, total_pyg)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            'bbbbbbbb-0000-0000-0000-000000000001', 'VTA-BAD',
+            100000, 0, 0, 999999)$$);
+
+-- 17 ─ Variante bajo pedido sin granel de origen
+SELECT pg_temp.expect_fail(17, 'made_to_order sin source_variant_id',
+  $$INSERT INTO app.product_variants
+      (tenant_id, product_id, sku, variant_type, uom, size_ml, price_pyg, production_mode)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '44444444-4444-4444-4444-444444444444', 'LAY-DEC-5-BAD',
+            'decant', 'ml', 5, 140000, 'made_to_order')$$);
+
+-- 18 ─ Auditoría inmutable
+SELECT pg_temp.expect_fail(18, 'DELETE sobre audit_log',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.audit_log (tenant_id, audience, action, entity)
+      VALUES ('11111111-1111-1111-1111-111111111111', 'staff', 'test', 'x');
+      DELETE FROM app.audit_log WHERE action = 'test';
+    END $x$
+  $$);
+
+\echo ''
+\echo '=============================================================='
+\echo ' INVARIANTES'
+\echo '=============================================================='
+SELECT n, nombre, resultado FROM results ORDER BY n;
+
+SELECT count(*) FILTER (WHERE resultado LIKE 'OK%')    AS pasaron,
+       count(*) FILTER (WHERE resultado LIKE 'FALLO%') AS fallaron,
+       count(*)                                        AS total
+  FROM results;

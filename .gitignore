@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.env
+.turbo/
+coverage/
+*.log
+
+# Dump de referencia local (no se versiona, ver packages/db/README.md)
+packages/db/prisma/.reference-dump.sql
