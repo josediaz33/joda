@@ -1,0 +1,21 @@
+{
+  "name": "@joda/domain",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Lógica de negocio pura, sin I/O (CLAUDE.md § Código). Esqueleto (WP-A01); Money/Quantity/Result llegan en WP-A03.",
+  "scripts": {
+    "build": "node ../../scripts/pending-task.mjs \"build (domain)\" WP-A03",
+    "test": "node ../../scripts/pending-task.mjs \"test (domain)\" WP-A03",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "eslint": "catalog:",
+    "@eslint/js": "catalog:",
+    "typescript-eslint": "catalog:",
+    "eslint-plugin-boundaries": "catalog:",
+    "eslint-config-prettier": "catalog:"
+  }
+}

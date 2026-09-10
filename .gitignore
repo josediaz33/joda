@@ -10,3 +10,7 @@ packages/db/prisma/.reference-dump.sql
 
 # Configuración local de Claude Code (no compartida)
 .claude/settings.local.json
+
+# Generado y borrado por packages/config/test/boundaries.test.ts en cada
+# corrida; red de seguridad si un test cortado a la mitad lo deja tirado.
+packages/domain/src/__boundary-check.generated.ts

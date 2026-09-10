@@ -1,0 +1,23 @@
+{
+  "name": "@joda/config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "tsconfig, ESLint y (a partir de WP-E01) preset de Tailwind compartidos entre apps y packages.",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "eslint": "catalog:",
+    "@eslint/js": "catalog:",
+    "typescript-eslint": "catalog:",
+    "eslint-plugin-boundaries": "catalog:",
+    "eslint-config-prettier": "catalog:",
+    "vitest": "catalog:",
+    "vite": "catalog:",
+    "@types/node": "catalog:"
+  }
+}

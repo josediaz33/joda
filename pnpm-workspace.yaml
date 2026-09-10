@@ -1,0 +1,19 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+# Versiones únicas para las herramientas compartidas entre paquetes.
+# Cada package.json referencia estas versiones con "catalog:" en vez de
+# repetir el número — evita que dos paquetes queden con ESLint o TypeScript
+# desincronizados sin que nadie lo note.
+catalog:
+  typescript: 5.9.3
+  eslint: 9.39.5
+  "@eslint/js": 9.39.5
+  typescript-eslint: 8.70.0
+  eslint-plugin-boundaries: 7.2.0
+  eslint-config-prettier: 10.1.8
+  prettier: 3.9.6
+  vitest: 5.0.0
+  vite: 8.3.0
+  "@types/node": 22.20.2

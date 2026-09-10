@@ -9,6 +9,7 @@ Flujo de trabajo, convenciones y criterios de aceptación. Aplica igual a person
 ```bash
 # requisitos: Node 22+, pnpm 9+, Docker
 git clone <repo> && cd joda
+git config core.hooksPath .githooks   # activa los hooks de .githooks/, ver abajo
 cp .env.example .env          # completar valores
 pnpm install
 docker compose up -d          # postgres + redis
@@ -24,6 +25,30 @@ Verificación de que quedó bien:
 pnpm db:test        # 18/18 invariantes en verde
 pnpm test:domain    # dominio en verde
 ```
+
+### Hooks de Git
+
+Van versionados en `.githooks/` y se activan con `git config core.hooksPath
+.githooks` (arriba, en el clonado) — es configuración local de cada clon,
+Git no la activa solo.
+
+- **`commit-msg`** quita cualquier trailer de atribución de un asistente de
+  IA que se haya colado en el mensaje de commit (`Co-Authored-By: Claude...`,
+  `🤖 Generated with...`, `Claude-Session:...`), incluso si la configuración
+  del asistente para omitirlo no se respetó.
+- **`pre-push`** bloquea el empuje directo a `main` (ver § Despliegue: hoy es
+  la única protección de `main` que existe, porque no hay `required_status_checks`
+  del servidor todavía). Se saltea con `git push --no-verify` cuando es
+  deliberado — no protege contra alguien decidido, protege contra el `git
+  push origin main` por costumbre.
+
+### Decisiones de versión (WP-A01)
+
+- **ESLint 9.39.5, no 10.x:** ESLint 10 exige Node ≥22.13 dentro de la línea
+  22.x; este repo solo pide "Node 22+" a secas. Reevaluar cuando se suba el
+  piso de Node del proyecto.
+- **pnpm 9.15.4, no la última 12.x:** cumple el "pnpm 9+" de arriba sin forzar
+  una migración de major que ningún paquete de trabajo pidió todavía.
 
 ---
 
@@ -217,3 +242,15 @@ PR fusionado a main
 **Nunca se despliega un viernes por la tarde** salvo corrección de un incidente en curso.
 
 Antes de un despliegue que incluya migración: verificar que la recuperación a un punto en el tiempo está activa y que el último simulacro de restauración es de hace menos de tres meses.
+
+### Estado de la protección de `main`
+
+Hoy es un hook local (`.githooks/pre-push`, § Entorno local), no protección
+del lado del servidor: el repo es privado en un plan gratuito de GitHub, que
+no habilita branch protection ni rulesets para repos privados (exige GitHub
+Pro o hacer el repo público). El hook evita el descuido, no a alguien
+decidido a saltárselo con `--no-verify`.
+
+Cuando exista el pipeline de CI (WP-A02), evaluar GitHub Pro y activar
+`required_status_checks` del lado del servidor con los nombres de los jobs
+— eso sí protege contra un force-push, cosa que el hook no puede.
