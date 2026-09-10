@@ -462,7 +462,54 @@ No empieces el bloque siguiente en esta sesión.
 
 ---
 
-## 5. Higiene de sesión
+## 5. Cómo se carga el contexto
+
+No hace falta —ni conviene— pedir que lea todo en cada sesión. El contexto es finito y llenarlo degrada la adherencia a las instrucciones. El sistema está armado en tres capas para que llegue lo justo:
+
+| Capa | Qué es | Cuándo se carga |
+|---|---|---|
+| `CLAUDE.md` (raíz) | Reglas permanentes, comandos, mapa de documentación | Automáticamente, en cada sesión |
+| `.claude/rules/*.md` | No negociables por área, con `paths:` en el frontmatter | Automáticamente, **cuando toca archivos que coinciden** |
+| `docs/*.md` | La profundidad: reglas de negocio, contratos, especificaciones | **Cuando el prompt los nombra** |
+
+La capa del medio es la que hace el trabajo pesado. Al abrir un archivo de `packages/domain/`, se carga sola `.claude/rules/domain.md` con la regla de pureza, el criterio de `Result` contra excepción y los umbrales de cobertura. Sin que vos lo pidas y sin ocupar contexto en las sesiones donde no aplica.
+
+Las seis reglas y su alcance:
+
+```
+domain.md      packages/domain/**/*.ts
+database.md    packages/db/**
+api.md         apps/api/**/*.ts
+frontend.md    apps/storefront/** · apps/admin/** · packages/ui/**
+contracts.md   packages/contracts/**/*.ts
+testing.md     **/*.test.ts · e2e/** · packages/db/tests/**
+```
+
+### Lo que igual tenés que nombrar
+
+Las reglas llevan los no negociables, no el detalle. Un agente que va a implementar el costeo del decant necesita los números de `domain-rules.md`, y eso no está en la regla. Por eso cada prompt de tarea sigue empezando por *"Leé primero: …"*.
+
+**Regla práctica:** la capa automática evita que rompa algo; nombrar el documento es lo que le permite hacerlo bien.
+
+### Verificar qué se cargó
+
+Dentro de la sesión:
+
+- `/context` — lista los archivos de memoria efectivamente cargados. Si algo no aparece ahí, el agente no lo está viendo.
+- `/memory` — abre los archivos de memoria para editarlos.
+
+Si notás que ignora una instrucción, `/context` es el primer diagnóstico: casi siempre el archivo no cargó, no es que la haya desobedecido.
+
+### Advertencias
+
+- **`CLAUDE.md` conviene por debajo de 200 líneas.** El nuestro está en 178. Cuando crezca, se mueven secciones a `.claude/rules/` con su `paths`, no se agrandan.
+- **Los imports `@archivo.md` cargan al arranque**, así que importar los diez documentos de `docs/` no ahorra contexto: lo consume igual. No lo hagas.
+- **Después de `/compact`**, el `CLAUDE.md` de la raíz se reinyecta solo; las reglas por ruta recargan cuando vuelve a tocar archivos que coincidan. Lo que se pierde es lo que dijiste solo en la conversación. Si una instrucción importa, va a un archivo.
+- **La memoria automática está activa por defecto** y guarda correcciones tuyas entre sesiones. Es útil, pero no reemplaza a `CLAUDE.md`: lo que tiene que valer siempre va escrito, no delegado a que lo recuerde.
+
+---
+
+## 6. Higiene de sesión
 
 **Sesión nueva por paquete de trabajo.** El contexto acumulado de tres tareas hace que el agente arrastre supuestos de la primera hacia la tercera. Es una de las causas más comunes de decisiones que nadie tomó.
 
@@ -474,7 +521,7 @@ No empieces el bloque siguiente en esta sesión.
 
 ---
 
-## 6. El punto donde hay que frenar
+## 7. El punto donde hay que frenar
 
 Tres momentos en los que la sesión se detiene y decidís vos, no el agente:
 

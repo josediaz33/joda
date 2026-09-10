@@ -31,6 +31,8 @@ Antes de trabajar en un área, leé lo que corresponde. **No inventes decisiones
 | `docs/security-spec.md` | Antes de tocar auth, permisos o RLS. |
 | `packages/db/README.md` | Antes de escribir una migración. |
 
+Además, `.claude/rules/` contiene reglas con alcance por ruta que se cargan solas cuando trabajás con archivos que coincidan. Llevan los no negociables de cada área; la profundidad sigue estando en los documentos de arriba.
+
 ---
 
 ## Estructura del repositorio

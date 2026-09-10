@@ -7,3 +7,6 @@ coverage/
 
 # Dump de referencia local (no se versiona, ver packages/db/README.md)
 packages/db/prisma/.reference-dump.sql
+
+# Configuración local de Claude Code (no compartida)
+.claude/settings.local.json

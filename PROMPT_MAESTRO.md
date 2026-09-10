@@ -37,10 +37,12 @@ joda/
 │   ├── supabase/
 │   ├── docker/
 │   └── deployment/
-└── docs/
-    ├── adr/
-    ├── architecture/
-    └── runbooks/
+├── docs/
+│   ├── adr/
+│   ├── architecture/
+│   └── runbooks/
+└── .claude/
+    └── rules/
 
 Poné un .gitkeep en cada carpeta que quede vacía.
 
@@ -73,6 +75,12 @@ ESPECIFICACIONES
 
 RUNBOOKS
   prompts-playbook.md                  → ./docs/runbooks/prompts-playbook.md
+
+REGLAS CON ALCANCE POR RUTA (6 archivos)
+  domain.md · database.md · api.md · frontend.md · contracts.md · testing.md
+                                       → ./.claude/rules/<mismo nombre>
+  Estas se cargan solas cuando trabajes con archivos que coincidan con su
+  frontmatter `paths`. No las muevas ni les cambies el frontmatter.
 
 DECISIONES ARQUITECTÓNICAS (24 archivos)
   Todos los que empiezan con un número de tres dígitos, más su README:
@@ -156,6 +164,40 @@ PASO 5 · Commit inicial
   104 CHECK, 138 claves foráneas, 18/18 invariantes verificados."
 
 ═══════════════════════════════════════════════════════════════════
+PASO 6 · Repositorio remoto
+═══════════════════════════════════════════════════════════════════
+
+Creá el repositorio en GitHub y subí la base. **PRIVADO**: el ERP es un
+activo competitivo y un posible producto.
+
+  gh repo create joda --private --source=. --remote=origin
+  git push -u origin main
+  git push origin v0.0.1-docs
+
+Si no tenés gh instalado, decímelo y lo creo yo desde la web; vos hacés
+solo el `git remote add origin <url>` y el push.
+
+Verificá antes de empujar que .gitignore excluye:
+  .env · node_modules · .turbo · coverage
+  packages/db/prisma/.reference-dump.sql
+
+Después del push, configurá la protección de main:
+
+  gh api repos/:owner/joda/branches/main/protection -X PUT --input - <<'JSON'
+  {
+    "required_status_checks": null,
+    "enforce_admins": false,
+    "required_pull_request_reviews": { "required_approving_review_count": 1 },
+    "restrictions": null,
+    "allow_force_pushes": false,
+    "allow_deletions": false
+  }
+  JSON
+
+Reportame si la protección quedó activa. A partir de acá, TODO cambio va
+por rama y pull request, incluido el tuyo.
+
+═══════════════════════════════════════════════════════════════════
 REGLAS PARA ESTA SESIÓN
 ═══════════════════════════════════════════════════════════════════
 
@@ -165,6 +207,8 @@ REGLAS PARA ESTA SESIÓN
 · NO tomes decisiones que ya estén en un ADR.
 · Si algo de estas instrucciones no coincide con lo que ves en los
   archivos adjuntos, PARÁ Y PREGUNTÁ. No adivines.
+
+· NO empujes a main después del Paso 6. A partir de ahí, ramas y PR.
 
 Empezá por el Paso 1 y avanzá en orden, confirmando cada paso.
 ```
