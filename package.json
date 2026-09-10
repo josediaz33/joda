@@ -1,0 +1,36 @@
+{
+  "name": "joda-parfums-erp-ecomm",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22",
+    "pnpm": ">=9"
+  },
+  "packageManager": "pnpm@9.15.4",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "test:domain": "turbo run test --filter=@joda/domain",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:migrate": "node scripts/pending-task.mjs \"db:migrate\" WP-B01",
+    "db:seed": "node scripts/pending-task.mjs \"db:seed\" WP-B02",
+    "db:pull": "node scripts/pending-task.mjs \"db:pull\" WP-B04",
+    "db:test": "node scripts/pending-task.mjs \"db:test\" WP-B03",
+    "db:reset": "node scripts/pending-task.mjs \"db:reset\" WP-B01"
+  },
+  "devDependencies": {
+    "turbo": "2.10.12",
+    "typescript": "catalog:",
+    "eslint": "catalog:",
+    "@eslint/js": "catalog:",
+    "typescript-eslint": "catalog:",
+    "eslint-plugin-boundaries": "catalog:",
+    "eslint-config-prettier": "catalog:",
+    "prettier": "catalog:"
+  }
+}

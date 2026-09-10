@@ -1,0 +1,21 @@
+{
+  "name": "@joda/ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Design system compartido entre admin y storefront. Esqueleto (WP-A01); los tokens llegan en WP-E01.",
+  "scripts": {
+    "build": "node ../../scripts/pending-task.mjs \"build (ui)\" WP-E01",
+    "test": "node ../../scripts/pending-task.mjs \"test (ui)\" WP-E01",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "eslint": "catalog:",
+    "@eslint/js": "catalog:",
+    "typescript-eslint": "catalog:",
+    "eslint-plugin-boundaries": "catalog:",
+    "eslint-config-prettier": "catalog:"
+  }
+}

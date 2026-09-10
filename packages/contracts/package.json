@@ -1,0 +1,21 @@
+{
+  "name": "@joda/contracts",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Zod + tipos tRPC — fuente de verdad de tipos entre apps. Esqueleto (WP-A01); los esquemas llegan en WP-A11.",
+  "scripts": {
+    "build": "node ../../scripts/pending-task.mjs \"build (contracts)\" WP-A11",
+    "test": "node ../../scripts/pending-task.mjs \"test (contracts)\" WP-A11",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "eslint": "catalog:",
+    "@eslint/js": "catalog:",
+    "typescript-eslint": "catalog:",
+    "eslint-plugin-boundaries": "catalog:",
+    "eslint-config-prettier": "catalog:"
+  }
+}

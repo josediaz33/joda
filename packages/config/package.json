@@ -1,0 +1,7 @@
+{
+  "name": "@joda/config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "tsconfig, ESLint y (a partir de WP-E01) preset de Tailwind compartidos entre apps y packages."
+}

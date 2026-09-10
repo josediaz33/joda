@@ -14,7 +14,7 @@ Identificador: `WP-<bloque><nn>`. Referencialo en la rama, el commit y el PR.
 
 | ID | Paquete | Depende de | Criterio de aceptación |
 |---|---|---|---|
-| ☐ WP-A01 | Monorepo base: pnpm workspaces, Turborepo, tsconfig compartido, ESLint con `eslint-plugin-boundaries`, Prettier | — | `pnpm install && pnpm typecheck && pnpm lint` en verde en un repo vacío |
+| ☑ WP-A01 | Monorepo base: pnpm workspaces, Turborepo, tsconfig compartido, ESLint con `eslint-plugin-boundaries`, Prettier | — | `pnpm install && pnpm typecheck && pnpm lint` en verde en un repo vacío |
 | ☐ WP-A02 | Esqueleto de los tres apps con "hola mundo" y el pipeline de CI | A01 | `pnpm build` produce los tres artefactos; el CI corre en un PR |
 | ☐ WP-A03 | `packages/domain`: `Money`, `Quantity`, `Percentage`, `Result`, jerarquía de errores | A01 | 100% de cobertura; sumar monedas distintas falla; `allocate` no pierde unidades (prueba de propiedades) |
 | ☐ WP-A04 | `packages/domain/tax`: IVA sobre precio incluido, desglose de documento con diferencia de redondeo | A03 | RN-IVA-01…04 con tests; el caso de las tres líneas de 33.333 da `[3030, 3030, 3031]` |

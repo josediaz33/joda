@@ -1,0 +1,21 @@
+{
+  "name": "@joda/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cliente tipado de la API para admin y storefront. Esqueleto (WP-A01); el contenido llega junto con el bloque C.",
+  "scripts": {
+    "build": "node ../../scripts/pending-task.mjs \"build (sdk)\" WP-C01",
+    "test": "node ../../scripts/pending-task.mjs \"test (sdk)\" WP-C01",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "eslint": "catalog:",
+    "@eslint/js": "catalog:",
+    "typescript-eslint": "catalog:",
+    "eslint-plugin-boundaries": "catalog:",
+    "eslint-config-prettier": "catalog:"
+  }
+}

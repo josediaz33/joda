@@ -13,9 +13,16 @@ dominio y [`docs/domain-rules.md`](./docs/domain-rules.md) para las reglas.
 
 ## Cómo arrancar
 
-> El monorepo todavía no está inicializado (pnpm workspaces, Turborepo, etc.).
-> Esa es la tarea WP-A01 del backlog. Hasta entonces no hay `pnpm install`
-> ni scripts que correr — ver [`docs/backlog.md`](./docs/backlog.md).
+```bash
+pnpm install
+pnpm typecheck
+pnpm lint
+```
+
+El monorepo (pnpm workspaces, Turborepo, tsconfig compartido, ESLint con
+`eslint-plugin-boundaries`, Prettier) está inicializado desde WP-A01. Todavía
+no hay apps ni dominio funcionando más allá del esqueleto — eso llega en los
+paquetes de trabajo siguientes, ver [`docs/backlog.md`](./docs/backlog.md).
 
 ## Índice
 
