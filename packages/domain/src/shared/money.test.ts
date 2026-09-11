@@ -170,6 +170,10 @@ describe("Money.allocate — prorrateo exacto (docs/domain-contracts.md §3.1)",
     expect(() => Money.pyg(100n).allocate([0, 0])).toThrow(InvalidAllocationError);
   });
 
+  it("rechaza un peso con más de 6 decimales — pierde precisión en silencio si no", () => {
+    expect(() => Money.pyg(100n).allocate([1, 0.1234567])).toThrow(InvalidAllocationError);
+  });
+
   it("reparte sin perder ni ganar unidades, para cualquier total y cualquier conjunto de pesos", () => {
     fc.assert(
       fc.property(

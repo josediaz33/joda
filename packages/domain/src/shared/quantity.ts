@@ -64,7 +64,21 @@ export class Quantity {
         `Quantity.times requiere un factor finito, recibido ${factor}.`,
       );
     }
-    return new Quantity(this.value * factor, this.uom);
+
+    const result = this.value * factor;
+    // A diferencia de plus/minus —donde sumar o restar dos enteros da
+    // siempre un entero, sin nada que revisar—, times() multiplica por un
+    // factor arbitrario y puede romper el invariante de 'unit' (entero,
+    // siempre): Quantity.units(3).times(0.5) sin esta guarda daría una
+    // Quantity de uom 'unit' con value 1.5. Media unidad de reloj sigue
+    // sin existir después de multiplicar, no solo al construir.
+    if (this.uom === "unit" && !Number.isInteger(result)) {
+      throw new InvalidQuantityError(
+        `Quantity.times sobre 'unit' debe dar un entero; ${this.value} × ${factor} = ${result}.`,
+      );
+    }
+
+    return new Quantity(result, this.uom);
   }
 
   isNegative(): boolean {

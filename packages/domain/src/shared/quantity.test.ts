@@ -63,6 +63,25 @@ describe("Quantity — aritmética entre la misma unidad (docs/domain-contracts.
   });
 });
 
+describe("Quantity.times — preserva el invariante de 'unit' (docs/domain-contracts.md §3.2)", () => {
+  it("rechaza un factor que rompería el entero de 'unit' — media unidad de reloj no existe", () => {
+    expect(() => Quantity.units(3).times(0.5)).toThrow(InvalidQuantityError);
+  });
+
+  it("acepta un factor que preserva el entero de 'unit'", () => {
+    expect(Quantity.units(3).times(2).value).toBe(6);
+  });
+
+  it("no aplica a 'ml' — ahí un factor fraccionario es un resultado válido", () => {
+    expect(() => Quantity.ml(10).times(0.5)).not.toThrow();
+  });
+
+  it("plus y minus entre dos Quantity de 'unit' no necesitan esta validación: sumar o restar dos enteros siempre da un entero", () => {
+    expect(Quantity.units(3).plus(Quantity.units(2)).value).toBe(5);
+    expect(Quantity.units(3).minus(Quantity.units(5)).value).toBe(-2);
+  });
+});
+
 describe("Quantity — unidades incompatibles (UomMismatchError) — docs/domain-contracts.md §3.2", () => {
   it("plus lanza si las unidades no coinciden", () => {
     expect(() => Quantity.units(1).plus(Quantity.ml(1))).toThrow(UomMismatchError);
