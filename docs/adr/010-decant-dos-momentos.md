@@ -21,11 +21,11 @@ Todas las propuestas iniciales trataban el fraccionamiento como un evento único
 
 **Merma en tres componentes**, porque son de naturaleza distinta:
 
-| Componente | Naturaleza | Campo |
-|---|---|---|
-| Trasvase | Proporcional | `waste_factor` (%) |
-| Fondo no recuperable | Fijo por frasco | `unusable_residue_ml` |
-| Evaporación | Por tiempo abierto | `evaporation_ml_year` |
+| Componente           | Naturaleza         | Campo                 |
+| -------------------- | ------------------ | --------------------- |
+| Trasvase             | Proporcional       | `waste_factor` (%)    |
+| Fondo no recuperable | Fijo por frasco    | `unusable_residue_ml` |
+| Evaporación          | Por tiempo abierto | `evaporation_ml_year` |
 
 ## Consecuencias
 

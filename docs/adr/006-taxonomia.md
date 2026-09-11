@@ -14,12 +14,12 @@ Los primeros diseños confundían "tipo de producto" con "categoría del menú".
 
 Cuatro niveles separados:
 
-| Nivel | Qué es | Dónde vive |
-|---|---|---|
-| **Vertical** (`product_kind`) | Clasificación de comportamiento | Enum + `{kind}_details` |
-| **Categoría comercial** | Navegación, breadcrumbs, SEO | `categories` (árbol) + `product_categories` (N:N) |
-| **Atributo** | Propiedad del producto | Columna tipada o faceta |
-| **Tag** | Marca transversal de marketing | `tags` + `product_tags` |
+| Nivel                         | Qué es                          | Dónde vive                                        |
+| ----------------------------- | ------------------------------- | ------------------------------------------------- |
+| **Vertical** (`product_kind`) | Clasificación de comportamiento | Enum + `{kind}_details`                           |
+| **Categoría comercial**       | Navegación, breadcrumbs, SEO    | `categories` (árbol) + `product_categories` (N:N) |
+| **Atributo**                  | Propiedad del producto          | Columna tipada o faceta                           |
+| **Tag**                       | Marca transversal de marketing  | `tags` + `product_tags`                           |
 
 ## Consecuencias
 

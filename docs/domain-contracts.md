@@ -41,8 +41,12 @@ function calcularCogs(input: { lots: readonly LotSnapshot[]; qty: Quantity }): C
 **El tiempo y la aleatoriedad entran por puerto.**
 
 ```ts
-export interface Clock { now(): Date }
-export interface IdGenerator { next(): string }
+export interface Clock {
+  now(): Date;
+}
+export interface IdGenerator {
+  next(): string;
+}
 ```
 
 El servicio de la API los inyecta; los tests inyectan implementaciones fijas. Un test que depende de la hora del reloj real es un test que va a fallar solo algún martes.
@@ -101,7 +105,7 @@ Los tipos primitivos no alcanzan para representar dinero ni cantidades. Un `numb
 ### 3.1 `Money`
 
 ```ts
-export type Currency = 'PYG' | 'USD' | 'BRL' | 'ARS';
+export type Currency = "PYG" | "USD" | "BRL" | "ARS";
 
 export class Money {
   private constructor(
@@ -113,9 +117,9 @@ export class Money {
   static of(minor: bigint, currency: Currency): Money;
   static zero(currency: Currency): Money;
 
-  plus(other: Money): Money;          // lanza CurrencyMismatchError
+  plus(other: Money): Money; // lanza CurrencyMismatchError
   minus(other: Money): Money;
-  times(factor: number): Money;       // redondea con roundPyg
+  times(factor: number): Money; // redondea con roundPyg
   allocate(weights: number[]): Money[]; // reparto sin perder unidades
 
   isZero(): boolean;
@@ -131,15 +135,18 @@ export class Money {
 ### 3.2 `Quantity`
 
 ```ts
-export type Uom = 'unit' | 'ml';
+export type Uom = "unit" | "ml";
 
 export class Quantity {
-  private constructor(readonly value: number, readonly uom: Uom) {}
+  private constructor(
+    readonly value: number,
+    readonly uom: Uom,
+  ) {}
 
-  static units(n: number): Quantity;      // entero, lanza si tiene decimales
-  static ml(n: number): Quantity;         // hasta 3 decimales
+  static units(n: number): Quantity; // entero, lanza si tiene decimales
+  static ml(n: number): Quantity; // hasta 3 decimales
 
-  plus(other: Quantity): Quantity;        // lanza UomMismatchError
+  plus(other: Quantity): Quantity; // lanza UomMismatchError
   minus(other: Quantity): Quantity;
   times(factor: number): Quantity;
 
@@ -154,7 +161,7 @@ export class Quantity {
 
 ```ts
 export class Percentage {
-  static of(value: number): Percentage;   // 0.02 = 2%, rango [0, 1]
+  static of(value: number): Percentage; // 0.02 = 2%, rango [0, 1]
   applyTo(q: Quantity): Quantity;
 }
 ```
@@ -170,9 +177,7 @@ Dos categorías, tratadas distinto.
 Situaciones que el negocio contempla: stock insuficiente, seña sobre-aplicada, transición de estado inválida. **No son excepciones: son respuestas.**
 
 ```ts
-export type Result<T, E = DomainError> =
-  | { ok: true; value: T }
-  | { ok: false; error: E };
+export type Result<T, E = DomainError> = { ok: true; value: T } | { ok: false; error: E };
 
 export const ok = <T>(value: T): Result<T, never> => ({ ok: true, value });
 export const err = <E>(error: E): Result<never, E> => ({ ok: false, error });
@@ -196,10 +201,19 @@ Invariantes violados que indican un bug: sumar monedas distintas, cantidad con u
 
 ```ts
 export class DomainError extends Error {
-  constructor(readonly code: string, message: string) { super(message); }
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
 }
-export class CurrencyMismatchError extends DomainError { /* ... */ }
-export class UomMismatchError extends DomainError { /* ... */ }
+export class CurrencyMismatchError extends DomainError {
+  /* ... */
+}
+export class UomMismatchError extends DomainError {
+  /* ... */
+}
 ```
 
 **Regla:** si el usuario puede provocarlo con una acción legítima, es `Result`. Si solo lo provoca un bug, es excepción.
@@ -253,7 +267,7 @@ export interface LotSnapshot {
   expiryAt: Date | null;
   available: Quantity;
   unitCost: Money;
-  status: 'available' | 'open_for_decant' | 'quarantine' | 'damaged' | 'depleted';
+  status: "available" | "open_for_decant" | "quarantine" | "damaged" | "depleted";
 }
 
 /** Selecciona lotes según política y devuelve las capas a consumir. */
@@ -300,7 +314,7 @@ export function executeDecant(input: {
 }): Result<DecantExecution, DecantError>;
 
 export interface DecantExecution {
-  movements: readonly MovementDraft[];   // consumo, merma, BOM
+  movements: readonly MovementDraft[]; // consumo, merma, BOM
   cogs: Money;
   costBreakdown: { liquid: Money; waste: Money; supplies: Money };
 }
@@ -316,7 +330,7 @@ export function decantAvailability(input: {
 ### 6.3 IVA
 
 ```ts
-export type VatRate = 'iva_10' | 'iva_5' | 'exenta';
+export type VatRate = "iva_10" | "iva_5" | "exenta";
 
 /** IVA contenido en un precio con impuesto incluido. */
 export function vatFromGross(gross: Money, rate: VatRate): Money;
@@ -349,13 +363,13 @@ Usa `Money.allocate` internamente: la suma de las partes es exactamente el flete
 
 ```ts
 export const PURCHASE_ORDER_TRANSITIONS: Readonly<Record<PoStatus, readonly PoStatus[]>> = {
-  draft:              ['pending_approval', 'cancelled'],
-  pending_approval:   ['approved', 'draft', 'cancelled'],
-  approved:           ['sent', 'cancelled'],
-  sent:               ['partially_received', 'received', 'cancelled'],
-  partially_received: ['partially_received', 'received', 'cancelled'],
-  received:           [],
-  cancelled:          [],
+  draft: ["pending_approval", "cancelled"],
+  pending_approval: ["approved", "draft", "cancelled"],
+  approved: ["sent", "cancelled"],
+  sent: ["partially_received", "received", "cancelled"],
+  partially_received: ["partially_received", "received", "cancelled"],
+  received: [],
+  cancelled: [],
 };
 
 export function canTransition(from: PoStatus, to: PoStatus): boolean;
@@ -389,7 +403,7 @@ export async function confirmSale(ctx: Ctx, orderId: string) {
   return ctx.db.$transaction(async (tx) => {
     // 1. LEER — la infraestructura obtiene los datos
     const order = await repo.findOrderForUpdate(tx, orderId);
-    const lots  = await repo.findAvailableLots(tx, order.variantIds);
+    const lots = await repo.findAvailableLots(tx, order.variantIds);
 
     // 2. DECIDIR — el dominio calcula, sin tocar nada
     const layers = allocateFromLots({
@@ -402,7 +416,7 @@ export async function confirmSale(ctx: Ctx, orderId: string) {
     // 3. ESCRIBIR — la infraestructura persiste la decisión
     await repo.insertMovements(tx, layers.value);
     await repo.insertCostAllocations(tx, layers.value);
-    await repo.updateOrderStatus(tx, orderId, 'paid');
+    await repo.updateOrderStatus(tx, orderId, "paid");
   });
 }
 ```
@@ -420,7 +434,7 @@ export function toLotSnapshot(row: InventoryLot & { balance: InventoryBalance })
     id: row.id,
     receivedAt: row.receivedAt,
     expiryAt: row.expiryAt,
-    available: Quantity.ml(Number(row.balance.onHand)),   // conversión explícita
+    available: Quantity.ml(Number(row.balance.onHand)), // conversión explícita
     unitCost: Money.pyg(row.unitLandedCostPyg),
     status: row.status,
   };
@@ -433,27 +447,27 @@ Esto permite refactorizar el esquema sin tocar el dominio, y viceversa.
 
 ## 8. Obligaciones de prueba
 
-| Módulo | Cobertura mínima | Por qué |
-|---|---|---|
-| `shared/money`, `shared/quantity` | 100% | Todo lo demás depende de esto |
-| `tax/vat` | 100% | Un error acá rechaza documentos fiscales |
-| `inventory/costing` | 100% | Un error acá descuadra la contabilidad |
-| `decant/*` | 100% | Es la ventaja competitiva del negocio |
-| `procurement/freight` | 100% | Determina el margen de todo |
-| Resto del paquete | ≥ 90% | |
+| Módulo                            | Cobertura mínima | Por qué                                  |
+| --------------------------------- | ---------------- | ---------------------------------------- |
+| `shared/money`, `shared/quantity` | 100%             | Todo lo demás depende de esto            |
+| `tax/vat`                         | 100%             | Un error acá rechaza documentos fiscales |
+| `inventory/costing`               | 100%             | Un error acá descuadra la contabilidad   |
+| `decant/*`                        | 100%             | Es la ventaja competitiva del negocio    |
+| `procurement/freight`             | 100%             | Determina el margen de todo              |
+| Resto del paquete                 | ≥ 90%            |                                          |
 
 Cada test referencia la regla que verifica:
 
 ```ts
-describe('RN-IVA-03 · diferencia de redondeo', () => {
-  it('imputa la diferencia a la última línea de la tasa', () => {
+describe("RN-IVA-03 · diferencia de redondeo", () => {
+  it("imputa la diferencia a la última línea de la tasa", () => {
     const lines = [
-      { gross: Money.pyg(33_333n), rate: 'iva_10' as const },
-      { gross: Money.pyg(33_333n), rate: 'iva_10' as const },
-      { gross: Money.pyg(33_333n), rate: 'iva_10' as const },
+      { gross: Money.pyg(33_333n), rate: "iva_10" as const },
+      { gross: Money.pyg(33_333n), rate: "iva_10" as const },
+      { gross: Money.pyg(33_333n), rate: "iva_10" as const },
     ];
     const r = breakdownDocument(lines);
-    expect(r.lines.map(l => l.vat.minor)).toEqual([3030n, 3030n, 3031n]);
+    expect(r.lines.map((l) => l.vat.minor)).toEqual([3030n, 3030n, 3031n]);
     expect(r.totalVat.minor).toBe(9091n);
   });
 });
@@ -469,14 +483,14 @@ Corre en cada PR. **Es lo que permite refactorizar el costeo sin miedo.**
 
 ## 9. Qué NO va en `packages/domain`
 
-| No va | Dónde va |
-|---|---|
-| Consultas a la base | `apps/api/src/modules/*/repository.ts` |
-| Orquestación de transacciones | `apps/api/src/modules/*/service.ts` |
-| Validación de entrada HTTP | `packages/contracts` (esquemas Zod) |
-| Formateo para mostrar (`Gs. 245.000`) | `packages/ui` |
-| Llamadas a proveedores externos | `apps/api/src/adapters/` |
-| Configuración y secretos | `apps/api/src/config.ts` |
-| Textos de interfaz | `apps/*/locales` |
+| No va                                 | Dónde va                               |
+| ------------------------------------- | -------------------------------------- |
+| Consultas a la base                   | `apps/api/src/modules/*/repository.ts` |
+| Orquestación de transacciones         | `apps/api/src/modules/*/service.ts`    |
+| Validación de entrada HTTP            | `packages/contracts` (esquemas Zod)    |
+| Formateo para mostrar (`Gs. 245.000`) | `packages/ui`                          |
+| Llamadas a proveedores externos       | `apps/api/src/adapters/`               |
+| Configuración y secretos              | `apps/api/src/config.ts`               |
+| Textos de interfaz                    | `apps/*/locales`                       |
 
 **Prueba rápida:** si una función de `packages/domain` no puede ejecutarse en un test sin levantar nada, está mal ubicada.

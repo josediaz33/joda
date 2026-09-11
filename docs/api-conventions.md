@@ -24,12 +24,12 @@ apps/api/src/
 
 ### 1.1 Responsabilidad por capa
 
-| Capa | Hace | No hace |
-|---|---|---|
-| `router` | Valida entrada, verifica permiso, llama al servicio | Lógica, consultas |
-| `service` | Abre transacción, lee, llama al dominio, escribe | Cálculos de negocio |
-| `repository` | Consultas y escrituras | Decisiones |
-| `packages/domain` | Calcula | Cualquier I/O |
+| Capa              | Hace                                                | No hace             |
+| ----------------- | --------------------------------------------------- | ------------------- |
+| `router`          | Valida entrada, verifica permiso, llama al servicio | Lógica, consultas   |
+| `service`         | Abre transacción, lee, llama al dominio, escribe    | Cálculos de negocio |
+| `repository`      | Consultas y escrituras                              | Decisiones          |
+| `packages/domain` | Calcula                                             | Cualquier I/O       |
 
 **Leer, decidir, escribir.** Un servicio que consulta la base dentro de un bucle está mal escrito.
 
@@ -62,11 +62,13 @@ Todo esquema vive en `packages/contracts` y usa `.strict()`.
 
 ```ts
 // packages/contracts/src/sales.ts
-export const confirmOrderInput = z.object({
-  orderId: z.string().uuid(),
-  paymentMethod: z.enum(['card', 'transfer_sipap', 'cash', 'wallet']),
-  idempotencyKey: z.string().uuid().optional(),
-}).strict();
+export const confirmOrderInput = z
+  .object({
+    orderId: z.string().uuid(),
+    paymentMethod: z.enum(["card", "transfer_sipap", "cash", "wallet"]),
+    idempotencyKey: z.string().uuid().optional(),
+  })
+  .strict();
 
 export type ConfirmOrderInput = z.infer<typeof confirmOrderInput>;
 ```
@@ -78,7 +80,7 @@ export type ConfirmOrderInput = z.infer<typeof confirmOrderInput>;
 ```ts
 export const moneySchema = z.object({
   minor: z.string().regex(/^-?\d+$/),
-  currency: z.enum(['PYG', 'USD', 'BRL', 'ARS']),
+  currency: z.enum(["PYG", "USD", "BRL", "ARS"]),
 });
 ```
 
@@ -102,15 +104,15 @@ export const moneySchema = z.object({
 
 ### 4.2 Códigos por familia
 
-| Prefijo | Situación | HTTP |
-|---|---|---|
-| `VALIDATION_*` | Entrada inválida | 400 |
-| `UNAUTHENTICATED` | Sin sesión | 401 |
-| `NOT_FOUND` | Recurso inexistente **o sin permiso en rutas administrativas** | 404 |
-| `CONFLICT_*` | Estado incompatible (stock, transición, concurrencia) | 409 |
-| `RATE_LIMITED` | Límite excedido | 429 |
-| `EXTERNAL_*` | Falla de proveedor externo | 502 |
-| `INTERNAL` | Bug | 500 |
+| Prefijo           | Situación                                                      | HTTP |
+| ----------------- | -------------------------------------------------------------- | ---- |
+| `VALIDATION_*`    | Entrada inválida                                               | 400  |
+| `UNAUTHENTICATED` | Sin sesión                                                     | 401  |
+| `NOT_FOUND`       | Recurso inexistente **o sin permiso en rutas administrativas** | 404  |
+| `CONFLICT_*`      | Estado incompatible (stock, transición, concurrencia)          | 409  |
+| `RATE_LIMITED`    | Límite excedido                                                | 429  |
+| `EXTERNAL_*`      | Falla de proveedor externo                                     | 502  |
+| `INTERNAL`        | Bug                                                            | 500  |
 
 ### 4.3 La regla del 404
 
@@ -125,10 +127,10 @@ Los invariantes de PostgreSQL llegan como excepciones con `ERRCODE`. Un mapeador
 ```ts
 // middleware/errorMapper.ts
 const PG_ERROR_MAP: Record<string, (e: PgError) => ApiError> = {
-  '23514': mapCheckViolation,      // check_violation
-  '23505': mapUniqueViolation,     // unique_violation
-  '23503': mapForeignKeyViolation,
-  '2F004': () => appError('CONFLICT_IMMUTABLE_LEDGER', 409, '...'),
+  "23514": mapCheckViolation, // check_violation
+  "23505": mapUniqueViolation, // unique_violation
+  "23503": mapForeignKeyViolation,
+  "2F004": () => appError("CONFLICT_IMMUTABLE_LEDGER", 409, "..."),
 };
 ```
 
@@ -160,7 +162,7 @@ Los webhooks de pago usan su propio mecanismo: `payment_events` con `UNIQUE (pro
 ```ts
 // rest/webhooks/bancard.ts
 const inserted = await repo.recordEvent(tx, { provider, externalEventId, payload });
-if (!inserted) return reply.code(200).send(existing.result);   // reintento
+if (!inserted) return reply.code(200).send(existing.result); // reintento
 // ... procesar
 ```
 
@@ -193,19 +195,21 @@ Para listados que el usuario necesita contar (reportes), un procedimiento `count
 ```ts
 // packages/contracts/src/catalog.ts
 
-export const publicProduct = z.object({
-  id: z.string().uuid(),
-  slug: z.string(),
-  name: z.string(),
-  brandName: z.string().nullable(),
-  facets: z.record(z.unknown()),
-  variants: z.array(publicVariant),
-}).strict();
+export const publicProduct = z
+  .object({
+    id: z.string().uuid(),
+    slug: z.string(),
+    name: z.string(),
+    brandName: z.string().nullable(),
+    facets: z.record(z.unknown()),
+    variants: z.array(publicVariant),
+  })
+  .strict();
 
 export const adminProduct = publicProduct.extend({
-  status: z.enum(['draft', 'active', 'archived']),
-  costSummary: costSummarySchema,      // JAMÁS en el público
-  supplierRefs: z.array(z.string()),   // JAMÁS en el público
+  status: z.enum(["draft", "active", "archived"]),
+  costSummary: costSummarySchema, // JAMÁS en el público
+  supplierRefs: z.array(z.string()), // JAMÁS en el público
 });
 ```
 
@@ -272,12 +276,12 @@ Cada procedimiento declara su permiso:
 export const salesRouter = router({
   order: router({
     list: staffProcedure
-      .meta({ permission: 'sales.order:read' })
+      .meta({ permission: "sales.order:read" })
       .input(listOrdersInput)
       .query(({ ctx, input }) => service.listOrders(ctx, input)),
 
     confirm: staffProcedure
-      .meta({ permission: 'sales.order:write' })
+      .meta({ permission: "sales.order:write" })
       .input(confirmOrderInput)
       .mutation(({ ctx, input }) => service.confirmOrder(ctx, input)),
   }),
@@ -296,11 +300,11 @@ Toda mutación sobre inventario, contabilidad, compras y configuración escribe 
 
 ```ts
 await repo.audit(tx, {
-  action: 'inventory.adjustment.create',
-  entity: 'inventory_movements',
+  action: "inventory.adjustment.create",
+  entity: "inventory_movements",
   entityId: movement.id,
   before: null,
-  after: { qty: '−5.000', reason: 'rotura' },
+  after: { qty: "−5.000", reason: "rotura" },
 });
 ```
 
@@ -310,13 +314,13 @@ await repo.audit(tx, {
 
 ## 11. Límites de tasa
 
-| Ámbito | Límite |
-|---|---|
-| Autenticación | 5/min por IP + usuario |
-| Checkout | 10/min por sesión |
-| Webhooks | 100/min por proveedor |
-| General autenticado | 100/min por usuario |
-| Catálogo público | 300/min por IP |
+| Ámbito              | Límite                 |
+| ------------------- | ---------------------- |
+| Autenticación       | 5/min por IP + usuario |
+| Checkout            | 10/min por sesión      |
+| Webhooks            | 100/min por proveedor  |
+| General autenticado | 100/min por usuario    |
+| Catálogo público    | 300/min por IP         |
 
 Respaldo en Redis. Al exceder: `429` con cabecera `Retry-After`.
 

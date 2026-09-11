@@ -12,12 +12,12 @@ SOLID, Clean Code y patrones **aplicados a este proyecto**, con ejemplos del dom
 
 En este proyecto la responsabilidad se corta por **capa**, no por entidad:
 
-| Módulo | Cambia cuando… |
-|---|---|
-| `domain/inventory/costing.ts` | Cambia la regla de costeo |
-| `api/modules/inventory/repository.ts` | Cambia el esquema |
-| `api/modules/inventory/service.ts` | Cambia el orden de una operación |
-| `contracts/inventory.ts` | Cambia el contrato con los clientes |
+| Módulo                                | Cambia cuando…                      |
+| ------------------------------------- | ----------------------------------- |
+| `domain/inventory/costing.ts`         | Cambia la regla de costeo           |
+| `api/modules/inventory/repository.ts` | Cambia el esquema                   |
+| `api/modules/inventory/service.ts`    | Cambia el orden de una operación    |
+| `contracts/inventory.ts`              | Cambia el contrato con los clientes |
 
 **Violación típica en un ERP:**
 
@@ -97,13 +97,21 @@ Si el adaptador de Bancard lanza una excepción en lugar de devolver `err(...)`,
 ```ts
 // ❌ una interfaz que hace todo
 interface InventoryRepository {
-  findLots(); insertMovement(); updateBalance();
-  findSuppliers(); createPurchaseOrder(); listJournalEntries();
+  findLots();
+  insertMovement();
+  updateBalance();
+  findSuppliers();
+  createPurchaseOrder();
+  listJournalEntries();
 }
 
 // ✅ separadas por caso de uso
-interface LotReader   { findAvailableLots(variantId: string): Promise<LotRow[]> }
-interface LedgerWriter { insertMovements(m: MovementDraft[]): Promise<void> }
+interface LotReader {
+  findAvailableLots(variantId: string): Promise<LotRow[]>;
+}
+interface LedgerWriter {
+  insertMovements(m: MovementDraft[]): Promise<void>;
+}
 ```
 
 Aplicación concreta: **los DTO públicos y administrativos son esquemas distintos**, no el mismo con campos opcionales. El storefront no debe siquiera poder nombrar `costSummary`.
@@ -140,7 +148,7 @@ La flecha de dependencia apunta **hacia adentro**, siempre. Está impuesta mecá
 ```ts
 // ❌
 const d = ms * 1.02;
-const x = lots.filter(l => l.s === 'a');
+const x = lots.filter((l) => l.s === "a");
 
 // ✅
 const mlToReserve = mlExpected.plus(wasteExpected);
@@ -159,10 +167,10 @@ const availableLots = lots.filter(isAvailable);
 
 ```ts
 // ❌ imposible de leer en el punto de llamada
-planDecant(1, 10, 0.02, 114.65, bomList)
+planDecant(1, 10, 0.02, 114.65, bomList);
 
 // ✅
-planDecant({ unitsRequested: 1, mlPerUnit: 10, wasteFactor, bulkAvailable, bom })
+planDecant({ unitsRequested: 1, mlPerUnit: 10, wasteFactor, bulkAvailable, bom });
 ```
 
 **Sin parámetros booleanos.** `execute(order, true)` no dice nada. Dos funciones, o un enum.
@@ -172,7 +180,7 @@ planDecant({ unitsRequested: 1, mlPerUnit: 10, wasteFactor, bulkAvailable, bom }
 ```ts
 // ✅
 if (!lot) return err(new LotNotFoundError(lotId));
-if (lot.status === 'depleted') return err(new LotDepletedError(lotId));
+if (lot.status === "depleted") return err(new LotDepletedError(lotId));
 if (available.compare(required) < 0) return err(new InsufficientStockError());
 // ... camino feliz sin indentar
 ```
@@ -195,6 +203,7 @@ const sorted = [...lotIds].sort();
 ```
 
 **Comentarios obligatorios:**
+
 - Cualquier decisión no obvia que alguien podría "limpiar" en un refactor (el ejemplo de arriba es el caso canónico).
 - Referencia a la regla de negocio que implementa una función: `/** RN-FRA-04 · Costo del decant */`.
 - Advertencias de rendimiento o concurrencia.
@@ -240,9 +249,9 @@ Duplicar es malo; acoplar por accidente es peor.
 
 No construyas lo que no pediste. Pero hay una asimetría que este proyecto asume explícitamente:
 
-| | Regla |
-|---|---|
-| **Código** | YAGNI estricto. Sin abstracciones especulativas, sin puntos de extensión "por si acaso". |
+|             | Regla                                                                                                                        |
+| ----------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| **Código**  | YAGNI estricto. Sin abstracciones especulativas, sin puntos de extensión "por si acaso".                                     |
 | **Esquema** | Anticipar. `tenant_id`, las tablas de contabilidad, `fiscal_documents` existen desde el día uno aunque el código no las use. |
 
 Retrofitear un libro mayor o multi-tenancy sobre datos reales en producción es carísimo; crear tablas vacías es gratis.
@@ -266,42 +275,52 @@ Nombres de archivo: `camelCase.ts` para módulos, `PascalCase.tsx` para componen
 Catálogo de los patrones efectivamente usados. **Usá estos; no introduzcas otros sin un ADR.**
 
 ### Ledger y proyección
+
 `inventory_movements` (inmutable, autoritativo) + `inventory_balances` (derivado, verificable). El invariante vive en la proyección; la verdad, en el libro.
 **Dónde:** inventario, contabilidad.
 
 ### Objeto de valor
+
 `Money`, `Quantity`, `Percentage`. Encapsulan una regla (no sumar monedas distintas) que un tipo primitivo no puede expresar.
 **Dónde:** `packages/domain/src/shared/`.
 
 ### Puerto y adaptador
+
 El dominio define la interfaz; la infraestructura la implementa. Permite arrancar con un adaptador manual y cambiarlo sin tocar el núcleo.
 **Dónde:** fiscal, pagos, almacenamiento, reloj.
 
 ### Repositorio
+
 Encapsula el acceso a datos detrás de métodos con nombre de negocio. `findAvailableLots(variantId)`, no `prisma.inventoryLot.findMany({...})` esparcido por servicios.
 **Dónde:** `apps/api/src/modules/*/repository.ts`.
 
 ### Capa anticorrupción
+
 Las filas de la base no son tipos del dominio. Un mapper explícito traduce en ambas direcciones, así el esquema y el dominio pueden evolucionar por separado.
 **Dónde:** `apps/api/src/modules/*/mappers.ts`.
 
 ### Máquina de estados como dato
+
 Las transiciones son una tabla en TypeScript, no `switch` esparcidos. Se testean exhaustivamente y se documentan solas.
 **Dónde:** órdenes de compra, pedidos de venta, órdenes de fraccionamiento, documentos fiscales.
 
 ### Clave de idempotencia
+
 Deduplicación por clave única en base, dentro de la misma transacción del efecto. Convierte "el proveedor reintentó" en un no-evento.
 **Dónde:** webhooks de pago, mutaciones offline del admin.
 
 ### Bandeja de eventos sin procesar
+
 Cuando algo no se puede procesar todavía (regla de posteo apagada, proveedor caído), se registra en una tabla visible en vez de descartarse. Reprocesable y auditable.
 **Dónde:** `unposted_events`, cola fiscal.
 
 ### Patrón de bandeja de salida (outbox)
+
 Para el modo offline del admin: mutaciones encoladas localmente con clave de idempotencia, enviadas en orden al recuperar conexión. **El stock nunca se resuelve en el cliente.**
 **Dónde:** fase 4 de la migración.
 
 ### Reserva con vencimiento
+
 Compromiso temporal separado del consumo definitivo, con TTL según el nivel de compromiso del cliente.
 **Dónde:** `stock_reservations`.
 
@@ -309,19 +328,19 @@ Compromiso temporal separado del consumo definitivo, con TTL según el nivel de 
 
 ## Parte IV — Antipatrones prohibidos
 
-| Antipatrón | Por qué acá es grave |
-|---|---|
+| Antipatrón                                                                                         | Por qué acá es grave                                                                                                       |
+| -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
 | **Modelo anémico** — entidades que son bolsas de datos y toda la lógica en servicios de 500 líneas | El costeo y el fraccionamiento son el valor del sistema. Si viven repartidos en servicios, no se pueden testear ni reusar. |
-| **Lógica de negocio en triggers** | Opaca, intestable, y acopla el dominio a PostgreSQL. Ver ADR-017. |
-| **Repositorio genérico** — `findAll`, `findBy(where)` | Traslada las consultas al servicio y hace imposible optimizar o auditar el acceso. |
-| **Números de punto flotante para dinero** | Descuadres que aparecen meses después y nadie puede explicar. |
-| **Estado del pedido como campo editable** | Permite transiciones inválidas. Se usa una máquina de estados. |
-| **`SELECT *` en producción** | Una columna nueva rompe el consumidor de forma sorpresiva. |
-| **Consultas dentro de un bucle** | El clásico N+1. En listados de inventario mata el rendimiento. |
-| **Capturar y registrar sin actuar** | Convierte un error en un mensaje que nadie lee y un estado inconsistente que nadie detecta. |
-| **`any` en TypeScript** | Prohibido salvo en fronteras con bibliotecas sin tipos, y con comentario que lo justifique. |
-| **Comentar código en vez de borrarlo** | Para eso está el control de versiones. |
-| **Optimizar sin medir** | Sin un perfil que lo respalde, es complejidad gratis. |
+| **Lógica de negocio en triggers**                                                                  | Opaca, intestable, y acopla el dominio a PostgreSQL. Ver ADR-017.                                                          |
+| **Repositorio genérico** — `findAll`, `findBy(where)`                                              | Traslada las consultas al servicio y hace imposible optimizar o auditar el acceso.                                         |
+| **Números de punto flotante para dinero**                                                          | Descuadres que aparecen meses después y nadie puede explicar.                                                              |
+| **Estado del pedido como campo editable**                                                          | Permite transiciones inválidas. Se usa una máquina de estados.                                                             |
+| **`SELECT *` en producción**                                                                       | Una columna nueva rompe el consumidor de forma sorpresiva.                                                                 |
+| **Consultas dentro de un bucle**                                                                   | El clásico N+1. En listados de inventario mata el rendimiento.                                                             |
+| **Capturar y registrar sin actuar**                                                                | Convierte un error en un mensaje que nadie lee y un estado inconsistente que nadie detecta.                                |
+| **`any` en TypeScript**                                                                            | Prohibido salvo en fronteras con bibliotecas sin tipos, y con comentario que lo justifique.                                |
+| **Comentar código en vez de borrarlo**                                                             | Para eso está el control de versiones.                                                                                     |
+| **Optimizar sin medir**                                                                            | Sin un perfil que lo respalde, es complejidad gratis.                                                                      |
 
 ---
 

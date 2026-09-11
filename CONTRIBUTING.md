@@ -40,7 +40,7 @@ Git no la activa solo.
   la única protección de `main` que existe, porque no hay `required_status_checks`
   del servidor todavía). Se saltea con `git push --no-verify` cuando es
   deliberado — no protege contra alguien decidido, protege contra el `git
-  push origin main` por costumbre.
+push origin main` por costumbre.
 
 ### Decisiones de versión (WP-A01)
 
@@ -109,21 +109,27 @@ Objetivo: menos de 400 líneas de cambio efectivo. Por encima de eso, partilo.
 
 ```markdown
 ## Qué hace
+
 <una o dos frases>
 
 ## Por qué
+
 <el problema que resuelve, o el requerimiento que implementa>
 
 ## Referencias
+
 RF-XXX-nn · RN-XXX-nn · ADR-0nn
 
 ## Cómo se probó
+
 <qué tests se agregaron y qué verifican>
 
 ## Riesgos
+
 <qué podría romperse; "ninguno" es una respuesta válida si es cierta>
 
 ## Lista de verificación
+
 - [ ] `pnpm typecheck && pnpm lint` en verde
 - [ ] `pnpm test` en verde
 - [ ] Si toqué el esquema: `pnpm db:reset && pnpm db:test` en verde
@@ -200,17 +206,17 @@ pnpm db:reset && pnpm db:test
 
 La documentación vive con el código y se actualiza en el mismo PR. No hay "PR de documentación" posterior.
 
-| Cambiaste… | Actualizá… |
-|---|---|
-| Una regla de negocio | `docs/domain-rules.md` |
-| El esquema | `docs/data-model.md` + `packages/db/README.md` |
-| Un contrato del dominio | `docs/domain-contracts.md` |
-| Un endpoint o convención | `docs/api-conventions.md` |
-| Interfaz, estilos, tokens o SEO | `docs/frontend-spec.md` |
-| Permisos o seguridad | `docs/security-spec.md` |
-| Un término de negocio | `GLOSARIO.md` |
-| Una decisión estructural | Un ADR nuevo en `docs/adr/` |
-| Comandos o reglas del proyecto | `CLAUDE.md` |
+| Cambiaste…                      | Actualizá…                                     |
+| ------------------------------- | ---------------------------------------------- |
+| Una regla de negocio            | `docs/domain-rules.md`                         |
+| El esquema                      | `docs/data-model.md` + `packages/db/README.md` |
+| Un contrato del dominio         | `docs/domain-contracts.md`                     |
+| Un endpoint o convención        | `docs/api-conventions.md`                      |
+| Interfaz, estilos, tokens o SEO | `docs/frontend-spec.md`                        |
+| Permisos o seguridad            | `docs/security-spec.md`                        |
+| Un término de negocio           | `GLOSARIO.md`                                  |
+| Una decisión estructural        | Un ADR nuevo en `docs/adr/`                    |
+| Comandos o reglas del proyecto  | `CLAUDE.md`                                    |
 
 **Los ADRs no se editan para cambiar de opinión.** Se escribe uno nuevo que marque al anterior como reemplazado, en ambos archivos.
 

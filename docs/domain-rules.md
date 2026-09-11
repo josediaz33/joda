@@ -13,7 +13,7 @@ Si necesitás una regla que no está acá, **preguntá antes de inventarla**. Un
 El guaraní se representa como entero de 64 bits sin decimales. Nunca punto flotante.
 
 ```ts
-Money.pyg(2_450_000n)   // Gs. 2.450.000
+Money.pyg(2_450_000n); // Gs. 2.450.000
 ```
 
 Las monedas extranjeras se representan en unidades menores: USD 190,00 → `19000n` con `currency: 'USD'`.
@@ -22,12 +22,12 @@ Las monedas extranjeras se representan en unidades menores: USD 190,00 → `1900
 
 Media unidad hacia arriba, siempre, en una sola función.
 
-| Valor | Resultado |
-|---|---|
-| 113.636,36 | 113.636 |
-| 113.636,50 | 113.637 |
-| 113.636,64 | 113.637 |
-| −0,5 | 0 (se redondea hacia el cero para importes negativos) |
+| Valor      | Resultado                                             |
+| ---------- | ----------------------------------------------------- |
+| 113.636,36 | 113.636                                               |
+| 113.636,50 | 113.637                                               |
+| 113.636,64 | 113.637                                               |
+| −0,5       | 0 (se redondea hacia el cero para importes negativos) |
 
 ### RN-DIN-03 · Suma entre monedas
 
@@ -51,11 +51,11 @@ amount_pyg = round_pyg(amount_minor / 100 × fx_rate_to_pyg)
 
 En Paraguay el precio se muestra con IVA incluido. Por lo tanto el impuesto se **extrae**, no se agrega:
 
-| Tasa | Fórmula | Ejemplo sobre Gs. 245.000 |
-|---|---|---|
-| 10% | `total / 11` | 22.273 |
-| 5% | `total / 21` | 11.667 |
-| Exenta | 0 | 0 |
+| Tasa   | Fórmula      | Ejemplo sobre Gs. 245.000 |
+| ------ | ------------ | ------------------------- |
+| 10%    | `total / 11` | 22.273                    |
+| 5%     | `total / 21` | 11.667                    |
+| Exenta | 0            | 0                         |
 
 **Prohibido:** `total * 0.10`.
 
@@ -101,11 +101,11 @@ El tipo de cambio es el **real de la recepción**, no el estimado de la orden de
 
 **Ejemplo completo.** Un frasco de Layton 125 ml:
 
-| Concepto | USD | Gs. (fx 7.300) |
-|---|---|---|
-| Precio proveedor | 190,00 | 1.387.000 |
-| Flete y despacho | 15,00 | 109.500 |
-| **Costo puesto del lote** | **205,00** | **1.496.500** |
+| Concepto                  | USD        | Gs. (fx 7.300) |
+| ------------------------- | ---------- | -------------- |
+| Precio proveedor          | 190,00     | 1.387.000      |
+| Flete y despacho          | 15,00      | 109.500        |
+| **Costo puesto del lote** | **205,00** | **1.496.500**  |
 
 ### RN-COS-02 · Prorrateo de flete
 
@@ -142,11 +142,11 @@ Una salida consume lotes en orden de recepción hasta cubrir la cantidad. **Cada
 
 **Ejemplo.** Venta de 3 unidades con dos lotes disponibles:
 
-| Lote | Disponible | Costo unitario | Consumido | Costo |
-|---|---|---|---|---|
-| L-001 (más antiguo) | 2 | 1.400.000 | 2 | 2.800.000 |
-| L-002 | 5 | 1.550.000 | 1 | 1.550.000 |
-| **Total** | | | **3** | **4.350.000** |
+| Lote                | Disponible | Costo unitario | Consumido | Costo         |
+| ------------------- | ---------- | -------------- | --------- | ------------- |
+| L-001 (más antiguo) | 2          | 1.400.000      | 2         | 2.800.000     |
+| L-002               | 5          | 1.550.000      | 1         | 1.550.000     |
+| **Total**           |            |                | **3**     | **4.350.000** |
 
 Se generan dos filas en `movement_cost_allocations`. El COGS de la venta es 4.350.000, no `3 × promedio`.
 
@@ -192,12 +192,12 @@ Cuando el saldo del granel llega o baja del `unusable_residue_ml` del producto, 
 
 Según `allocation_policy` de la variante:
 
-| Política | Criterio |
-|---|---|
-| `fifo` | Menor `received_at` con saldo disponible |
-| `fefo` | Menor `expiry_at` no nulo; los sin vencimiento van al final |
-| `serial` | Se elige la unidad serializada explícitamente |
-| `manual` | El operador elige el lote |
+| Política | Criterio                                                    |
+| -------- | ----------------------------------------------------------- |
+| `fifo`   | Menor `received_at` con saldo disponible                    |
+| `fefo`   | Menor `expiry_at` no nulo; los sin vencimiento van al final |
+| `serial` | Se elige la unidad serializada explícitamente               |
+| `manual` | El operador elige el lote                                   |
 
 Ante empate, desempata el `id` ascendente. **El orden de bloqueo siempre es `lot_id` ascendente**, para evitar interbloqueos en pedidos multi-línea.
 
@@ -207,10 +207,10 @@ Ante empate, desempata el `id` ascendente. **El orden de bloqueo siempre es `lot
 
 ### RN-FRA-01 · Los dos momentos
 
-| Momento | Disparador | Efecto |
-|---|---|---|
+| Momento        | Disparador               | Efecto                                                           |
+| -------------- | ------------------------ | ---------------------------------------------------------------- |
 | **Compromiso** | Confirmación de la venta | Reserva de granel e insumos + orden de fraccionamiento pendiente |
-| **Ejecución** | Alguien llena el vial | Movimientos definitivos, con merma real |
+| **Ejecución**  | Alguien llena el vial    | Movimientos definitivos, con merma real                          |
 
 Entre ambos no hay consumo de inventario, solo reserva.
 
@@ -256,24 +256,24 @@ COGS          = costo_líquido + costo_merma + costo_insumos
 
 **Ejemplo verificado.** Decant de 10 ml de Layton, granel a 11.972 Gs./ml, merma real 0,35 ml:
 
-| Concepto | Cálculo | Gs. |
-|---|---|---|
-| Líquido | 10,000 × 11.972 | 119.720 |
-| Merma | 0,350 × 11.972 | 4.190 |
-| Vial | 1 × 4.500 | 4.500 |
-| Atomizador | 1 × 2.500 | 2.500 |
-| Etiqueta | 1 × 300 | 300 |
-| **COGS** | | **131.210** |
+| Concepto   | Cálculo         | Gs.         |
+| ---------- | --------------- | ----------- |
+| Líquido    | 10,000 × 11.972 | 119.720     |
+| Merma      | 0,350 × 11.972  | 4.190       |
+| Vial       | 1 × 4.500       | 4.500       |
+| Atomizador | 1 × 2.500       | 2.500       |
+| Etiqueta   | 1 × 300         | 300         |
+| **COGS**   |                 | **131.210** |
 
 Precio de venta Gs. 245.000, IVA 22.273 → **margen 41,1%**. Contando solo el líquido el margen aparente sería 45,3%: cuatro puntos de diferencia.
 
 ### RN-FRA-05 · Merma en tres componentes
 
-| Componente | Naturaleza | Cuándo se aplica |
-|---|---|---|
-| Trasvase | Proporcional al volumen | En cada fraccionamiento |
-| Fondo no recuperable | Fijo por frasco | Al agotar el lote (RN-LOT-04) |
-| Evaporación | Por tiempo abierto | Ajuste periódico programado |
+| Componente           | Naturaleza              | Cuándo se aplica              |
+| -------------------- | ----------------------- | ----------------------------- |
+| Trasvase             | Proporcional al volumen | En cada fraccionamiento       |
+| Fondo no recuperable | Fijo por frasco         | Al agotar el lote (RN-LOT-04) |
+| Evaporación          | Por tiempo abierto      | Ajuste periódico programado   |
 
 Modelar solo el primero deja un faltante de 3–5 ml por frasco que se termina tapando con ajustes manuales.
 
@@ -303,12 +303,12 @@ Agregar al carrito no aparta inventario. La disponibilidad se muestra, no se blo
 
 ### RN-RES-02 · Duración por medio de pago
 
-| Momento / medio | TTL |
-|---|---|
-| Inicio de checkout | 15 min |
-| Tarjeta, pago pendiente | 30 min |
-| Transferencia bancaria | 48 h |
-| Seña recibida | Hasta la fecha de vencimiento de la seña |
+| Momento / medio               | TTL                                      |
+| ----------------------------- | ---------------------------------------- |
+| Inicio de checkout            | 15 min                                   |
+| Tarjeta, pago pendiente       | 30 min                                   |
+| Transferencia bancaria        | 48 h                                     |
+| Seña recibida                 | Hasta la fecha de vencimiento de la seña |
 | Retención manual del personal | Definida por el operador, máximo 30 días |
 
 ### RN-RES-03 · Disponible
@@ -400,25 +400,25 @@ El operador confirma un hecho de negocio; el motor de posteo genera el asiento a
 
 **Ejemplo.** Venta de Gs. 245.000 con IVA 10% cobrada con tarjeta:
 
-| Cuenta | Debe | Haber |
-|---|---|---|
-| 1.1.01.020 Pasarela por acreditar | 245.000 | |
-| 4.1.01.001 Ventas de perfumería | | 222.727 |
-| 2.1.03.001 IVA débito fiscal 10% | | 22.273 |
+| Cuenta                            | Debe    | Haber   |
+| --------------------------------- | ------- | ------- |
+| 1.1.01.020 Pasarela por acreditar | 245.000 |         |
+| 4.1.01.001 Ventas de perfumería   |         | 222.727 |
+| 2.1.03.001 IVA débito fiscal 10%  |         | 22.273  |
 
 Y el asiento de costo, separado:
 
-| Cuenta | Debe | Haber |
-|---|---|---|
-| 5.1.01.001 Costo de mercadería vendida | 131.210 | |
-| 1.1.03.001 Mercaderías — perfumería | | 131.210 |
+| Cuenta                                 | Debe    | Haber   |
+| -------------------------------------- | ------- | ------- |
+| 5.1.01.001 Costo de mercadería vendida | 131.210 |         |
+| 1.1.03.001 Mercaderías — perfumería    |         | 131.210 |
 
 ### RN-CTB-04 · Asiento de seña
 
-| Cuenta | Debe | Haber |
-|---|---|---|
-| 1.1.01.001 Caja en guaraníes | 500.000 | |
-| 2.1.02.001 Señas de clientes | | 500.000 |
+| Cuenta                       | Debe    | Haber   |
+| ---------------------------- | ------- | ------- |
+| 1.1.01.001 Caja en guaraníes | 500.000 |         |
+| 2.1.02.001 Señas de clientes |         | 500.000 |
 
 ### RN-CTB-05 · Regla inactiva
 
@@ -454,25 +454,25 @@ Un documento en estado `approved` tiene siempre código de control. Impuesto por
 
 Comportamiento esperado ante situaciones que no son el camino feliz. **Cada uno debe tener un test.**
 
-| # | Situación | Comportamiento esperado |
-|---|---|---|
-| 1 | El granel no alcanza para el decant completo | Rechazar la venta antes de reservar. No fraccionar parcialmente. |
-| 2 | La merma real supera lo reservado | Permitir y consumir lo real. Si el granel no alcanza, la orden falla y queda en `in_progress` para resolución manual. |
-| 3 | Falta un insumo del BOM | Rechazar la ejecución. La orden queda pendiente y se alerta el faltante. |
-| 4 | Un insumo del BOM está marcado `is_optional` y falta | Ejecutar sin él, registrándolo en la nota de la orden. |
-| 5 | Se abre un frasco que ya estaba abierto | Rechazar. Un lote solo se abre una vez. |
-| 6 | Dos ventas simultáneas sobre el último frasco | La segunda falla al bloquear el lote. Se muestra "ya no disponible", no un error técnico. |
-| 7 | La reserva vence entre el pago y la confirmación | RN-RES-05: rechazar, reembolsar, cancelar con motivo. |
-| 8 | Notificación de pago duplicada | Ignorar silenciosamente y devolver el resultado original. |
-| 9 | El monto de la notificación no coincide con el pedido | No confirmar. Registrar y alertar para revisión manual. |
-| 10 | Recepción parcial de una orden de compra | Generar lote por lo recibido, la orden pasa a `partially_received`. |
-| 11 | Recepción mayor a lo pedido | Rechazar. `qty_received ≤ qty_ordered` es invariante. |
-| 12 | El tipo de cambio de la recepción difiere del estimado | Usar el real. La diferencia se registra como diferencia de cambio. |
-| 13 | Devolución de un decant ya fraccionado | El líquido no vuelve al granel. Ingresa como lote propio de la variante decant en estado `quarantine`. |
-| 14 | Devolución de un reloj serializado | La unidad vuelve con su serial y el destino que determine la inspección. |
-| 15 | Seña aplicada a un pedido que luego se anula | La aplicación se revierte y la seña vuelve a estar disponible. |
-| 16 | Ajuste de inventario que dejaría saldo negativo | Rechazar. El saldo nunca es negativo. |
-| 17 | Producto sin categoría primaria | Rechazar la publicación. El breadcrumb no puede resolverse. |
-| 18 | Variante `made_to_order` sin granel de origen | Rechazar la creación. Impuesto por la base. |
-| 19 | Venta con descuento mayor al subtotal | Rechazar. `total_pyg ≥ 0` es invariante. |
-| 20 | Cierre de período con eventos sin postear | Advertir y bloquear el cierre hasta resolverlos. |
+| #   | Situación                                              | Comportamiento esperado                                                                                               |
+| --- | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| 1   | El granel no alcanza para el decant completo           | Rechazar la venta antes de reservar. No fraccionar parcialmente.                                                      |
+| 2   | La merma real supera lo reservado                      | Permitir y consumir lo real. Si el granel no alcanza, la orden falla y queda en `in_progress` para resolución manual. |
+| 3   | Falta un insumo del BOM                                | Rechazar la ejecución. La orden queda pendiente y se alerta el faltante.                                              |
+| 4   | Un insumo del BOM está marcado `is_optional` y falta   | Ejecutar sin él, registrándolo en la nota de la orden.                                                                |
+| 5   | Se abre un frasco que ya estaba abierto                | Rechazar. Un lote solo se abre una vez.                                                                               |
+| 6   | Dos ventas simultáneas sobre el último frasco          | La segunda falla al bloquear el lote. Se muestra "ya no disponible", no un error técnico.                             |
+| 7   | La reserva vence entre el pago y la confirmación       | RN-RES-05: rechazar, reembolsar, cancelar con motivo.                                                                 |
+| 8   | Notificación de pago duplicada                         | Ignorar silenciosamente y devolver el resultado original.                                                             |
+| 9   | El monto de la notificación no coincide con el pedido  | No confirmar. Registrar y alertar para revisión manual.                                                               |
+| 10  | Recepción parcial de una orden de compra               | Generar lote por lo recibido, la orden pasa a `partially_received`.                                                   |
+| 11  | Recepción mayor a lo pedido                            | Rechazar. `qty_received ≤ qty_ordered` es invariante.                                                                 |
+| 12  | El tipo de cambio de la recepción difiere del estimado | Usar el real. La diferencia se registra como diferencia de cambio.                                                    |
+| 13  | Devolución de un decant ya fraccionado                 | El líquido no vuelve al granel. Ingresa como lote propio de la variante decant en estado `quarantine`.                |
+| 14  | Devolución de un reloj serializado                     | La unidad vuelve con su serial y el destino que determine la inspección.                                              |
+| 15  | Seña aplicada a un pedido que luego se anula           | La aplicación se revierte y la seña vuelve a estar disponible.                                                        |
+| 16  | Ajuste de inventario que dejaría saldo negativo        | Rechazar. El saldo nunca es negativo.                                                                                 |
+| 17  | Producto sin categoría primaria                        | Rechazar la publicación. El breadcrumb no puede resolverse.                                                           |
+| 18  | Variante `made_to_order` sin granel de origen          | Rechazar la creación. Impuesto por la base.                                                                           |
+| 19  | Venta con descuento mayor al subtotal                  | Rechazar. `total_pyg ≥ 0` es invariante.                                                                              |
+| 20  | Cierre de período con eventos sin postear              | Advertir y bloquear el cierre hasta resolverlos.                                                                      |

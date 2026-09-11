@@ -15,17 +15,17 @@ prisma/        schema.prisma (se genera por introspección, ver abajo)
 
 Todo lo que sigue se ejecutó, no se estimó:
 
-| | |
-|---|---|
-| Tablas | 61 |
-| Vistas | 6 |
-| Enums / dominios | 28 / 5 |
-| CHECK constraints | 104 |
-| Claves foráneas | 138 |
-| Índices | 128 |
-| Triggers (no internos) | 25 |
-| Tablas con RLS activo | 36 |
-| Políticas RLS | 45 |
+|                            |                   |
+| -------------------------- | ----------------- |
+| Tablas                     | 61                |
+| Vistas                     | 6                 |
+| Enums / dominios           | 28 / 5            |
+| CHECK constraints          | 104               |
+| Claves foráneas            | 138               |
+| Índices                    | 128               |
+| Triggers (no internos)     | 25                |
+| Tablas con RLS activo      | 36                |
+| Políticas RLS              | 45                |
 | **Pruebas de invariantes** | **18 / 18 pasan** |
 
 El flujo de negocio de `tests/smoke_business_flow.sql` corre de punta a punta: compra en USD con flete → recepción → apertura de frasco → fraccionamiento con merma real → venta → asiento contable. Cierra con deriva cero entre el ledger y la proyección de saldos.

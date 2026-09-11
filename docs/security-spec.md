@@ -8,16 +8,16 @@ Implementa ADR-015 (identidades separadas) y ADR-016 (RBAC en tres capas). Refer
 
 Dos poblaciones, dos tablas, dos superficies.
 
-| | Cliente | Personal |
-|---|---|---|
-| Tabla | `customers` | `staff_users` |
-| Dominio | `jodaparfums.com` | `admin.jodaparfums.com` |
-| Cookie | `__Host-joda_c` | `__Host-joda_a` (scope al subdominio) |
-| Audiencia | `customer` | `staff` |
-| Segundo factor | Opcional | **Obligatorio** |
-| Sesión | 30 días | 8 h |
-| Token de refresco | 90 días, rotativo | 8 h, rotativo con detección de reúso |
-| Permisos | Ninguno del catálogo | Según roles asignados |
+|                   | Cliente              | Personal                              |
+| ----------------- | -------------------- | ------------------------------------- |
+| Tabla             | `customers`          | `staff_users`                         |
+| Dominio           | `jodaparfums.com`    | `admin.jodaparfums.com`               |
+| Cookie            | `__Host-joda_c`      | `__Host-joda_a` (scope al subdominio) |
+| Audiencia         | `customer`           | `staff`                               |
+| Segundo factor    | Opcional             | **Obligatorio**                       |
+| Sesión            | 30 días              | 8 h                                   |
+| Token de refresco | 90 días, rotativo    | 8 h, rotativo con detección de reúso  |
+| Permisos          | Ninguno del catálogo | Según roles asignados                 |
 
 **Que un cliente no pueda tener un rol de personal es un invariante de esquema:** no existe fila donde ponérselo. No es una condición que haya que recordar validar.
 
@@ -29,60 +29,60 @@ La separación de cookies importa: un XSS en el storefront no alcanza la sesión
 
 Forma: `recurso.subrecurso:acción`.
 
-| Código | Descripción |
-|---|---|
-| `catalog.product:read` | Ver productos y variantes |
-| `catalog.product:write` | Crear y editar productos |
-| `catalog.product:publish` | Publicar al storefront |
-| `inventory.stock:read` | Ver stock, lotes **y costos de lote** |
-| `inventory.stock:adjust` | Ajustar inventario |
-| `inventory.decant:execute` | Ejecutar órdenes de fraccionamiento |
-| `sales.order:read` | Ver pedidos |
-| `sales.order:write` | Crear y confirmar pedidos |
-| `sales.order:refund` | Anular y reembolsar |
-| `accounting.cashbox:read` | Ver caja y arqueos |
-| `accounting.cashbox:write` | Registrar movimientos de caja |
-| `accounting.deposit:read` | Ver señas |
-| `accounting.deposit:write` | Registrar y aplicar señas |
-| `accounting.journal:read` | Ver asientos y balances |
-| `accounting.journal:write` | Contabilizar asientos |
-| `market.supplier:read` | Ver proveedores |
-| `market.supplier:write` | Crear y editar proveedores |
-| `market.purchase_order:read` | Ver órdenes de compra |
-| `market.purchase_order:write` | Crear órdenes de compra |
-| `market.purchase_order:approve` | Aprobar órdenes de compra |
-| `market.purchase_order:receive` | Registrar recepciones |
-| `market.sourcing:read` | Ver escenarios de sourcing |
-| `market.sourcing:write` | Crear escenarios |
-| `market.channel:write` | Gestionar canales y publicaciones |
-| `fiscal.document:read` | Ver documentos fiscales |
-| `fiscal.document:issue` | Emitir documentos fiscales |
-| `settings.user:read` | Ver usuarios y roles |
-| `settings.user:write` | Gestionar usuarios y roles |
+| Código                          | Descripción                           |
+| ------------------------------- | ------------------------------------- |
+| `catalog.product:read`          | Ver productos y variantes             |
+| `catalog.product:write`         | Crear y editar productos              |
+| `catalog.product:publish`       | Publicar al storefront                |
+| `inventory.stock:read`          | Ver stock, lotes **y costos de lote** |
+| `inventory.stock:adjust`        | Ajustar inventario                    |
+| `inventory.decant:execute`      | Ejecutar órdenes de fraccionamiento   |
+| `sales.order:read`              | Ver pedidos                           |
+| `sales.order:write`             | Crear y confirmar pedidos             |
+| `sales.order:refund`            | Anular y reembolsar                   |
+| `accounting.cashbox:read`       | Ver caja y arqueos                    |
+| `accounting.cashbox:write`      | Registrar movimientos de caja         |
+| `accounting.deposit:read`       | Ver señas                             |
+| `accounting.deposit:write`      | Registrar y aplicar señas             |
+| `accounting.journal:read`       | Ver asientos y balances               |
+| `accounting.journal:write`      | Contabilizar asientos                 |
+| `market.supplier:read`          | Ver proveedores                       |
+| `market.supplier:write`         | Crear y editar proveedores            |
+| `market.purchase_order:read`    | Ver órdenes de compra                 |
+| `market.purchase_order:write`   | Crear órdenes de compra               |
+| `market.purchase_order:approve` | Aprobar órdenes de compra             |
+| `market.purchase_order:receive` | Registrar recepciones                 |
+| `market.sourcing:read`          | Ver escenarios de sourcing            |
+| `market.sourcing:write`         | Crear escenarios                      |
+| `market.channel:write`          | Gestionar canales y publicaciones     |
+| `fiscal.document:read`          | Ver documentos fiscales               |
+| `fiscal.document:issue`         | Emitir documentos fiscales            |
+| `settings.user:read`            | Ver usuarios y roles                  |
+| `settings.user:write`           | Gestionar usuarios y roles            |
 
 ### 2.1 Matriz de roles
 
-| Permiso | owner | manager | vendedor | deposito |
-|---|:--:|:--:|:--:|:--:|
-| `catalog.product:read` | ✓ | ✓ | ✓ | ✓ |
-| `catalog.product:write` | ✓ | ✓ | | |
-| `catalog.product:publish` | ✓ | ✓ | | |
-| `inventory.stock:read` | ✓ | ✓ | | ✓ |
-| `inventory.stock:adjust` | ✓ | ✓ | | ✓ |
-| `inventory.decant:execute` | ✓ | ✓ | | ✓ |
-| `sales.order:read` | ✓ | ✓ | ✓ | |
-| `sales.order:write` | ✓ | ✓ | ✓ | |
-| `sales.order:refund` | ✓ | ✓ | | |
-| `accounting.cashbox:read` | ✓ | ✓ | | |
-| `accounting.cashbox:write` | ✓ | ✓ | | |
-| `accounting.deposit:read` | ✓ | ✓ | | |
-| `accounting.deposit:write` | ✓ | ✓ | ✓ | |
-| `accounting.journal:*` | ✓ | ✓ | | |
-| `market.*` | ✓ | ✓ | | receive |
-| `fiscal.document:read` | ✓ | ✓ | | |
-| `fiscal.document:issue` | ✓ | ✓ | ✓ | |
-| `settings.user:read` | ✓ | ✓ | | |
-| `settings.user:write` | ✓ | | | |
+| Permiso                    | owner | manager | vendedor | deposito |
+| -------------------------- | :---: | :-----: | :------: | :------: |
+| `catalog.product:read`     |   ✓   |    ✓    |    ✓     |    ✓     |
+| `catalog.product:write`    |   ✓   |    ✓    |          |          |
+| `catalog.product:publish`  |   ✓   |    ✓    |          |          |
+| `inventory.stock:read`     |   ✓   |    ✓    |          |    ✓     |
+| `inventory.stock:adjust`   |   ✓   |    ✓    |          |    ✓     |
+| `inventory.decant:execute` |   ✓   |    ✓    |          |    ✓     |
+| `sales.order:read`         |   ✓   |    ✓    |    ✓     |          |
+| `sales.order:write`        |   ✓   |    ✓    |    ✓     |          |
+| `sales.order:refund`       |   ✓   |    ✓    |          |          |
+| `accounting.cashbox:read`  |   ✓   |    ✓    |          |          |
+| `accounting.cashbox:write` |   ✓   |    ✓    |          |          |
+| `accounting.deposit:read`  |   ✓   |    ✓    |          |          |
+| `accounting.deposit:write` |   ✓   |    ✓    |    ✓     |          |
+| `accounting.journal:*`     |   ✓   |    ✓    |          |          |
+| `market.*`                 |   ✓   |    ✓    |          | receive  |
+| `fiscal.document:read`     |   ✓   |    ✓    |          |          |
+| `fiscal.document:issue`    |   ✓   |    ✓    |    ✓     |          |
+| `settings.user:read`       |   ✓   |    ✓    |          |          |
+| `settings.user:write`      |   ✓   |         |          |          |
 
 **Dos decisiones deliberadas:**
 
@@ -93,12 +93,12 @@ Forma: `recurso.subrecurso:acción`.
 
 ## 3. Las tres capas
 
-| Capa | Dónde | Rol |
-|---|---|---|
-| **1 — RLS** | PostgreSQL | Aislamiento por tenant + permisos sobre lo sensible. Deny-by-default. |
-| **2 — Middleware** | API | `requirePermission()` en cada procedimiento. **Defensa principal.** |
-| **3 — Servicio** | API | Reglas dependientes del recurso concreto. |
-| *Guardas de React* | Frontend | **Experiencia de usuario, no seguridad.** |
+| Capa               | Dónde      | Rol                                                                   |
+| ------------------ | ---------- | --------------------------------------------------------------------- |
+| **1 — RLS**        | PostgreSQL | Aislamiento por tenant + permisos sobre lo sensible. Deny-by-default. |
+| **2 — Middleware** | API        | `requirePermission()` en cada procedimiento. **Defensa principal.**   |
+| **3 — Servicio**   | API        | Reglas dependientes del recurso concreto.                             |
+| _Guardas de React_ | Frontend   | **Experiencia de usuario, no seguridad.**                             |
 
 ### 3.1 Capa 1 — RLS
 
@@ -124,11 +124,11 @@ CREATE POLICY lots_read ON app.inventory_lots
 
 **La condición que hace que esta capa exista de verdad:**
 
-| Rol | Uso | `BYPASSRLS` |
-|---|---|---|
-| `joda_api` | Runtime de la API | **No** |
-| `joda_readonly` | Catálogo público | **No** |
-| `service_role` | Migraciones y ETL, solo desde CI | Sí — nunca en runtime |
+| Rol             | Uso                              | `BYPASSRLS`           |
+| --------------- | -------------------------------- | --------------------- |
+| `joda_api`      | Runtime de la API                | **No**                |
+| `joda_readonly` | Catálogo público                 | **No**                |
+| `service_role`  | Migraciones y ETL, solo desde CI | Sí — nunca en runtime |
 
 Si la API usara `service_role` o el dueño de las tablas, RLS **no se evaluaría** y toda la capa sería decorativa. Además, `joda_api` no tiene `UPDATE` ni `DELETE` sobre `inventory_movements`, `movement_cost_allocations`, `audit_log` ni `fiscal_events`.
 
@@ -137,12 +137,13 @@ Si la API usara `service_role` o el dueño de las tablas, RLS **no se evaluaría
 ### 3.2 Capa 2 — Middleware
 
 ```ts
-export const requirePermission = (...required: PermissionCode[]) =>
+export const requirePermission =
+  (...required: PermissionCode[]) =>
   async (req: Request, reply: Reply) => {
     const s = req.session;
-    if (!s || s.audience !== 'staff') return reply.code(404).send();
+    if (!s || s.audience !== "staff") return reply.code(404).send();
     const granted = await permissionCache.get(s.userId);
-    if (!required.every(p => granted.has(p))) return reply.code(404).send();
+    if (!required.every((p) => granted.has(p))) return reply.code(404).send();
   };
 ```
 
@@ -207,17 +208,17 @@ Obligatorio para personal. TOTP. Un usuario sin segundo factor inscripto puede a
 
 ## 5. Protección de entrada
 
-| Vector | Mitigación |
-|---|---|
-| Inyección SQL | Prisma parametriza. `$queryRawUnsafe` prohibido por regla de lint que falla el build. SQL crudo solo con `Prisma.sql` y marcadores. |
-| Asignación masiva | Zod `.strict()` en toda entrada. Rechaza campos no declarados. |
-| XSS | React escapa por defecto. `dangerouslySetInnerHTML` prohibido; contenido enriquecido pasa por sanitizador. CSP con nonce. |
-| CSRF | Cookies `SameSite` + token de doble envío en mutaciones del admin. |
-| Carga de archivos | Validación por **bytes mágicos**, no por `Content-Type`. Reprocesamiento con `sharp` (elimina metadatos y cargas útiles embebidas). Nombre por hash. Límite de tamaño y dimensiones. Servidos desde dominio distinto al del admin. |
-| Fuerza bruta | Límite de tasa + retardo progresivo. Bloqueo temporal a los 10 intentos. |
-| Enumeración de usuarios | Mensaje idéntico para usuario inexistente y contraseña incorrecta. Tiempo de respuesta constante. |
-| Recorrido de rutas | Ninguna ruta de archivo se construye con entrada del usuario. |
-| SSRF | No hay endpoints que descarguen URLs provistas por el usuario. Si se agregan, lista blanca de dominios. |
+| Vector                  | Mitigación                                                                                                                                                                                                                         |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Inyección SQL           | Prisma parametriza. `$queryRawUnsafe` prohibido por regla de lint que falla el build. SQL crudo solo con `Prisma.sql` y marcadores.                                                                                                |
+| Asignación masiva       | Zod `.strict()` en toda entrada. Rechaza campos no declarados.                                                                                                                                                                     |
+| XSS                     | React escapa por defecto. `dangerouslySetInnerHTML` prohibido; contenido enriquecido pasa por sanitizador. CSP con nonce.                                                                                                          |
+| CSRF                    | Cookies `SameSite` + token de doble envío en mutaciones del admin.                                                                                                                                                                 |
+| Carga de archivos       | Validación por **bytes mágicos**, no por `Content-Type`. Reprocesamiento con `sharp` (elimina metadatos y cargas útiles embebidas). Nombre por hash. Límite de tamaño y dimensiones. Servidos desde dominio distinto al del admin. |
+| Fuerza bruta            | Límite de tasa + retardo progresivo. Bloqueo temporal a los 10 intentos.                                                                                                                                                           |
+| Enumeración de usuarios | Mensaje idéntico para usuario inexistente y contraseña incorrecta. Tiempo de respuesta constante.                                                                                                                                  |
+| Recorrido de rutas      | Ninguna ruta de archivo se construye con entrada del usuario.                                                                                                                                                                      |
+| SSRF                    | No hay endpoints que descarguen URLs provistas por el usuario. Si se agregan, lista blanca de dominios.                                                                                                                            |
 
 ### 5.1 Cabeceras
 
@@ -240,7 +241,7 @@ Se almacenan `card_last4` y `card_brand`, que no son datos de tarjeta bajo las n
 **Lista negra en el registrador de bitácoras**, aplicada centralmente y no en cada llamada:
 
 ```ts
-const REDACT = ['card', 'pan', 'cvv', 'cvc', 'token', 'authorization', 'password', 'secret'];
+const REDACT = ["card", "pan", "cvv", "cvc", "token", "authorization", "password", "secret"];
 ```
 
 **Verificación de webhooks:** validar firma del proveedor antes de procesar, y confirmar el monto contra la API del proveedor antes de dar una venta por pagada. Un webhook es una notificación, no una autorización.

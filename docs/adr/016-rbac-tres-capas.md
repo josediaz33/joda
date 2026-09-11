@@ -14,12 +14,12 @@ El diseño original presentaba RLS como "última línea de defensa" mientras la 
 
 **Tres capas de aplicación:**
 
-| Capa | Dónde | Qué hace |
-|---|---|---|
-| 1 — RLS | PostgreSQL | Aislamiento por tenant + permisos. Deny-by-default. |
-| 2 — Middleware | API | `requirePermission()` en cada ruta. **Defensa principal.** |
-| 3 — Servicio | API | Reglas dependientes del recurso concreto. |
-| *Guardas de React* | Frontend | **UX, no seguridad.** |
+| Capa               | Dónde      | Qué hace                                                   |
+| ------------------ | ---------- | ---------------------------------------------------------- |
+| 1 — RLS            | PostgreSQL | Aislamiento por tenant + permisos. Deny-by-default.        |
+| 2 — Middleware     | API        | `requirePermission()` en cada ruta. **Defensa principal.** |
+| 3 — Servicio       | API        | Reglas dependientes del recurso concreto.                  |
+| _Guardas de React_ | Frontend   | **UX, no seguridad.**                                      |
 
 **Y la condición que hace que la capa 1 exista de verdad:**
 

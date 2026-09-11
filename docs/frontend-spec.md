@@ -10,14 +10,14 @@ Aplica a `apps/storefront`, `apps/admin` y `packages/ui`.
 
 Antes que cualquier decisión técnica: **el storefront y el backoffice no se parecen, y no deben parecerse.**
 
-| | Storefront | Backoffice |
-|---|---|---|
-| Trabajo | Convencer y vender | Operar rápido y sin errores |
-| Usuario | Alguien que entra una vez desde Instagram | Vos, ocho horas por día |
-| Densidad | Aire, foco en la imagen | Densa, mucha información visible |
-| Motion | Deliberada, escasa | Solo la que confirma una acción |
-| Tipografía | Con personalidad | Legible a 13px en tablas |
-| Métrica | Conversión, LCP, posicionamiento | Clics por operación, errores evitados |
+|            | Storefront                                | Backoffice                            |
+| ---------- | ----------------------------------------- | ------------------------------------- |
+| Trabajo    | Convencer y vender                        | Operar rápido y sin errores           |
+| Usuario    | Alguien que entra una vez desde Instagram | Vos, ocho horas por día               |
+| Densidad   | Aire, foco en la imagen                   | Densa, mucha información visible      |
+| Motion     | Deliberada, escasa                        | Solo la que confirma una acción       |
+| Tipografía | Con personalidad                          | Legible a 13px en tablas              |
+| Métrica    | Conversión, LCP, posicionamiento          | Clics por operación, errores evitados |
 
 Comparten **tokens** (color base, escala tipográfica, espaciado, radios) y **primitivas** (Dialog, Popover, Select). No comparten composiciones ni densidad. Un ERP que parece una landing es lento de operar; una tienda que parece un ERP no vende.
 
@@ -27,13 +27,13 @@ Comparten **tokens** (color base, escala tipográfica, espaciado, radios) y **pr
 
 ### 2.1 Confirmado
 
-| Capa | Elección | Nota |
-|---|---|---|
-| Framework storefront | **Next.js (App Router)** | SSG/ISR. Ver ADR-003 |
-| Framework admin | **React 19 + Vite** | SPA. SEO irrelevante |
-| Estilos | **Tailwind CSS v4** | Configuración CSS-first con `@theme`, sin `tailwind.config.js` |
-| Componentes | **shadcn/ui sobre Radix** | Accesibles, sin dependencia pesada, código propio |
-| Iconos | **Lucide** | Importar por nombre, nunca el barrel completo |
+| Capa                 | Elección                  | Nota                                                           |
+| -------------------- | ------------------------- | -------------------------------------------------------------- |
+| Framework storefront | **Next.js (App Router)**  | SSG/ISR. Ver ADR-003                                           |
+| Framework admin      | **React 19 + Vite**       | SPA. SEO irrelevante                                           |
+| Estilos              | **Tailwind CSS v4**       | Configuración CSS-first con `@theme`, sin `tailwind.config.js` |
+| Componentes          | **shadcn/ui sobre Radix** | Accesibles, sin dependencia pesada, código propio              |
+| Iconos               | **Lucide**                | Importar por nombre, nunca el barrel completo                  |
 
 ### 2.2 Precisiones sobre lo que propusiste
 
@@ -45,11 +45,11 @@ Comparten **tokens** (color base, escala tipográfica, espaciado, radios) y **pr
 
 @theme {
   --color-ink-900: #16151a;
-  --color-bone-50:  #faf8f5;
+  --color-bone-50: #faf8f5;
   --color-accent-600: #8a5a2b;
 
   --font-display: "<display>", serif;
-  --font-body:    "<body>", system-ui, sans-serif;
+  --font-body: "<body>", system-ui, sans-serif;
 
   --radius-card: 2px;
   --spacing-gutter: 1.5rem;
@@ -75,22 +75,22 @@ Mi recomendación:
 - **Framer Motion:** solo en islas específicas fuera del camino crítico — el visor de imágenes del producto, el panel del carrito, alguna secuencia de la portada. Nunca en la grilla de catálogo ni por encima del pliegue.
 - **Admin:** libre. El presupuesto de bundle no es un problema ahí.
 
-Y una advertencia de criterio, más que de rendimiento: entradas de tipo *fade-and-slide-up* en cada sección y transiciones al pasar el mouse sobre cada tarjeta son el default genérico y se leen como plantilla. Un solo momento orquestado —la aparición del producto principal, la apertura del carrito— vale más que efectos repartidos por todos lados.
+Y una advertencia de criterio, más que de rendimiento: entradas de tipo _fade-and-slide-up_ en cada sección y transiciones al pasar el mouse sobre cada tarjeta son el default genérico y se leen como plantilla. Un solo momento orquestado —la aparición del producto principal, la apertura del carrito— vale más que efectos repartidos por todos lados.
 
 ### 2.3 Lo que falta en la tabla
 
-| Necesidad | Elección | Por qué |
-|---|---|---|
-| Formularios | **react-hook-form + `@hookform/resolvers/zod`** | **Reusa los esquemas de `packages/contracts`.** El mismo Zod valida en el cliente y en el servidor: una sola definición de la regla |
-| Datos en el admin | **tRPC + TanStack Query** | Tipado extremo a extremo, caché, invalidación, estado optimista |
-| Datos en el storefront | **Componentes de servidor + Server Actions** | Sin cliente de datos en el camino crítico |
-| Tablas del admin | **TanStack Table** | Headless: ordenamiento, filtros y virtualización sin imponer estilos |
-| Gráficos de reportes | **Recharts** | Suficiente para las cuatro visualizaciones del backlog |
-| Notificaciones | **sonner** | Ligero, accesible, buen manejo de cola |
-| Fechas | **date-fns** con locale `es` | Zona `America/Asuncion`, formato `dd/mm/aaaa` |
-| Búsqueda del admin | **cmdk** | Paleta de comandos: la diferencia entre 4 clics y 2 teclas |
-| Virtualización | **TanStack Virtual** | Listas largas de movimientos de inventario |
-| Estado de UI | **Zustand**, solo si hace falta | El estado del servidor lo maneja Query; el de UI casi siempre es local |
+| Necesidad              | Elección                                        | Por qué                                                                                                                             |
+| ---------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| Formularios            | **react-hook-form + `@hookform/resolvers/zod`** | **Reusa los esquemas de `packages/contracts`.** El mismo Zod valida en el cliente y en el servidor: una sola definición de la regla |
+| Datos en el admin      | **tRPC + TanStack Query**                       | Tipado extremo a extremo, caché, invalidación, estado optimista                                                                     |
+| Datos en el storefront | **Componentes de servidor + Server Actions**    | Sin cliente de datos en el camino crítico                                                                                           |
+| Tablas del admin       | **TanStack Table**                              | Headless: ordenamiento, filtros y virtualización sin imponer estilos                                                                |
+| Gráficos de reportes   | **Recharts**                                    | Suficiente para las cuatro visualizaciones del backlog                                                                              |
+| Notificaciones         | **sonner**                                      | Ligero, accesible, buen manejo de cola                                                                                              |
+| Fechas                 | **date-fns** con locale `es`                    | Zona `America/Asuncion`, formato `dd/mm/aaaa`                                                                                       |
+| Búsqueda del admin     | **cmdk**                                        | Paleta de comandos: la diferencia entre 4 clics y 2 teclas                                                                          |
+| Virtualización         | **TanStack Virtual**                            | Listas largas de movimientos de inventario                                                                                          |
+| Estado de UI           | **Zustand**, solo si hace falta                 | El estado del servidor lo maneja Query; el de UI casi siempre es local                                                              |
 
 **Lo que NO va:** ninguna librería de componentes con estilos propios (MUI, Ant, Chakra). Chocan con Tailwind, pesan, y su estética es reconocible — exactamente lo contrario de lo que necesita una marca.
 
@@ -151,8 +151,10 @@ packages/ui/src/
 
 ```ts
 // packages/ui/src/format/money.ts
-const pygFormatter = new Intl.NumberFormat('es-PY', {
-  style: 'currency', currency: 'PYG', maximumFractionDigits: 0,
+const pygFormatter = new Intl.NumberFormat("es-PY", {
+  style: "currency",
+  currency: "PYG",
+  maximumFractionDigits: 0,
 });
 
 /** El dinero llega como string desde la API (ver api-conventions §3). */
@@ -167,13 +169,13 @@ export function formatPyg(minor: string): string {
 
 ### 5.1 Presupuesto por ruta
 
-| Ruta | JS transferido | LCP (4G) | CLS | INP |
-|---|---|---|---|---|
-| Portada | ≤ 120 kB | < 2,0 s | < 0,05 | < 200 ms |
-| Categoría | ≤ 150 kB | < 2,5 s | < 0,1 | < 200 ms |
-| Producto | ≤ 180 kB | < 2,5 s | < 0,1 | < 200 ms |
-| Checkout | ≤ 220 kB | < 3,0 s | < 0,1 | < 200 ms |
-| Admin (cualquiera) | ≤ 400 kB | < 3,0 s | — | < 200 ms |
+| Ruta               | JS transferido | LCP (4G) | CLS    | INP      |
+| ------------------ | -------------- | -------- | ------ | -------- |
+| Portada            | ≤ 120 kB       | < 2,0 s  | < 0,05 | < 200 ms |
+| Categoría          | ≤ 150 kB       | < 2,5 s  | < 0,1  | < 200 ms |
+| Producto           | ≤ 180 kB       | < 2,5 s  | < 0,1  | < 200 ms |
+| Checkout           | ≤ 220 kB       | < 3,0 s  | < 0,1  | < 200 ms |
+| Admin (cualquiera) | ≤ 400 kB       | < 3,0 s  | —      | < 200 ms |
 
 Se mide con Lighthouse CI en el pipeline. **Exceder el presupuesto bloquea la fusión**, igual que un test que falla. Un presupuesto que se puede ignorar no es un presupuesto.
 
@@ -182,14 +184,14 @@ Se mide con Lighthouse CI en el pipeline. **Exceder el presupuesto bloquea la fu
 La causa más común de LCP malo en tiendas de nicho es una tipografía de display que bloquea el renderizado.
 
 ```tsx
-import localFont from 'next/font/local';
+import localFont from "next/font/local";
 
 export const display = localFont({
-  src: './fonts/display.woff2',
-  display: 'swap',           // nunca 'block'
+  src: "./fonts/display.woff2",
+  display: "swap", // nunca 'block'
   preload: true,
-  fallback: ['Georgia', 'serif'],
-  adjustFontFallback: 'Times New Roman',   // reduce el salto de layout
+  fallback: ["Georgia", "serif"],
+  adjustFontFallback: "Times New Roman", // reduce el salto de layout
 });
 ```
 
@@ -201,11 +203,12 @@ Es el rubro que más pesa en una perfumería, y donde más se gana.
 
 ```tsx
 <Image
-  src={media.url}                    // R2 + CDN, URL pública inmutable
+  src={media.url} // R2 + CDN, URL pública inmutable
   alt={`${product.brandName} ${product.name}`}
-  width={800} height={1000}          // SIEMPRE: evita el salto de layout
+  width={800}
+  height={1000} // SIEMPRE: evita el salto de layout
   sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
-  priority={isAboveTheFold}          // solo la primera imagen
+  priority={isAboveTheFold} // solo la primera imagen
   placeholder="blur"
   blurDataURL={media.blurHash}
 />
@@ -231,14 +234,14 @@ Esta sección es la que decide si la inversión en el storefront propio se justi
 
 ### 6.1 Estrategia de renderizado
 
-| Ruta | Estrategia | Revalidación |
-|---|---|---|
-| Portada | ISR | 10 min |
-| Categoría | ISR | 10 min |
-| **Producto** | **ISR** | **5 min** |
-| Búsqueda y filtros | Dinámica | — |
-| Carrito y checkout | Cliente | — |
-| Cuenta | Dinámica | — |
+| Ruta               | Estrategia | Revalidación |
+| ------------------ | ---------- | ------------ |
+| Portada            | ISR        | 10 min       |
+| Categoría          | ISR        | 10 min       |
+| **Producto**       | **ISR**    | **5 min**    |
+| Búsqueda y filtros | Dinámica   | —            |
+| Carrito y checkout | Cliente    | —            |
+| Cuenta             | Dinámica   | —            |
 
 El precio y la disponibilidad cambian, pero no minuto a minuto. Cinco minutos de revalidación en la página de producto es el punto donde el HTML sale del caché y el dato sigue siendo cierto.
 
@@ -266,18 +269,18 @@ Filtros combinables generan URLs infinitas: familia × concentración × marca �
 
 **Decidí explícitamente qué faceta es indexable y cuál no:**
 
-| Faceta | Tratamiento |
-|---|---|
-| Categoría, subcategoría | Ruta propia, indexable, enlazada en el menú |
-| Marca | Ruta propia `/marcas/<slug>`, indexable |
-| Familia olfativa | Ruta propia si tiene volumen de búsqueda real; si no, parámetro |
-| Concentración, tamaño, precio, disponibilidad | **Parámetro de consulta, `noindex`, canónica a la ruta base** |
-| Orden y paginación | Canónica a la página 1 salvo que uses `rel=next/prev` |
-| Combinación de dos o más facetas | **Siempre `noindex`** |
+| Faceta                                        | Tratamiento                                                     |
+| --------------------------------------------- | --------------------------------------------------------------- |
+| Categoría, subcategoría                       | Ruta propia, indexable, enlazada en el menú                     |
+| Marca                                         | Ruta propia `/marcas/<slug>`, indexable                         |
+| Familia olfativa                              | Ruta propia si tiene volumen de búsqueda real; si no, parámetro |
+| Concentración, tamaño, precio, disponibilidad | **Parámetro de consulta, `noindex`, canónica a la ruta base**   |
+| Orden y paginación                            | Canónica a la página 1 salvo que uses `rel=next/prev`           |
+| Combinación de dos o más facetas              | **Siempre `noindex`**                                           |
 
 ```tsx
 export async function generateMetadata({ searchParams }): Promise<Metadata> {
-  const hasFilters = Object.keys(searchParams).some(k => FILTER_KEYS.includes(k));
+  const hasFilters = Object.keys(searchParams).some((k) => FILTER_KEYS.includes(k));
   return {
     robots: hasFilters ? { index: false, follow: true } : { index: true, follow: true },
     alternates: { canonical: `/perfumes/nicho` },
@@ -293,22 +296,20 @@ Sin esto no aparecés con precio y disponibilidad en los resultados de búsqueda
 
 ```tsx
 const productLd = {
-  '@context': 'https://schema.org',
-  '@type': 'Product',
+  "@context": "https://schema.org",
+  "@type": "Product",
   name: `${product.brandName} ${product.name}`,
   description: product.description,
-  image: product.images.map(i => i.url),
-  brand: { '@type': 'Brand', name: product.brandName },
-  offers: variants.map(v => ({
-    '@type': 'Offer',
-    name: v.label,                                  // "Decant 10 ml"
+  image: product.images.map((i) => i.url),
+  brand: { "@type": "Brand", name: product.brandName },
+  offers: variants.map((v) => ({
+    "@type": "Offer",
+    name: v.label, // "Decant 10 ml"
     price: v.pricePyg,
-    priceCurrency: 'PYG',
-    availability: v.inStock
-      ? 'https://schema.org/InStock'
-      : 'https://schema.org/OutOfStock',
+    priceCurrency: "PYG",
+    availability: v.inStock ? "https://schema.org/InStock" : "https://schema.org/OutOfStock",
     url: `https://jodaparfums.com/${category}/${product.slug}?v=${v.sku}`,
-    itemCondition: 'https://schema.org/NewCondition',
+    itemCondition: "https://schema.org/NewCondition",
   })),
 };
 ```
@@ -326,14 +327,14 @@ export async function generateMetadata({ params }): Promise<Metadata> {
   const p = await getProduct(params.slug);
   return {
     title: `${p.brandName} ${p.name} — Decants y frasco sellado | JODA Parfums`,
-    description: p.metaDescription,                 // única, escrita a mano
+    description: p.metaDescription, // única, escrita a mano
     alternates: { canonical: `/${p.categoryPath}/${p.slug}` },
     openGraph: {
-      type: 'website',
+      type: "website",
       title: `${p.brandName} ${p.name}`,
       description: p.shortDescription,
       images: [{ url: p.ogImage, width: 1200, height: 630 }],
-      locale: 'es_PY',
+      locale: "es_PY",
     },
   };
 }
@@ -415,7 +416,7 @@ Un componente por vertical, no uno genérico con campos opcionales — es el mis
 
 ### 8.4 Temporizador de reserva en checkout
 
-`RF-ECO-04` exige que el vencimiento sea visible. No como cuenta regresiva agresiva, sino como información: *"Reservado hasta las 14:35"*. Al vencer, mensaje claro y recuperable, no un error genérico.
+`RF-ECO-04` exige que el vencimiento sea visible. No como cuenta regresiva agresiva, sino como información: _"Reservado hasta las 14:35"_. Al vencer, mensaje claro y recuperable, no un error genérico.
 
 ### 8.5 Conflicto de stock
 
@@ -436,11 +437,11 @@ Al cargar flete y despacho, la tabla recalcula el costo puesto y el margen proye
 El patrón que más código ahorra en todo el proyecto: **el esquema Zod de `packages/contracts` se usa en el servidor y en el cliente.**
 
 ```tsx
-import { createProductInput } from '@joda/contracts/catalog';
+import { createProductInput } from "@joda/contracts/catalog";
 
 const form = useForm({
   resolver: zodResolver(createProductInput),
-  defaultValues: { kind: 'perfume', status: 'draft' },
+  defaultValues: { kind: "perfume", status: "draft" },
 });
 ```
 
@@ -452,12 +453,12 @@ Reglas: validación al desenfocar y luego en cada cambio; el botón de envío no
 
 ## 10. Pruebas de frontend
 
-| Nivel | Herramienta | Alcance |
-|---|---|---|
-| Componente | Vitest + Testing Library | Lógica de composición, no apariencia |
-| Accesibilidad | `@axe-core/playwright` | Rutas críticas, bloquea la fusión |
-| Rendimiento | Lighthouse CI | Presupuesto de §5.1, bloquea la fusión |
-| Extremo a extremo | Playwright | Los cinco flujos de la estrategia de pruebas |
+| Nivel             | Herramienta              | Alcance                                      |
+| ----------------- | ------------------------ | -------------------------------------------- |
+| Componente        | Vitest + Testing Library | Lógica de composición, no apariencia         |
+| Accesibilidad     | `@axe-core/playwright`   | Rutas críticas, bloquea la fusión            |
+| Rendimiento       | Lighthouse CI            | Presupuesto de §5.1, bloquea la fusión       |
+| Extremo a extremo | Playwright               | Los cinco flujos de la estrategia de pruebas |
 
 **Sin pruebas de instantánea visual.** Producen ruido y terminan actualizándose sin mirar, que es peor que no tenerlas.
 

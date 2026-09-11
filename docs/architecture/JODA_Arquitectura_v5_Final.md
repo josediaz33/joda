@@ -40,12 +40,12 @@ Su límite es estructural: una base de datos que vive en el navegador de una per
 
 Un ecosistema de cuatro piezas sobre una base de datos central en la nube:
 
-| Pieza | Qué es | Quién la usa |
-|---|---|---|
-| **Storefront** | E-commerce público con catálogo, carrito, checkout y seguimiento | Clientes |
-| **Backoffice** | ERP completo: inventario, ventas, logística, compras, sourcing, contabilidad | Staff |
-| **Market** | Módulo del backoffice: proveedores, abastecimiento, canales, sourcing | Staff |
-| **API** | Único origen de escritura. Contiene todos los casos de uso | Las tres anteriores |
+| Pieza          | Qué es                                                                       | Quién la usa        |
+| -------------- | ---------------------------------------------------------------------------- | ------------------- |
+| **Storefront** | E-commerce público con catálogo, carrito, checkout y seguimiento             | Clientes            |
+| **Backoffice** | ERP completo: inventario, ventas, logística, compras, sourcing, contabilidad | Staff               |
+| **Market**     | Módulo del backoffice: proveedores, abastecimiento, canales, sourcing        | Staff               |
+| **API**        | Único origen de escritura. Contiene todos los casos de uso                   | Las tres anteriores |
 
 ### 1.3 Verticales de producto
 
@@ -61,26 +61,26 @@ El sistema deja de ser "de perfumería". Hoy soporta perfumes y relojes; mañana
 
 ## 2. Decisiones arquitectónicas
 
-| # | Área | Decisión | Fundamento en una línea |
-|---|---|---|---|
-| 1 | Catálogo | **CTI + facetas JSONB + categorías N:N + tags** | Lo que participa en cálculos necesita tipos; lo descriptivo no. |
-| 2 | Repositorio | **Monorepo pnpm + Turborepo** | El contrato de tipos compartido es el activo, y el `tsc` del CI lo protege. |
-| 3 | Storefront | **Next.js (App Router)** | Un SPA arranca perdiendo el long-tail de búsqueda, que es donde compite el nicho. |
-| 4 | Backoffice | **React 19 + Vite** (evolución del código actual) | SEO irrelevante, DX rápido, y ya existe. |
-| 5 | Backend | **Fastify + tRPC + Prisma**, monolito modular | Un caso de uso de venta toca ocho tablas: necesita una capa de aplicación explícita. |
-| 6 | Plataforma | **Supabase para Postgres + Auth**; **Cloudflare R2** para imágenes públicas | Auth y Postgres gestionados salen más baratos que construirlos; R2 no cobra egress. |
-| 7 | Escrituras | **Solo la API escribe.** El storefront lee vistas estables | Si el storefront leyera tablas, el esquema interno sería API pública. |
-| 8 | Inventario | **Kardex append-only** + proyección de saldos + capas de costo | Es la única forma de auditar mililitros, mermas y stock comprometido. |
-| 9 | Dinero | **`bigint` en guaraníes enteros** + snapshot de FX por transacción | El PYG no tiene subdivisión operativa; el costo importado sí es multi-moneda. |
-| 10 | Contabilidad | **Partida doble desde el día 1**, asientos **derivados** por reglas de posteo | Retrofitear el libro mayor es carísimo; exigir que el usuario sepa contabilidad, fatal. |
-| 11 | Fiscal | `fiscal_documents` + **puerto** `FiscalProvider` con adaptadores | Construir el integrador SIFEN es un producto en sí mismo. No lo construimos. |
-| 12 | Identidades | **`customers` y `staff_users` en tablas separadas** | Que un cliente no pueda tener rol de staff es invariante de esquema, no validación. |
-| 13 | RLS | La API conecta con rol **`NOBYPASSRLS`**; `service_role` solo en CI **[V]** | Con credencial privilegiada, RLS no se evalúa y es decorativo. |
-| 14 | Triggers | **Solo invariantes.** Nunca lógica de negocio | La base garantiza lo que debe seguir siendo cierto; la app decide. |
-| 15 | Reservas | El carrito **no** reserva; la reserva nace en checkout con TTL por medio de pago | Reservar en carrito permite bloquear piezas únicas abriendo pestañas. |
-| 16 | Pagos | Checkout **hospedado** (el PAN nunca toca el sistema) + webhooks idempotentes | SAQ A en vez de SAQ D; y Bancard reintenta. |
-| 17 | Migración | **Corte único** con ETL idempotente y reconciliación. Sin dual-write | Un usuario único puede cerrar un domingo; el dual-write agrega divergencia. |
-| 18 | Esquema | **SQL-first.** Prisma se regenera por introspección | Prisma no expresa constraint triggers diferidos, RLS, dominios ni FK compuestas. |
+| #   | Área         | Decisión                                                                         | Fundamento en una línea                                                                 |
+| --- | ------------ | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| 1   | Catálogo     | **CTI + facetas JSONB + categorías N:N + tags**                                  | Lo que participa en cálculos necesita tipos; lo descriptivo no.                         |
+| 2   | Repositorio  | **Monorepo pnpm + Turborepo**                                                    | El contrato de tipos compartido es el activo, y el `tsc` del CI lo protege.             |
+| 3   | Storefront   | **Next.js (App Router)**                                                         | Un SPA arranca perdiendo el long-tail de búsqueda, que es donde compite el nicho.       |
+| 4   | Backoffice   | **React 19 + Vite** (evolución del código actual)                                | SEO irrelevante, DX rápido, y ya existe.                                                |
+| 5   | Backend      | **Fastify + tRPC + Prisma**, monolito modular                                    | Un caso de uso de venta toca ocho tablas: necesita una capa de aplicación explícita.    |
+| 6   | Plataforma   | **Supabase para Postgres + Auth**; **Cloudflare R2** para imágenes públicas      | Auth y Postgres gestionados salen más baratos que construirlos; R2 no cobra egress.     |
+| 7   | Escrituras   | **Solo la API escribe.** El storefront lee vistas estables                       | Si el storefront leyera tablas, el esquema interno sería API pública.                   |
+| 8   | Inventario   | **Kardex append-only** + proyección de saldos + capas de costo                   | Es la única forma de auditar mililitros, mermas y stock comprometido.                   |
+| 9   | Dinero       | **`bigint` en guaraníes enteros** + snapshot de FX por transacción               | El PYG no tiene subdivisión operativa; el costo importado sí es multi-moneda.           |
+| 10  | Contabilidad | **Partida doble desde el día 1**, asientos **derivados** por reglas de posteo    | Retrofitear el libro mayor es carísimo; exigir que el usuario sepa contabilidad, fatal. |
+| 11  | Fiscal       | `fiscal_documents` + **puerto** `FiscalProvider` con adaptadores                 | Construir el integrador SIFEN es un producto en sí mismo. No lo construimos.            |
+| 12  | Identidades  | **`customers` y `staff_users` en tablas separadas**                              | Que un cliente no pueda tener rol de staff es invariante de esquema, no validación.     |
+| 13  | RLS          | La API conecta con rol **`NOBYPASSRLS`**; `service_role` solo en CI **[V]**      | Con credencial privilegiada, RLS no se evalúa y es decorativo.                          |
+| 14  | Triggers     | **Solo invariantes.** Nunca lógica de negocio                                    | La base garantiza lo que debe seguir siendo cierto; la app decide.                      |
+| 15  | Reservas     | El carrito **no** reserva; la reserva nace en checkout con TTL por medio de pago | Reservar en carrito permite bloquear piezas únicas abriendo pestañas.                   |
+| 16  | Pagos        | Checkout **hospedado** (el PAN nunca toca el sistema) + webhooks idempotentes    | SAQ A en vez de SAQ D; y Bancard reintenta.                                             |
+| 17  | Migración    | **Corte único** con ETL idempotente y reconciliación. Sin dual-write             | Un usuario único puede cerrar un domingo; el dual-write agrega divergencia.             |
+| 18  | Esquema      | **SQL-first.** Prisma se regenera por introspección                              | Prisma no expresa constraint triggers diferidos, RLS, dominios ni FK compuestas.        |
 
 ### 2.1 Principio rector
 
@@ -132,11 +132,11 @@ Esta frase resuelve la mayoría de las discusiones de diseño que aparecieron du
 
 ### 3.1 Roles de base de datos
 
-| Rol | Uso | Privilegios |
-|---|---|---|
-| `joda_api` | Proceso que atiende requests | CRUD, `NOBYPASSRLS`, **sin** `UPDATE`/`DELETE` sobre ledger y auditoría |
-| `joda_readonly` | Lectura de catálogo del storefront | `SELECT` sobre las vistas públicas, nada más |
-| `service_role` | Migraciones y ETL, **solo desde CI** | Elevado. Nunca en el runtime de la API. |
+| Rol             | Uso                                  | Privilegios                                                             |
+| --------------- | ------------------------------------ | ----------------------------------------------------------------------- |
+| `joda_api`      | Proceso que atiende requests         | CRUD, `NOBYPASSRLS`, **sin** `UPDATE`/`DELETE` sobre ledger y auditoría |
+| `joda_readonly` | Lectura de catálogo del storefront   | `SELECT` sobre las vistas públicas, nada más                            |
+| `service_role`  | Migraciones y ETL, **solo desde CI** | Elevado. Nunca en el runtime de la API.                                 |
 
 Cada transacción de la API abre con:
 
@@ -156,12 +156,12 @@ El tercer parámetro `true` hace el valor local a la transacción, para que no s
 
 Cuatro niveles que no deben confundirse:
 
-| Nivel | Qué es | Dónde vive |
-|---|---|---|
-| **Vertical** (`product_kind`) | Clasificación de **comportamiento** | Enum + tablas `{kind}_details` |
-| **Categoría comercial** | Navegación, breadcrumbs, SEO | `categories` (árbol) + `product_categories` (N:N) |
-| **Atributo** | Propiedad del producto | Columna tipada si afecta cálculos; faceta si no |
-| **Tag** | Marca transversal de marketing | `tags` + `product_tags` |
+| Nivel                         | Qué es                              | Dónde vive                                        |
+| ----------------------------- | ----------------------------------- | ------------------------------------------------- |
+| **Vertical** (`product_kind`) | Clasificación de **comportamiento** | Enum + tablas `{kind}_details`                    |
+| **Categoría comercial**       | Navegación, breadcrumbs, SEO        | `categories` (árbol) + `product_categories` (N:N) |
+| **Atributo**                  | Propiedad del producto              | Columna tipada si afecta cálculos; faceta si no   |
+| **Tag**                       | Marca transversal de marketing      | `tags` + `product_tags`                           |
 
 Un decant de Layton pertenece a "Perfumes de Nicho" **y** a "Decants" **y** lleva el tag "Best Seller". Por eso la relación con categorías es N:N con una marcada como primaria para el breadcrumb.
 
@@ -188,14 +188,14 @@ La coherencia se impone con una FK compuesta: `products` lleva `UNIQUE (id, kind
 
 El producto no se vende: se vende una **variante**, y las variantes de un perfume tienen unidades de medida distintas entre sí.
 
-| Tipo | UOM | Ejemplo |
-|---|---|---|
-| `sealed` | unit | Layton 125 ml precintado |
-| `bulk` | ml | Líquido del frasco abierto — no se vende directo |
-| `decant` | ml | Decant de 10 ml |
-| `unit` | unit | Un reloj |
-| `supply` | unit | Vial, atomizador, etiqueta |
-| `tester` | ml | Tester de exhibición |
+| Tipo     | UOM  | Ejemplo                                          |
+| -------- | ---- | ------------------------------------------------ |
+| `sealed` | unit | Layton 125 ml precintado                         |
+| `bulk`   | ml   | Líquido del frasco abierto — no se vende directo |
+| `decant` | ml   | Decant de 10 ml                                  |
+| `unit`   | unit | Un reloj                                         |
+| `supply` | unit | Vial, atomizador, etiqueta                       |
+| `tester` | ml   | Tester de exhibición                             |
 
 Cada variante declara además su **modo de producción**: `stocked` (hay lotes propios) o `made_to_order` (se produce al vender, consumiendo granel + BOM). Un decant es típicamente `made_to_order` y apunta a su granel de origen.
 
@@ -282,20 +282,20 @@ El lote sellado abierto deja de ser vendible como sellado — eso es el "stock c
 
 ### 5.2 El decant tiene dos momentos
 
-| Momento | Cuándo | Qué pasa |
-|---|---|---|
-| **Compromiso comercial** | Checkout | Se reserva granel + insumos. Nadie tocó una pipeta. |
+| Momento                   | Cuándo      | Qué pasa                                                |
+| ------------------------- | ----------- | ------------------------------------------------------- |
+| **Compromiso comercial**  | Checkout    | Se reserva granel + insumos. Nadie tocó una pipeta.     |
 | **Transformación física** | Fulfillment | Alguien llena el vial. **Acá se conoce la merma real.** |
 
 `decant_work_orders` es el puente. Guarda `waste_expected` y `waste_actual`, y una orden marcada como ejecutada **debe** declarar merma real y ejecutor.
 
 ### 5.3 La merma tiene tres componentes
 
-| Componente | Naturaleza | Campo |
-|---|---|---|
-| Trasvase | Proporcional al volumen | `waste_factor` (%) |
-| Fondo no recuperable | Fijo por frasco | `unusable_residue_ml` |
-| Evaporación | Función del tiempo abierto | `evaporation_ml_year` + ajuste periódico |
+| Componente           | Naturaleza                 | Campo                                    |
+| -------------------- | -------------------------- | ---------------------------------------- |
+| Trasvase             | Proporcional al volumen    | `waste_factor` (%)                       |
+| Fondo no recuperable | Fijo por frasco            | `unusable_residue_ml`                    |
+| Evaporación          | Función del tiempo abierto | `evaporation_ml_year` + ajuste periódico |
 
 Modelar solo el porcentaje deja un faltante fantasma de 3–5 ml por frasco que se termina tapando con ajustes manuales, y esos ajustes son el ruido que hace inauditable un Kardex.
 
@@ -365,7 +365,7 @@ joda/
 ### 6.1 Las cuatro reglas estructurales
 
 1. **`packages/domain` no importa nada.** Ni Prisma, ni React, ni `fetch`. Funciones puras y testeadas. Es el corazón del sistema y lo que se reusa si mañana esto se vende como producto.
-2. **`packages/contracts` es la única fuente de verdad de tipos.** El schema Zod valida en la API *y* tipa los clientes. Un campo renombrado rompe la compilación de los tres apps a la vez, que es exactamente lo deseado.
+2. **`packages/contracts` es la única fuente de verdad de tipos.** El schema Zod valida en la API _y_ tipa los clientes. Un campo renombrado rompe la compilación de los tres apps a la vez, que es exactamente lo deseado.
 3. **`apps/*` no se importan entre sí.** Enforced con `eslint-plugin-boundaries`.
 4. **El código de contabilidad y sourcing nunca entra al bundle del storefront.** Son apps separadas; además, los DTO públicos y administrativos son **dos schemas Zod distintos**, no el mismo con campos opcionales.
 
@@ -383,14 +383,14 @@ Motivo: Prisma no puede expresar constraint triggers diferidos (el cuadre de asi
 
 ### 7.1 Separación de superficies
 
-| | Cliente | Staff |
-|---|---|---|
-| Dominio | `jodaparfums.com` | `admin.jodaparfums.com` |
-| Identidad | `customers` | `staff_users` |
-| Cookie | `__Host-joda_c` | `__Host-joda_a`, scope al subdominio |
-| Audiencia del token | `customer` | `staff` |
-| MFA | Opcional | **Obligatoria** |
-| Sesión | 30 días | 8 h + refresh rotativo |
+|                     | Cliente           | Staff                                |
+| ------------------- | ----------------- | ------------------------------------ |
+| Dominio             | `jodaparfums.com` | `admin.jodaparfums.com`              |
+| Identidad           | `customers`       | `staff_users`                        |
+| Cookie              | `__Host-joda_c`   | `__Host-joda_a`, scope al subdominio |
+| Audiencia del token | `customer`        | `staff`                              |
+| MFA                 | Opcional          | **Obligatoria**                      |
+| Sesión              | 30 días           | 8 h + refresh rotativo               |
 
 Tablas separadas, no un discriminador: que un cliente no pueda tener rol de staff es un invariante de esquema. La separación de cookies importa porque un XSS en el storefront no debe alcanzar la sesión del admin.
 
@@ -404,12 +404,12 @@ Nota de diseño: **`vendedor` no tiene `accounting.cashbox:read`**. Que alguien 
 
 ### 7.3 Tres capas de aplicación
 
-| Capa | Dónde | Qué hace |
-|---|---|---|
-| **1 — RLS** | PostgreSQL | Aislamiento por tenant + permisos. Deny-by-default. |
-| **2 — Middleware** | API | `requirePermission()` en cada ruta. **Defensa principal.** |
-| **3 — Servicio** | API | Reglas dependientes del recurso concreto. |
-| *Guardas de React* | Frontend | **UX, no seguridad.** |
+| Capa               | Dónde      | Qué hace                                                   |
+| ------------------ | ---------- | ---------------------------------------------------------- |
+| **1 — RLS**        | PostgreSQL | Aislamiento por tenant + permisos. Deny-by-default.        |
+| **2 — Middleware** | API        | `requirePermission()` en cada ruta. **Defensa principal.** |
+| **3 — Servicio**   | API        | Reglas dependientes del recurso concreto.                  |
+| _Guardas de React_ | Frontend   | **UX, no seguridad.**                                      |
 
 Dos detalles:
 
@@ -425,7 +425,7 @@ Dos detalles:
 - **Sesiones:** cookies `httpOnly`, `Secure`, `SameSite`. Access token 15 min, refresh rotativo con detección de reúso — si reaparece un refresh ya usado, se invalida toda la familia.
 - **CSRF:** double-submit token en mutaciones del admin.
 - **Rate limiting:** login 5/min por IP+usuario, checkout 10/min, resto 100/min.
-- **Uploads:** validar por *magic bytes*, no por `Content-Type`. Reprocesar toda imagen con `sharp` (elimina EXIF y payloads). Nombre por hash. Nunca servidas desde el origen del admin.
+- **Uploads:** validar por _magic bytes_, no por `Content-Type`. Reprocesar toda imagen con `sharp` (elimina EXIF y payloads). Nombre por hash. Nunca servidas desde el origen del admin.
 - **Auditoría:** `audit_log` append-only sobre toda mutación de contabilidad, inventario y market. Es la defensa cuando una cifra no cuadra. **[V]**
 - **Secretos:** variables de entorno validadas con Zod al arrancar; si falta una, el proceso no levanta.
 
@@ -461,12 +461,12 @@ Fase 1: adaptador `manual` — se registra el CDC emitido en e-Kuatia'i. Fase 2:
 
 ### 8.3 Almacenamiento de imágenes
 
-| Recurso | Acceso | Por qué |
-|---|---|---|
-| Fotos de catálogo publicadas | **Público, inmutable, CDN (R2)** | Firmar rompe el caché del CDN y las previsualizaciones de WhatsApp. |
-| Fotos de productos en `draft` | Firmada, TTL 5 min | Todavía no se filtra un lanzamiento. |
-| Comprobantes, reportes de caja | Firmada, TTL 60 s | Datos financieros. |
-| Originales sin procesar | Privado | Se sirven derivados, no originales. |
+| Recurso                        | Acceso                           | Por qué                                                             |
+| ------------------------------ | -------------------------------- | ------------------------------------------------------------------- |
+| Fotos de catálogo publicadas   | **Público, inmutable, CDN (R2)** | Firmar rompe el caché del CDN y las previsualizaciones de WhatsApp. |
+| Fotos de productos en `draft`  | Firmada, TTL 5 min               | Todavía no se filtra un lanzamiento.                                |
+| Comprobantes, reportes de caja | Firmada, TTL 60 s                | Datos financieros.                                                  |
+| Originales sin procesar        | Privado                          | Se sirven derivados, no originales.                                 |
 
 Buckets separados con políticas distintas. Uno solo con reglas por prefijo termina en un error de configuración algún día.
 
@@ -518,13 +518,13 @@ Se pierde algo real al salir de Dexie: en una feria con mala señal, un admin pu
 
 ### 10.1 Estrategia de pruebas
 
-| Nivel | Qué cubre | Herramienta |
-|---|---|---|
-| Unitario | `packages/domain`: costeo, decants, merma, IVA, redondeo, posteo | Vitest — cobertura alta, no negociable |
-| Integración | Transacciones, constraints, triggers, RLS | Testcontainers con Postgres real |
-| **Dataset dorado** | ~20 operaciones reales con resultados calculados a mano | Corre en CI |
-| Invariantes | Cada guarda intenta la operación inválida y espera rechazo | `packages/db/tests/invariants.sql` |
-| E2E | Flujos críticos de checkout y venta en mostrador | Playwright |
+| Nivel              | Qué cubre                                                        | Herramienta                            |
+| ------------------ | ---------------------------------------------------------------- | -------------------------------------- |
+| Unitario           | `packages/domain`: costeo, decants, merma, IVA, redondeo, posteo | Vitest — cobertura alta, no negociable |
+| Integración        | Transacciones, constraints, triggers, RLS                        | Testcontainers con Postgres real       |
+| **Dataset dorado** | ~20 operaciones reales con resultados calculados a mano          | Corre en CI                            |
+| Invariantes        | Cada guarda intenta la operación inválida y espera rechazo       | `packages/db/tests/invariants.sql`     |
+| E2E                | Flujos críticos de checkout y venta en mostrador                 | Playwright                             |
 
 El dataset dorado es lo que permite refactorizar el costeo sin miedo.
 
@@ -552,17 +552,17 @@ Logs estructurados con `request_id`, Sentry, y **alertas de negocio**, que valen
 
 ## 11. Roadmap
 
-| Bloque | Contenido | Salida |
-|---|---|---|
-| **A** | Monorepo, `packages/domain` extraído del v2 con tests, contratos | Lógica de negocio aislada y testeada |
-| **B** | Esquema Postgres + migraciones + seed | Base ejecutable |
-| **C** | API: auth, RBAC, catálogo, inventario, ventas, compras | Backend funcional |
-| **D** | ETL, imágenes, reconciliación | Datos migrados y verificados |
-| **E** | Admin migrado módulo a módulo | Backoffice sobre la nube |
-| **F** | **Corte a la nube** | Operación real en producción |
-| **G** | Storefront: catálogo, PDP, carrito, checkout, pagos | Tienda pública |
-| **H** | Motor de posteo activo + integración fiscal | Contabilidad y facturación |
-| **I** | RMA, CRM, canales adicionales | Según demanda real |
+| Bloque | Contenido                                                        | Salida                               |
+| ------ | ---------------------------------------------------------------- | ------------------------------------ |
+| **A**  | Monorepo, `packages/domain` extraído del v2 con tests, contratos | Lógica de negocio aislada y testeada |
+| **B**  | Esquema Postgres + migraciones + seed                            | Base ejecutable                      |
+| **C**  | API: auth, RBAC, catálogo, inventario, ventas, compras           | Backend funcional                    |
+| **D**  | ETL, imágenes, reconciliación                                    | Datos migrados y verificados         |
+| **E**  | Admin migrado módulo a módulo                                    | Backoffice sobre la nube             |
+| **F**  | **Corte a la nube**                                              | Operación real en producción         |
+| **G**  | Storefront: catálogo, PDP, carrito, checkout, pagos              | Tienda pública                       |
+| **H**  | Motor de posteo activo + integración fiscal                      | Contabilidad y facturación           |
+| **I**  | RMA, CRM, canales adicionales                                    | Según demanda real                   |
 
 **El corte a la nube (F) va antes del storefront (G).** Un sistema en producción vale más que tres a medias, y el storefront sobre un ERP que ya opera en la nube es mucho más simple que ambos a la vez.
 
@@ -570,15 +570,15 @@ Logs estructurados con `request_id`, Sentry, y **alertas de negocio**, que valen
 
 ## 12. Riesgos
 
-| Riesgo | Mitigación |
-|---|---|
-| La migración corrompe stock o caja | Reconciliación obligatoria + snapshot + v2 intacta como rollback |
-| Sobreventa de piezas únicas | Reservas con TTL + `SELECT FOR UPDATE` en orden ascendente de `lot_id` (el orden determinístico evita deadlocks en pedidos multi-línea) |
-| Fuga de costos o proveedores al storefront | DTO separados por audiencia + tests que verifican la forma de la respuesta pública + RLS |
-| Descalce de FX en compras | `fx_rate` congelado por recepción, nunca recalculado |
-| Obligatoriedad SIFEN antes de lo previsto | Confirmar el grupo del RUC ahora; adaptador `manual` disponible desde el inicio |
-| Deriva silenciosa de proyecciones | `v_balance_drift` + job nocturno con alerta |
-| Scope creep | El esquema acomoda todo; el código se implementa por bloques, y F es la meta intermedia |
+| Riesgo                                     | Mitigación                                                                                                                              |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------- |
+| La migración corrompe stock o caja         | Reconciliación obligatoria + snapshot + v2 intacta como rollback                                                                        |
+| Sobreventa de piezas únicas                | Reservas con TTL + `SELECT FOR UPDATE` en orden ascendente de `lot_id` (el orden determinístico evita deadlocks en pedidos multi-línea) |
+| Fuga de costos o proveedores al storefront | DTO separados por audiencia + tests que verifican la forma de la respuesta pública + RLS                                                |
+| Descalce de FX en compras                  | `fx_rate` congelado por recepción, nunca recalculado                                                                                    |
+| Obligatoriedad SIFEN antes de lo previsto  | Confirmar el grupo del RUC ahora; adaptador `manual` disponible desde el inicio                                                         |
+| Deriva silenciosa de proyecciones          | `v_balance_drift` + job nocturno con alerta                                                                                             |
+| Scope creep                                | El esquema acomoda todo; el código se implementa por bloques, y F es la meta intermedia                                                 |
 
 ---
 
@@ -594,7 +594,7 @@ Descrito en 5.1. Obligó a agregar el tipo de variante `bulk` y `inventory_lots.
 
 ### A.2 `ON CONFLICT DO UPDATE` no protege contra un `CHECK`
 
-La proyección de saldos estaba escrita como `INSERT ... ON CONFLICT (lot_id) DO UPDATE SET on_hand = on_hand + excluded.on_hand`. Parece correcto y **falla en la primera salida de stock**: PostgreSQL evalúa los `CHECK` de la fila propuesta *antes* de detectar el conflicto por índice único, así que `on_hand = -10` viola la restricción de no-negatividad antes de que el `ON CONFLICT` llegue a sumar.
+La proyección de saldos estaba escrita como `INSERT ... ON CONFLICT (lot_id) DO UPDATE SET on_hand = on_hand + excluded.on_hand`. Parece correcto y **falla en la primera salida de stock**: PostgreSQL evalúa los `CHECK` de la fila propuesta _antes_ de detectar el conflicto por índice único, así que `on_hand = -10` viola la restricción de no-negatividad antes de que el `ON CONFLICT` llegue a sumar.
 
 Corrección: la fila de saldo nace en cero junto con el lote, y la proyección es siempre un `UPDATE` puro. Beneficio no buscado: desaparece la carrera entre dos movimientos concurrentes creando la misma fila.
 
@@ -610,28 +610,28 @@ Descrito en 5.3. Con números reales, `waste_actual / waste_expected = 1.75`. Es
 
 Cada uno en `docs/adr/`, formato corto: contexto / decisión / consecuencias.
 
-| ADR | Decisión |
-|---|---|
-| 001 | Monolito modular, no microservicios |
-| 002 | Monorepo con pnpm + Turborepo |
-| 003 | Next.js para storefront, Vite para admin |
-| 004 | Supabase como plataforma, API propia como autoridad de negocio |
-| 005 | CTI + facetas JSONB para el catálogo multicategoría |
-| 006 | Taxonomía de cuatro niveles: vertical, categoría, atributo, tag |
-| 007 | Kardex append-only; el saldo es proyección |
-| 008 | Capas de costo explícitas (`movement_cost_allocations`) |
-| 009 | Apertura de frasco como conversión de lote |
-| 010 | Decant en dos momentos + BOM + merma en tres componentes |
-| 011 | `bigint` PYG y snapshot de FX por transacción |
+| ADR | Decisión                                                          |
+| --- | ----------------------------------------------------------------- |
+| 001 | Monolito modular, no microservicios                               |
+| 002 | Monorepo con pnpm + Turborepo                                     |
+| 003 | Next.js para storefront, Vite para admin                          |
+| 004 | Supabase como plataforma, API propia como autoridad de negocio    |
+| 005 | CTI + facetas JSONB para el catálogo multicategoría               |
+| 006 | Taxonomía de cuatro niveles: vertical, categoría, atributo, tag   |
+| 007 | Kardex append-only; el saldo es proyección                        |
+| 008 | Capas de costo explícitas (`movement_cost_allocations`)           |
+| 009 | Apertura de frasco como conversión de lote                        |
+| 010 | Decant en dos momentos + BOM + merma en tres componentes          |
+| 011 | `bigint` PYG y snapshot de FX por transacción                     |
 | 012 | Partida doble desde el día 1, asientos derivados, reglas apagadas |
-| 013 | Señas como pasivo |
-| 014 | Frontera fiscal con puerto y adaptadores |
-| 015 | Identidades separadas: `customers` / `staff_users` |
-| 016 | RBAC en tres capas; la API con rol `NOBYPASSRLS` |
-| 017 | Triggers solo para invariantes |
-| 018 | SQL-first; Prisma por introspección |
-| 019 | Reserva en checkout, no en carrito |
-| 020 | Checkout hospedado + webhooks idempotentes |
-| 021 | Corte único sin dual-write |
-| 022 | `tenant_id` desde el día 1 |
-| 023 | Stack de frontend y sistema de diseño |
+| 013 | Señas como pasivo                                                 |
+| 014 | Frontera fiscal con puerto y adaptadores                          |
+| 015 | Identidades separadas: `customers` / `staff_users`                |
+| 016 | RBAC en tres capas; la API con rol `NOBYPASSRLS`                  |
+| 017 | Triggers solo para invariantes                                    |
+| 018 | SQL-first; Prisma por introspección                               |
+| 019 | Reserva en checkout, no en carrito                                |
+| 020 | Checkout hospedado + webhooks idempotentes                        |
+| 021 | Corte único sin dual-write                                        |
+| 022 | `tenant_id` desde el día 1                                        |
+| 023 | Stack de frontend y sistema de diseño                             |
