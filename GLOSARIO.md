@@ -257,6 +257,12 @@ IVA 10% = total / 11        IVA 5% = total / 21        Exenta = 0
 
 **Nunca `total * 0.10`.** El redondeo se resuelve a nivel de documento, que es lo que valida SIFEN, y la diferencia se imputa a la última línea.
 
+### Base gravada
+
+Lo que queda de un bruto con IVA incluido después de extraer el IVA: `base = bruto − iva`, nunca un cálculo independiente (RN-IVA-04) — así `base + iva = bruto` siempre, exacto.
+
+**Inconsistencia de vocabulario sin resolver (WP-A04, PR #4):** las migraciones SQL la nombran `taxed_10_pyg` / `taxed_5_pyg` (columnas de `sale_orders` y `fiscal_documents`); `packages/domain/src/tax/vat.ts` la nombra `base` (campo) / `taxBase()` (función, ya fijada por `docs/domain-contracts.md` §6.3). No se unificó todavía — un rename toca el contrato del dominio, así que se dejó pendiente de decisión explícita en vez de elegir un lado en silencio.
+
 ### Guaraní / PYG
 
 Moneda de Paraguay, **sin subdivisión operativa**. En el código, `bigint` de unidades enteras. Nunca `float`, nunca decimales.

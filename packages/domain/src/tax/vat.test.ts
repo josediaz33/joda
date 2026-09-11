@@ -1,5 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { CurrencyMismatchError, InvalidVatDocumentError } from "../shared/errors.js";
 import { Money } from "../shared/money.js";
 import { breakdownDocument, taxBase, vatFromGross } from "./vat.js";
 
@@ -22,6 +23,32 @@ describe("RN-IVA-01 · precio con impuesto incluido — el IVA se extrae, nunca 
   it("5% es total/21, no total × 0.05", () => {
     expect(vatFromGross(Money.pyg(210_000n), "iva_5").minor).toBe(10_000n);
   });
+});
+
+describe("espejo SQL — RN-DIN-02 (app.round_pyg vs roundPyg, ver el comentario en vat.ts)", () => {
+  // app.round_pyg() (Postgres, round(numeric, 0)) desempata "lejos de
+  // cero"; roundPyg() (TS) documenta "hacia +infinito" (RN-DIN-02:
+  // roundPyg(-0.5) = 0, no -1n). Esa diferencia nunca se activa DENTRO de
+  // vatFromGross: 11 y 21 son impares, así que gross/11 y gross/21 jamás
+  // dan una fracción exacta de .5 — haría falta un resto igual a
+  // divisor/2, que no es entero con un divisor impar. No hay empate que
+  // desempatar, así que da lo mismo qué regla de desempate use cada lado.
+  //
+  // Estos son los guaraníes negativos MÁS CERCANOS posibles a esa fracción
+  // .5 para cada tasa (a menos de 0,05 de un empate real) — el peor caso
+  // para esta duda, y ambos lados coinciden en el entero más cercano
+  // porque, de nuevo, no hay empate.
+  it.each([
+    [-50n, "iva_10" as const, -5n], // -50/11 = -4,545454... (a 0,0454 del empate más próximo)
+    [-61n, "iva_10" as const, -6n], // -61/11 = -5,545454...
+    [-10n, "iva_5" as const, 0n], //   -10/21 = -0,476190... (a 0,0238 del empate más próximo)
+    [-11n, "iva_5" as const, -1n], //  -11/21 = -0,523809...
+  ])(
+    "gross %s a tasa %s da %s de IVA, sin importar la regla de desempate",
+    (minor, rate, expected) => {
+      expect(vatFromGross(Money.pyg(minor), rate).minor).toBe(expected);
+    },
+  );
 });
 
 describe("RN-IVA-04 · base gravada = bruto − IVA", () => {
@@ -132,5 +159,37 @@ describe("RN-IVA-03 · la diferencia de redondeo se imputa a la última línea d
     expect(result.lines.map((l) => l.vat.minor)).toEqual([0n, 0n]);
     expect(result.totalVat.minor).toBe(0n);
     expect(result.totalBase.minor).toBe(50_000n);
+  });
+});
+
+describe("RN-IVA-03/04 · una nota de crédito (líneas de importe negativo) a nivel de documento", () => {
+  it("mismo caso de tres líneas de Gs. 33.333 al 10%, en negativo — imputa igual y sostiene base + iva = bruto", () => {
+    const lines = [
+      { gross: Money.pyg(-33_333n), rate: "iva_10" as const },
+      { gross: Money.pyg(-33_333n), rate: "iva_10" as const },
+      { gross: Money.pyg(-33_333n), rate: "iva_10" as const },
+    ];
+
+    const result = breakdownDocument(lines);
+
+    expect(result.lines.map((l) => l.vat.minor)).toEqual([-3_030n, -3_030n, -3_031n]);
+    expect(result.totalGross.minor).toBe(-99_999n);
+    expect(result.totalVat.minor).toBe(-9_091n);
+    expect(result.totalBase.minor + result.totalVat.minor).toBe(result.totalGross.minor);
+  });
+});
+
+describe("breakdownDocument — entrada inválida", () => {
+  it("lanza InvalidVatDocumentError con un arreglo de líneas vacío, en vez de un TypeError crudo de JS", () => {
+    expect(() => breakdownDocument([])).toThrow(InvalidVatDocumentError);
+  });
+
+  it("lanza CurrencyMismatchError si las líneas de un mismo documento no comparten moneda (RN-DIN-03, vía Money.plus)", () => {
+    const lines = [
+      { gross: Money.pyg(100_000n), rate: "iva_10" as const },
+      { gross: Money.of(100n, "USD"), rate: "iva_10" as const },
+    ];
+
+    expect(() => breakdownDocument(lines)).toThrow(CurrencyMismatchError);
   });
 });

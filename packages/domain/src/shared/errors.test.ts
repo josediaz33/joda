@@ -6,6 +6,7 @@ import {
   InvalidMoneyAmountError,
   InvalidPercentageError,
   InvalidQuantityError,
+  InvalidVatDocumentError,
   UomMismatchError,
 } from "./errors.js";
 
@@ -41,11 +42,12 @@ describe("jerarquía de errores de dominio — docs/domain-contracts.md §4.2", 
     expect(error.name).toBe("UomMismatchError");
   });
 
-  it("InvalidQuantityError, InvalidPercentageError, InvalidMoneyAmountError e InvalidAllocationError llevan su propio código", () => {
+  it("InvalidQuantityError, InvalidPercentageError, InvalidMoneyAmountError, InvalidAllocationError e InvalidVatDocumentError llevan su propio código", () => {
     expect(new InvalidQuantityError("x")).toBeInstanceOf(DomainError);
     expect(new InvalidQuantityError("x").code).toBe("INVALID_QUANTITY");
     expect(new InvalidPercentageError("x").code).toBe("INVALID_PERCENTAGE");
     expect(new InvalidMoneyAmountError("x").code).toBe("INVALID_MONEY_AMOUNT");
     expect(new InvalidAllocationError("x").code).toBe("INVALID_ALLOCATION");
+    expect(new InvalidVatDocumentError("x").code).toBe("INVALID_VAT_DOCUMENT");
   });
 });
