@@ -96,6 +96,7 @@ describe("RN-IVA-02 · el redondeo se resuelve a nivel de documento, no de líne
 
     expect(result.lines.map((l) => l.vat.minor)).toEqual([9_091n, 9_091n, 9_091n]);
     expect(result.totalVat.minor).toBe(27_273n);
+    expect(result.lines.map((l) => l.roundingAdjustment.minor)).toEqual([0n, 0n, 0n]);
   });
 });
 
@@ -111,6 +112,8 @@ describe("RN-IVA-03 · la diferencia de redondeo se imputa a la última línea d
 
     expect(result.lines.map((l) => l.vat.minor)).toEqual([3_030n, 3_030n, 3_031n]);
     expect(result.totalVat.minor).toBe(9_091n);
+    // RN-IVA-03: el ajuste "queda registrada" aparte, no solo sumado a vat.
+    expect(result.lines.map((l) => l.roundingAdjustment.minor)).toEqual([0n, 0n, 1n]);
   });
 
   it("cada tasa se ajusta de forma independiente: la diferencia de una tasa no toca las líneas de otra ni las exentas", () => {
@@ -146,6 +149,10 @@ describe("RN-IVA-03 · la diferencia de redondeo se imputa a la última línea d
     expect(result.totalBase.minor).toBe(154_241n);
     // RN-IVA-04 a nivel de documento: base + iva = bruto, exacto.
     expect(result.totalBase.minor + result.totalVat.minor).toBe(result.totalGross.minor);
+    // RN-IVA-03: cada tasa registra SU propio ajuste — índice 4 (última de
+    // iva_10) e índice 3 (última de iva_5), no el índice 5 (última línea
+    // del documento, pero exenta y sin ajuste posible).
+    expect(result.lines.map((l) => l.roundingAdjustment.minor)).toEqual([0n, 0n, 0n, 1n, 1n, 0n]);
   });
 
   it("un documento enteramente exento no tiene IVA que imputar", () => {
@@ -159,6 +166,25 @@ describe("RN-IVA-03 · la diferencia de redondeo se imputa a la última línea d
     expect(result.lines.map((l) => l.vat.minor)).toEqual([0n, 0n]);
     expect(result.totalVat.minor).toBe(0n);
     expect(result.totalBase.minor).toBe(50_000n);
+    expect(result.lines.map((l) => l.roundingAdjustment.minor)).toEqual([0n, 0n]);
+  });
+});
+
+describe("RN-IVA-03 · el ajuste queda registrado aparte, no solo sumado dentro de vat", () => {
+  it("roundingAdjustment reconstruye vat a partir del IVA de línea sin ajustar (RN-IVA-01)", () => {
+    const lines = [
+      { gross: Money.pyg(33_333n), rate: "iva_10" as const },
+      { gross: Money.pyg(33_333n), rate: "iva_10" as const },
+      { gross: Money.pyg(33_333n), rate: "iva_10" as const },
+    ];
+
+    const result = breakdownDocument(lines);
+
+    for (const line of result.lines) {
+      expect(vatFromGross(line.gross, line.rate).plus(line.roundingAdjustment).minor).toBe(
+        line.vat.minor,
+      );
+    }
   });
 });
 
@@ -176,6 +202,7 @@ describe("RN-IVA-03/04 · una nota de crédito (líneas de importe negativo) a n
     expect(result.totalGross.minor).toBe(-99_999n);
     expect(result.totalVat.minor).toBe(-9_091n);
     expect(result.totalBase.minor + result.totalVat.minor).toBe(result.totalGross.minor);
+    expect(result.lines.map((l) => l.roundingAdjustment.minor)).toEqual([0n, 0n, -1n]);
   });
 });
 

@@ -259,9 +259,9 @@ IVA 10% = total / 11        IVA 5% = total / 21        Exenta = 0
 
 ### Base gravada
 
-Lo que queda de un bruto con IVA incluido después de extraer el IVA: `base = bruto − iva`, nunca un cálculo independiente (RN-IVA-04) — así `base + iva = bruto` siempre, exacto.
+Lo que queda de un bruto con IVA incluido después de extraer el IVA: `base = bruto − iva`, nunca un cálculo independiente (RN-IVA-04) — así `base + iva = bruto` siempre, exacto. RN-FIS-02 lo confirma literal: "cada `taxed_*` es la base gravada".
 
-**Inconsistencia de vocabulario sin resolver (WP-A04, PR #4):** las migraciones SQL la nombran `taxed_10_pyg` / `taxed_5_pyg` (columnas de `sale_orders` y `fiscal_documents`); `packages/domain/src/tax/vat.ts` la nombra `base` (campo) / `taxBase()` (función, ya fijada por `docs/domain-contracts.md` §6.3). No se unificó todavía — un rename toca el contrato del dominio, así que se dejó pendiente de decisión explícita en vez de elegir un lado en silencio.
+**Dos formas, mismo concepto (no es una inconsistencia).** `packages/domain/src/tax/vat.ts` la nombra `base` (campo) / `taxBase()` (función): un campo genérico por línea, porque cada línea ya lleva su `rate` como dato. Las migraciones SQL la parten en `taxed_10_pyg` / `taxed_5_pyg` / `exempt_pyg` (`sale_orders`, `fiscal_documents`, RN-FIS-02): tres columnas porque una tabla relacional necesita una por tasa. Es la misma "base gravada" expresada de dos formas obligadas por la forma de cada capa — como `flete_por_aire`/`flete_por_barco` en SQL para lo que en dominio es un único "costo de flete" con un campo `method`. No hay rename pendiente.
 
 ### Guaraní / PYG
 

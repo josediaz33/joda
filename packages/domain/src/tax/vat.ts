@@ -55,6 +55,14 @@ export interface DocumentVatLine {
   readonly rate: VatRate;
   readonly vat: Money;
   readonly base: Money;
+  /**
+   * RN-IVA-03 · la diferencia de redondeo "queda registrada": el monto
+   * que esta línea recibió por ser la última de su tasa, ya incluido en
+   * `vat`. Cero cuando la línea no recibió ajuste (incluidas todas las
+   * de `exenta`, que nunca lo reciben).
+   * `vatFromGross(gross, rate).plus(roundingAdjustment) === vat`, siempre.
+   */
+  readonly roundingAdjustment: Money;
 }
 
 export interface DocumentVatBreakdown {
@@ -85,15 +93,18 @@ function groupIndexesByRate(lines: readonly { rate: VatRate }[]): Map<VatRate, n
 }
 
 /**
- * RN-IVA-02/03 · Ajusta, en el lugar (`vats`), los IVA de línea de UNA
- * tasa gravada: el que manda es el IVA del TOTAL gravado por esa tasa
- * (RN-IVA-02), no la suma de los IVA de línea ya redondeados. La
+ * RN-IVA-02/03 · Ajusta, en el lugar (`vats` y `adjustments`), los IVA de
+ * línea de UNA tasa gravada: el que manda es el IVA del TOTAL gravado por
+ * esa tasa (RN-IVA-02), no la suma de los IVA de línea ya redondeados. La
  * diferencia entre ambos se imputa íntegra a la última línea de esa tasa
- * (RN-IVA-03).
+ * (RN-IVA-03) — y queda registrada aparte en `adjustments`, no solo sumada
+ * a `vats`, para que "queda registrada" sea auditable y no haya que
+ * volver a calcular `vatFromGross` para reconstruirla.
  */
 function reconcileRateGroup(
   lines: readonly { gross: Money }[],
   vats: Money[],
+  adjustments: Money[],
   indexes: readonly number[],
   rate: Exclude<VatRate, "exenta">,
   zero: Money,
@@ -106,17 +117,25 @@ function reconcileRateGroup(
   if (!roundingDiff.isZero()) {
     const lastIndex = indexes[indexes.length - 1]!;
     vats[lastIndex] = vats[lastIndex]!.plus(roundingDiff);
+    adjustments[lastIndex] = adjustments[lastIndex]!.plus(roundingDiff);
   }
 }
 
-/** RN-IVA-04 · une cada línea con su IVA ya ajustado y su base derivada (bruto − iva). */
+/** RN-IVA-04 · une cada línea con su IVA ya ajustado, su base derivada (bruto − iva) y el ajuste que registra RN-IVA-03. */
 function buildDocumentLines(
   lines: readonly { gross: Money; rate: VatRate }[],
   vats: readonly Money[],
+  adjustments: readonly Money[],
 ): DocumentVatLine[] {
   return lines.map((line, index) => {
     const vat = vats[index]!;
-    return { gross: line.gross, rate: line.rate, vat, base: line.gross.minus(vat) };
+    return {
+      gross: line.gross,
+      rate: line.rate,
+      vat,
+      base: line.gross.minus(vat),
+      roundingAdjustment: adjustments[index]!,
+    };
   });
 }
 
@@ -153,13 +172,14 @@ export function breakdownDocument(
   const zero = Money.zero(currency);
 
   const vats = computeLineVats(lines);
+  const adjustments = lines.map(() => zero);
   const indexesByRate = groupIndexesByRate(lines);
   for (const [rate, indexes] of indexesByRate) {
     if (rate === "exenta") continue; // sin IVA que redondear ni imputar
-    reconcileRateGroup(lines, vats, indexes, rate, zero);
+    reconcileRateGroup(lines, vats, adjustments, indexes, rate, zero);
   }
 
-  const documentLines = buildDocumentLines(lines, vats);
+  const documentLines = buildDocumentLines(lines, vats, adjustments);
   const totals = sumTotals(documentLines, zero);
 
   return { lines: documentLines, ...totals };
