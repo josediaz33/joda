@@ -23,7 +23,7 @@ describe("Percentage.of — docs/domain-contracts.md §3.3", () => {
   });
 });
 
-describe("Percentage.applyTo", () => {
+describe("Percentage.applyTo — docs/domain-contracts.md §3.3", () => {
   it("multiplica la Quantity recibida por el valor del porcentaje", () => {
     const applied = Percentage.of(0.02).applyTo(Quantity.ml(10));
 

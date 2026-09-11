@@ -20,7 +20,7 @@ describe("DomainError — docs/domain-contracts.md §4.2", () => {
   });
 });
 
-describe("jerarquía de errores de dominio", () => {
+describe("jerarquía de errores de dominio — docs/domain-contracts.md §4.2", () => {
   it("CurrencyMismatchError es un DomainError y lleva la moneda esperada y la recibida", () => {
     const error = new CurrencyMismatchError("PYG", "USD");
 

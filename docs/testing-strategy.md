@@ -63,6 +63,10 @@ describe('RN-FRA-04 · Costo del decant', () => {
 
 Sin referencia a la regla, el test es una afirmación sin fundamento: nadie sabe si el número esperado es correcto o es lo que devolvía el código el día que se escribió.
 
+**Excepción — objetos de valor de `shared/`.** La razón de exigir la cita es proteger números que el negocio podría mover en silencio: una tasa de IVA, un factor de merma, el ejemplo real de un decant. Si el test no ancla ese número a una fuente externa (la regla de negocio), nadie puede distinguir "correcto" de "lo que el código devolvía hoy". Esa razón no aplica a la aritmética definicional de `Money`, `Quantity`, `Percentage`, `Result` y la jerarquía de errores (`packages/domain/src/shared/`): `Money.plus(100_000n, 45_000n)` da `145_000n` porque así funciona la suma, no porque el negocio lo haya decidido — no hay nada que el negocio pueda mover en silencio. `domain-rules.md` tampoco tiene un `RN-XXX-nn` para esta capa: son los objetos de valor que las reglas de negocio van a usar, no una regla en sí. Ahí, cada `describe` cita la sección de `docs/domain-contracts.md` que define el comportamiento (`§3.1` Money, `§3.2` Quantity, `§3.3` Percentage, `§4.1`/`§4.2` Result y errores) en vez de inventar un `RN-XXX-nn` que no existe.
+
+Esto deja de aplicar en cuanto un módulo de `shared/` encarna una regla real. Por ejemplo: si `Money.allocate` alguna vez adoptara el criterio de reparto de RN-COS-02 (la diferencia de redondeo va a la línea de mayor valor) en vez de quedarse con el método genérico del mayor resto, ese test pasa a citar `RN-COS-02`, porque en ese momento sí habría un número de negocio que proteger.
+
 ### 2.3 Casos borde obligatorios
 
 Los 20 casos de `domain-rules.md` §"Catálogo de casos borde" tienen un test cada uno. Un PR que agregue una regla agrega sus casos borde al documento **y** sus tests.

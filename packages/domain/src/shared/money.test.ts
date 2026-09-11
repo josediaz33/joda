@@ -45,7 +45,7 @@ describe("roundPyg — redondeo (RN-DIN-02)", () => {
   });
 });
 
-describe("Money.plus / Money.minus", () => {
+describe("Money.plus / Money.minus — docs/domain-contracts.md §3.1", () => {
   it("suma dos importes de la misma moneda", () => {
     expect(Money.pyg(100_000n).plus(Money.pyg(45_000n)).minor).toBe(145_000n);
   });
@@ -63,7 +63,7 @@ describe("Money.plus / Money.minus", () => {
   });
 });
 
-describe("Money.times", () => {
+describe("Money.times — docs/domain-contracts.md §3.1", () => {
   it("multiplica por un factor y redondea el resultado con roundPyg", () => {
     // Mismo cálculo que RN-DIN-04 (USD 190,00 x 7.300 = Gs. 1.387.000),
     // expresado como Money.of(19000n, 'USD').times(73) en vez de dividir
@@ -76,7 +76,7 @@ describe("Money.times", () => {
   });
 });
 
-describe("Money.isZero / Money.isNegative", () => {
+describe("Money.isZero / Money.isNegative — docs/domain-contracts.md §3.1", () => {
   it("isZero es true solo en cero", () => {
     expect(Money.pyg(0n).isZero()).toBe(true);
     expect(Money.pyg(1n).isZero()).toBe(false);
@@ -88,7 +88,7 @@ describe("Money.isZero / Money.isNegative", () => {
   });
 });
 
-describe("Money.compare", () => {
+describe("Money.compare — docs/domain-contracts.md §3.1", () => {
   it("devuelve 0 cuando son iguales", () => {
     expect(Money.pyg(100n).compare(Money.pyg(100n))).toBe(0);
   });
@@ -106,7 +106,7 @@ describe("Money.compare", () => {
   });
 });
 
-describe("Money.toJSON", () => {
+describe("Money.toJSON — docs/domain-contracts.md §3.1", () => {
   it("serializa minor como string para no perder precisión de bigint en JSON", () => {
     expect(Money.pyg(2_450_000n).toJSON()).toEqual({ minor: "2450000", currency: "PYG" });
   });

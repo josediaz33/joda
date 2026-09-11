@@ -20,7 +20,7 @@ describe("Quantity.units — docs/domain-contracts.md §3.2", () => {
   });
 });
 
-describe("Quantity.ml — hasta 3 decimales", () => {
+describe("Quantity.ml — hasta 3 decimales (docs/domain-contracts.md §3.2)", () => {
   it("acepta un entero y hasta 3 decimales", () => {
     expect(Quantity.ml(114.65).value).toBeCloseTo(114.65);
     expect(Quantity.ml(10.125).value).toBeCloseTo(10.125);
@@ -37,7 +37,7 @@ describe("Quantity.ml — hasta 3 decimales", () => {
   });
 });
 
-describe("Quantity — aritmética entre la misma unidad", () => {
+describe("Quantity — aritmética entre la misma unidad (docs/domain-contracts.md §3.2)", () => {
   it("plus suma dos cantidades de la misma unidad", () => {
     const total = Quantity.ml(10).plus(Quantity.ml(0.2));
 
@@ -63,7 +63,7 @@ describe("Quantity — aritmética entre la misma unidad", () => {
   });
 });
 
-describe("Quantity — unidades incompatibles (UomMismatchError)", () => {
+describe("Quantity — unidades incompatibles (UomMismatchError) — docs/domain-contracts.md §3.2", () => {
   it("plus lanza si las unidades no coinciden", () => {
     expect(() => Quantity.units(1).plus(Quantity.ml(1))).toThrow(UomMismatchError);
   });
@@ -77,7 +77,7 @@ describe("Quantity — unidades incompatibles (UomMismatchError)", () => {
   });
 });
 
-describe("Quantity.compare", () => {
+describe("Quantity.compare — docs/domain-contracts.md §3.2", () => {
   it("devuelve 0 cuando son iguales", () => {
     expect(Quantity.ml(5).compare(Quantity.ml(5))).toBe(0);
   });
