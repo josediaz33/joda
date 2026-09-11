@@ -28,6 +28,8 @@ Identificador: `WP-<bloque><nn>`. Referencialo en la rama, el commit y el PR.
 
 **Nota sobre A10.** Los valores esperados salen de la operación histórica real, no de lo que devuelve el código nuevo. Si no coinciden, hay que averiguar cuál de los dos está mal — y a veces es el sistema viejo.
 
+**Riesgo conocido para A02 (pipeline de CI).** Turborepo necesita resolver el binario del gestor de paquetes (`pnpm`) como ejecutable real en el `PATH` del sistema — no alcanza con que `corepack pnpm <comando>` funcione. `corepack enable` instala esos shims en `C:\Program Files\nodejs\`, que en Windows requiere permisos de administrador; sin ellos, `corepack enable` falla con `EPERM` y cualquier `pnpm <script>` que dependa de `turbo run` (typecheck, lint, test a nivel raíz) falla con `Unable to find package manager binary: cannot find binary path`, aunque `corepack pnpm` ande perfecto. Encontrado y confirmado en una sesión de Claude Code corriendo en un sandbox de Windows sin permisos de admin — no reproducido todavía en una máquina de desarrollo normal ni en un runner de CI real, así que puede que no aplique ahí. Workaround verificado que no requiere admin: `npm install -g pnpm@<versión del catalog>` (el prefix global de npm, `%APPDATA%\npm`, ya está en el `PATH` y es escribible por el usuario). Si el runner de CI de A02 corre como usuario sin privilegios elevados (contenedor rootless, agente self-hosted sin admin), conviene usar ese mismo camino o una action dedicada (`pnpm/action-setup`) en vez de asumir que `corepack enable` va a funcionar.
+
 ---
 
 ## Bloque B — Esquema
