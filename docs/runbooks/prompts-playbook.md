@@ -345,20 +345,20 @@ Alcance: solo WP-<id>. Si el alcance crece, pará y consultá.
 
 ### Trampas por área, para completar la plantilla
 
-| Área | Lo que hay que advertir |
-|---|---|
-| Dominio | Nada de I/O. Result para fallos esperados, excepción para bugs. `Money`, no `number`. |
-| Esquema | Nunca `prisma migrate`. Nunca editar una migración aplicada. `tenant_id` en toda tabla. Todo invariante nuevo lleva su prueba. |
-| API | `set_config` con tercer parámetro en `true`. Todo procedimiento declara su permiso. 404, no 403. Bloqueo en orden ascendente de `lot_id`. |
-| Ventas | El inventario se consume al confirmar el pago, no al crear el pedido. Anular es revertir, no editar. |
-| Pagos | El PAN no toca el sistema. Webhook idempotente por clave única. Confirmar el monto contra el proveedor. |
-| DTO públicos | Esquema distinto, no el mismo con opcionales. Test que verifica que no filtra costos ni cantidades. |
-| Contabilidad | Los asientos se derivan de reglas, no se cargan. Un asiento contabilizado se reversa, no se edita. |
-| ETL | Idempotente con `legacy_map`. No inventar historial: movimientos de apertura. El ETL solo lee del v2. |
-| Frontend admin | Las guardas son UX, no seguridad. Carga diferida para que el bundle no viaje. Densidad alta: no es una landing. |
+| Área                | Lo que hay que advertir                                                                                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Dominio             | Nada de I/O. Result para fallos esperados, excepción para bugs. `Money`, no `number`.                                                                              |
+| Esquema             | Nunca `prisma migrate`. Nunca editar una migración aplicada. `tenant_id` en toda tabla. Todo invariante nuevo lleva su prueba.                                     |
+| API                 | `set_config` con tercer parámetro en `true`. Todo procedimiento declara su permiso. 404, no 403. Bloqueo en orden ascendente de `lot_id`.                          |
+| Ventas              | El inventario se consume al confirmar el pago, no al crear el pedido. Anular es revertir, no editar.                                                               |
+| Pagos               | El PAN no toca el sistema. Webhook idempotente por clave única. Confirmar el monto contra el proveedor.                                                            |
+| DTO públicos        | Esquema distinto, no el mismo con opcionales. Test que verifica que no filtra costos ni cantidades.                                                                |
+| Contabilidad        | Los asientos se derivan de reglas, no se cargan. Un asiento contabilizado se reversa, no se edita.                                                                 |
+| ETL                 | Idempotente con `legacy_map`. No inventar historial: movimientos de apertura. El ETL solo lee del v2.                                                              |
+| Frontend admin      | Las guardas son UX, no seguridad. Carga diferida para que el bundle no viaje. Densidad alta: no es una landing.                                                    |
 | Frontend storefront | Componentes de servidor por defecto. Framer Motion fuera del camino crítico. `width` y `height` en toda imagen. El stock se muestra como estado, no como cantidad. |
-| Diseño visual | Pegá la lista de defaults genéricos de `frontend-spec.md` §3.3. Sin ella vas a recibir crema + serif + terracota. |
-| SEO | Facetas combinadas siempre `noindex`. Los datos estructurados deben coincidir con lo que ve el usuario. |
+| Diseño visual       | Pegá la lista de defaults genéricos de `frontend-spec.md` §3.3. Sin ella vas a recibir crema + serif + terracota.                                                  |
+| SEO                 | Facetas combinadas siempre `noindex`. Los datos estructurados deben coincidir con lo que ve el usuario.                                                            |
 
 ---
 
@@ -466,11 +466,11 @@ No empieces el bloque siguiente en esta sesión.
 
 No hace falta —ni conviene— pedir que lea todo en cada sesión. El contexto es finito y llenarlo degrada la adherencia a las instrucciones. El sistema está armado en tres capas para que llegue lo justo:
 
-| Capa | Qué es | Cuándo se carga |
-|---|---|---|
-| `CLAUDE.md` (raíz) | Reglas permanentes, comandos, mapa de documentación | Automáticamente, en cada sesión |
-| `.claude/rules/*.md` | No negociables por área, con `paths:` en el frontmatter | Automáticamente, **cuando toca archivos que coinciden** |
-| `docs/*.md` | La profundidad: reglas de negocio, contratos, especificaciones | **Cuando el prompt los nombra** |
+| Capa                 | Qué es                                                         | Cuándo se carga                                         |
+| -------------------- | -------------------------------------------------------------- | ------------------------------------------------------- |
+| `CLAUDE.md` (raíz)   | Reglas permanentes, comandos, mapa de documentación            | Automáticamente, en cada sesión                         |
+| `.claude/rules/*.md` | No negociables por área, con `paths:` en el frontmatter        | Automáticamente, **cuando toca archivos que coinciden** |
+| `docs/*.md`          | La profundidad: reglas de negocio, contratos, especificaciones | **Cuando el prompt los nombra**                         |
 
 La capa del medio es la que hace el trabajo pesado. Al abrir un archivo de `packages/domain/`, se carga sola `.claude/rules/domain.md` con la regla de pureza, el criterio de `Result` contra excepción y los umbrales de cobertura. Sin que vos lo pidas y sin ocupar contexto en las sesiones donde no aplica.
 
@@ -487,7 +487,7 @@ testing.md     **/*.test.ts · e2e/** · packages/db/tests/**
 
 ### Lo que igual tenés que nombrar
 
-Las reglas llevan los no negociables, no el detalle. Un agente que va a implementar el costeo del decant necesita los números de `domain-rules.md`, y eso no está en la regla. Por eso cada prompt de tarea sigue empezando por *"Leé primero: …"*.
+Las reglas llevan los no negociables, no el detalle. Un agente que va a implementar el costeo del decant necesita los números de `domain-rules.md`, y eso no está en la regla. Por eso cada prompt de tarea sigue empezando por _"Leé primero: …"_.
 
 **Regla práctica:** la capa automática evita que rompa algo; nombrar el documento es lo que le permite hacerlo bien.
 

@@ -1,0 +1,21 @@
+# Normaliza saltos de línea a LF en el repositorio y en el checkout,
+# sin importar el core.autocrlf de quien clona (Windows suele traerlo en
+# true, que es lo que produjo el CRLF que hacía fallar `pnpm format:check`
+# en casi cualquier archivo de texto). Git decide "es texto" por contenido;
+# los binarios de abajo quedan explícitamente afuera de esa normalización.
+* text=auto eol=lf
+
+# Binarios: nunca normalizar saltos de línea, ni diffear como texto.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.eot binary
+*.pdf binary
+*.zip binary
+*.gz binary

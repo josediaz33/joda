@@ -15,6 +15,7 @@ ADR-003 decidió Next.js para el storefront y Vite para el admin, pero no defini
 **Base común:** Tailwind CSS v4 con configuración CSS-first (`@theme`), shadcn/ui sobre Radix Primitives, iconos Lucide.
 
 **Reparto en el monorepo:**
+
 - `packages/ui/src/styles/tokens.css` — fuente única de tokens para ambos apps
 - `packages/ui/src/primitives/` — shadcn genérico, sin opinión de marca
 - `packages/ui/src/format/` — formateo de guaraníes, cantidades y fechas

@@ -8,17 +8,17 @@ Estado: validado contra PostgreSQL 16 — 61 tablas, 104 `CHECK`, 138 claves for
 
 ## 1. Convenciones
 
-| Aspecto | Regla |
-|---|---|
-| Esquema | Todo en `app`. Las vistas públicas en `public`. |
+| Aspecto         | Regla                                                                                                                                          |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Esquema         | Todo en `app`. Las vistas públicas en `public`.                                                                                                |
 | Identificadores | `uuid` con `gen_random_uuid()`, salvo tablas de alto volumen que usan `bigint` identity (`inventory_movements`, `journal_lines`, `audit_log`). |
-| Nombres | Inglés, `snake_case`, tablas en plural. |
-| Aislamiento | `tenant_id uuid NOT NULL` en toda tabla de negocio. Sin excepciones. |
-| Dinero | Dominio `pyg` (bigint). Moneda extranjera: `minor_amount` + `currency_code` + `fx_rate`. |
-| Cantidades | Dominio `qty` = `numeric(14,3)`. Tres decimales para mililitros. |
-| Fechas | `timestamptz` siempre. Almacenamiento en UTC. |
-| Enums | Tipos nativos de PostgreSQL, no tablas de catálogo, cuando el conjunto es cerrado y lo conoce el código. |
-| Auditoría | `created_at`, `updated_at` en entidades mutables. Las append-only solo `occurred_at`. |
+| Nombres         | Inglés, `snake_case`, tablas en plural.                                                                                                        |
+| Aislamiento     | `tenant_id uuid NOT NULL` en toda tabla de negocio. Sin excepciones.                                                                           |
+| Dinero          | Dominio `pyg` (bigint). Moneda extranjera: `minor_amount` + `currency_code` + `fx_rate`.                                                       |
+| Cantidades      | Dominio `qty` = `numeric(14,3)`. Tres decimales para mililitros.                                                                               |
+| Fechas          | `timestamptz` siempre. Almacenamiento en UTC.                                                                                                  |
+| Enums           | Tipos nativos de PostgreSQL, no tablas de catálogo, cuando el conjunto es cerrado y lo conoce el código.                                       |
+| Auditoría       | `created_at`, `updated_at` en entidades mutables. Las append-only solo `occurred_at`.                                                          |
 
 ---
 
@@ -162,26 +162,26 @@ unposted_events ─────────────────────�
 
 Los 18 verificados en `packages/db/tests/invariants.sql`. **Agregar un invariante nuevo obliga a agregar su test.**
 
-| # | Invariante | Mecanismo |
-|---|---|---|
-| 1 | El libro de inventario no se edita | Trigger `BEFORE UPDATE` |
-| 2 | El libro de inventario no se borra | Trigger `BEFORE DELETE` + `REVOKE` a `joda_api` |
-| 3 | El saldo de un lote nunca es negativo | `CHECK (on_hand >= 0)` en la proyección |
-| 4 | El signo del movimiento coincide con su tipo | `CHECK` compuesto por `movement_type` |
-| 5 | La unidad del movimiento coincide con la del lote | Trigger `BEFORE INSERT` |
-| 6 | Un frasco abierto no se vende sellado | Trigger `BEFORE INSERT` |
-| 7 | Todo asiento cuadra | Constraint trigger **diferida** |
-| 8 | Una línea contable es débito o crédito, no ambos | `CHECK` |
-| 9 | Un asiento contabilizado no se modifica | Trigger que consulta el estado del asiento |
-| 10 | Una notificación de pago no se procesa dos veces | `UNIQUE (provider, external_event_id)` |
-| 11 | Un producto no tiene detalles de otra vertical | FK compuesta `(product_id, kind)` |
-| 12 | Una seña no se sobre-aplica | `CHECK (applied + refunded <= amount)` |
-| 13 | Las capas de costo cuadran con el movimiento | Constraint trigger diferida |
-| 14 | Una nota de crédito referencia un documento | `CHECK` condicional por `doc_type` |
-| 15 | Un documento aprobado tiene código de control | `CHECK` condicional por `status` |
-| 16 | El total del pedido es consistente | `CHECK (total = subtotal − descuento + envío)` |
-| 17 | Una variante bajo pedido declara su granel | `CHECK (production_mode = 'stocked' OR source_variant_id IS NOT NULL)` |
-| 18 | La bitácora de auditoría no se borra | Trigger `BEFORE UPDATE OR DELETE` |
+| #   | Invariante                                        | Mecanismo                                                              |
+| --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
+| 1   | El libro de inventario no se edita                | Trigger `BEFORE UPDATE`                                                |
+| 2   | El libro de inventario no se borra                | Trigger `BEFORE DELETE` + `REVOKE` a `joda_api`                        |
+| 3   | El saldo de un lote nunca es negativo             | `CHECK (on_hand >= 0)` en la proyección                                |
+| 4   | El signo del movimiento coincide con su tipo      | `CHECK` compuesto por `movement_type`                                  |
+| 5   | La unidad del movimiento coincide con la del lote | Trigger `BEFORE INSERT`                                                |
+| 6   | Un frasco abierto no se vende sellado             | Trigger `BEFORE INSERT`                                                |
+| 7   | Todo asiento cuadra                               | Constraint trigger **diferida**                                        |
+| 8   | Una línea contable es débito o crédito, no ambos  | `CHECK`                                                                |
+| 9   | Un asiento contabilizado no se modifica           | Trigger que consulta el estado del asiento                             |
+| 10  | Una notificación de pago no se procesa dos veces  | `UNIQUE (provider, external_event_id)`                                 |
+| 11  | Un producto no tiene detalles de otra vertical    | FK compuesta `(product_id, kind)`                                      |
+| 12  | Una seña no se sobre-aplica                       | `CHECK (applied + refunded <= amount)`                                 |
+| 13  | Las capas de costo cuadran con el movimiento      | Constraint trigger diferida                                            |
+| 14  | Una nota de crédito referencia un documento       | `CHECK` condicional por `doc_type`                                     |
+| 15  | Un documento aprobado tiene código de control     | `CHECK` condicional por `status`                                       |
+| 16  | El total del pedido es consistente                | `CHECK (total = subtotal − descuento + envío)`                         |
+| 17  | Una variante bajo pedido declara su granel        | `CHECK (production_mode = 'stocked' OR source_variant_id IS NOT NULL)` |
+| 18  | La bitácora de auditoría no se borra              | Trigger `BEFORE UPDATE OR DELETE`                                      |
 
 ### 4.1 Por qué algunas constraints son diferidas
 
@@ -200,14 +200,14 @@ Para testearlas hay que forzar la evaluación: `SET CONSTRAINTS app.trg_journal_
 
 ## 5. Vistas
 
-| Vista | Propósito | Consumidor |
-|---|---|---|
-| `app.v_stock_available` | `saldo − reservas vivas` por variante | API, backoffice |
-| `app.v_balance_drift` | Proyección contra suma del libro. **Debe devolver cero filas.** | Job nocturno, alertas |
-| `app.v_decant_yield` | Merma real contra esperada por producto | Reportes |
-| `app.v_trial_balance` | Balance de sumas y saldos por período | Contabilidad |
-| `public.v_catalog_products` | Catálogo publicado, sin costos ni proveedores | Storefront (`joda_readonly`) |
-| `public.v_catalog_variants` | Variantes publicadas con disponibilidad **booleana** | Storefront (`joda_readonly`) |
+| Vista                       | Propósito                                                       | Consumidor                   |
+| --------------------------- | --------------------------------------------------------------- | ---------------------------- |
+| `app.v_stock_available`     | `saldo − reservas vivas` por variante                           | API, backoffice              |
+| `app.v_balance_drift`       | Proyección contra suma del libro. **Debe devolver cero filas.** | Job nocturno, alertas        |
+| `app.v_decant_yield`        | Merma real contra esperada por producto                         | Reportes                     |
+| `app.v_trial_balance`       | Balance de sumas y saldos por período                           | Contabilidad                 |
+| `public.v_catalog_products` | Catálogo publicado, sin costos ni proveedores                   | Storefront (`joda_readonly`) |
+| `public.v_catalog_variants` | Variantes publicadas con disponibilidad **booleana**            | Storefront (`joda_readonly`) |
 
 Las vistas públicas son el contrato con el storefront. **El storefront nunca lee tablas base.** Si leyera, el esquema interno se volvería API pública y no se podría refactorizar nada.
 
@@ -219,17 +219,17 @@ Las vistas públicas son el contrato con el storefront. **El storefront nunca le
 
 Más allá de las claves primarias y foráneas:
 
-| Índice | Sobre | Para qué |
-|---|---|---|
-| `products_facets_gin` | `products.facets` (GIN, `jsonb_path_ops`) | Filtros del storefront |
-| `products_search_gin` | `products.search_vector` (GIN) | Búsqueda de texto |
-| `lots_variant_fifo` | `(tenant_id, variant_id, received_at)` parcial | Selección FIFO |
-| `lots_variant_fefo` | `(tenant_id, variant_id, expiry_at)` parcial | Selección FEFO |
-| `mov_lot_time` | `(lot_id, occurred_at, id)` | Historial de lote |
-| `reservations_live` | `(tenant_id, variant_id)` parcial `WHERE released_at IS NULL` | Cálculo de disponible |
-| `reservations_expiry` | `(expires_at)` parcial | Job de liberación |
-| `product_categories_one_primary` | `(product_id)` único parcial `WHERE is_primary` | Invariante de breadcrumb |
-| `unposted_open` | `(tenant_id, occurred_at)` parcial `WHERE resolved_at IS NULL` | Bandeja de eventos |
+| Índice                           | Sobre                                                          | Para qué                 |
+| -------------------------------- | -------------------------------------------------------------- | ------------------------ |
+| `products_facets_gin`            | `products.facets` (GIN, `jsonb_path_ops`)                      | Filtros del storefront   |
+| `products_search_gin`            | `products.search_vector` (GIN)                                 | Búsqueda de texto        |
+| `lots_variant_fifo`              | `(tenant_id, variant_id, received_at)` parcial                 | Selección FIFO           |
+| `lots_variant_fefo`              | `(tenant_id, variant_id, expiry_at)` parcial                   | Selección FEFO           |
+| `mov_lot_time`                   | `(lot_id, occurred_at, id)`                                    | Historial de lote        |
+| `reservations_live`              | `(tenant_id, variant_id)` parcial `WHERE released_at IS NULL`  | Cálculo de disponible    |
+| `reservations_expiry`            | `(expires_at)` parcial                                         | Job de liberación        |
+| `product_categories_one_primary` | `(product_id)` único parcial `WHERE is_primary`                | Invariante de breadcrumb |
+| `unposted_open`                  | `(tenant_id, occurred_at)` parcial `WHERE resolved_at IS NULL` | Bandeja de eventos       |
 
 Los índices parciales importan: `lots_variant_fifo` solo cubre lotes con estado utilizable, así que no crece con el histórico agotado.
 
@@ -285,13 +285,13 @@ Después: esquema Zod en `packages/contracts`, mapper de facetas en `packages/do
 
 **Política expand/contract**, siempre:
 
-| Paso | Deploy |
-|---|---|
-| Agregar la columna nueva (nullable o con default) | N |
-| Escribir en ambas columnas | N |
-| Migrar los datos existentes | N o N+1 |
-| Dejar de leer la vieja | N+1 |
-| Eliminar la vieja | N+2 |
+| Paso                                              | Deploy  |
+| ------------------------------------------------- | ------- |
+| Agregar la columna nueva (nullable o con default) | N       |
+| Escribir en ambas columnas                        | N       |
+| Migrar los datos existentes                       | N o N+1 |
+| Dejar de leer la vieja                            | N+1     |
+| Eliminar la vieja                                 | N+2     |
 
 Nunca `DROP COLUMN` en el mismo deploy que deja de usarla. Nunca editar una migración ya aplicada: siempre una nueva.
 

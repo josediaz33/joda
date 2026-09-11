@@ -17,6 +17,7 @@ El admin actual es React + Vite y funciona. La pregunta era si el storefront deb
 ## Consecuencias
 
 **Positivas.**
+
 - Un SPA sirve un `<div id="root">` vacío. La perfumería de nicho compite por búsquedas long-tail ("decant Layton Paraguay"), y ahí el SSR/ISR no es un lujo.
 - `next/image` con AVIF importa: las fotos de perfumería son pesadas y el tráfico llega por 4G.
 - Open Graph dinámico por producto, que es lo que se ve al compartir por WhatsApp e Instagram — por donde llega el tráfico real.

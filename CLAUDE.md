@@ -19,17 +19,17 @@ Ecosistema ERP + e-commerce para una perfumería y relojería de nicho en Encarn
 
 Antes de trabajar en un área, leé lo que corresponde. **No inventes decisiones que ya están tomadas.**
 
-| Documento | Cuándo leerlo |
-|---|---|
-| `docs/architecture/JODA_Arquitectura_v5_Final.md` | Referencia maestra. Ante cualquier duda estructural. |
-| `docs/adr/*.md` | 23 decisiones cerradas, con su fundamento. **No las reabras.** |
-| `GLOSARIO.md` | Siempre. Define el lenguaje ubicuo del dominio. |
-| `docs/domain-rules.md` | Antes de tocar costeo, decants, merma, IVA o contabilidad. |
-| `docs/data-model.md` | Antes de tocar el esquema. |
-| `docs/api-conventions.md` | Antes de agregar endpoints. |
-| `docs/frontend-spec.md` | Antes de tocar interfaz, estilos, SEO o `packages/ui`. |
-| `docs/security-spec.md` | Antes de tocar auth, permisos o RLS. |
-| `packages/db/README.md` | Antes de escribir una migración. |
+| Documento                                         | Cuándo leerlo                                                  |
+| ------------------------------------------------- | -------------------------------------------------------------- |
+| `docs/architecture/JODA_Arquitectura_v5_Final.md` | Referencia maestra. Ante cualquier duda estructural.           |
+| `docs/adr/*.md`                                   | 23 decisiones cerradas, con su fundamento. **No las reabras.** |
+| `GLOSARIO.md`                                     | Siempre. Define el lenguaje ubicuo del dominio.                |
+| `docs/domain-rules.md`                            | Antes de tocar costeo, decants, merma, IVA o contabilidad.     |
+| `docs/data-model.md`                              | Antes de tocar el esquema.                                     |
+| `docs/api-conventions.md`                         | Antes de agregar endpoints.                                    |
+| `docs/frontend-spec.md`                           | Antes de tocar interfaz, estilos, SEO o `packages/ui`.         |
+| `docs/security-spec.md`                           | Antes de tocar auth, permisos o RLS.                           |
+| `packages/db/README.md`                           | Antes de escribir una migración.                               |
 
 Además, `.claude/rules/` contiene reglas con alcance por ruta que se cargan solas cuando trabajás con archivos que coincidan. Llevan los no negociables de cada área; la profundidad sigue estando en los documentos de arriba.
 
@@ -84,7 +84,7 @@ Estas no son preferencias de estilo. Romper cualquiera de ellas produce pérdida
 ### Inventario
 
 - **Nunca `UPDATE stock SET cantidad = ...`.** El inventario es un ledger append-only (`inventory_movements`). El saldo es una proyección derivada. Corregir un error es insertar un movimiento de ajuste, jamás editar uno existente.
-- **Nunca mezcles unidades de medida en un lote.** Un lote es `unit` o es `ml`, para siempre. Abrir un frasco es una *conversión* entre dos lotes (ADR-009), no un cambio de estado.
+- **Nunca mezcles unidades de medida en un lote.** Un lote es `unit` o es `ml`, para siempre. Abrir un frasco es una _conversión_ entre dos lotes (ADR-009), no un cambio de estado.
 - **Todo movimiento de salida registra sus capas de costo** en `movement_cost_allocations`. Sin eso el COGS es una aproximación y no cierra contra contabilidad.
 
 ### Dinero
@@ -136,10 +136,11 @@ Estas no son preferencias de estilo. Romper cualquiera de ellas produce pérdida
 No des una tarea por terminada sin esto:
 
 1. `pnpm typecheck && pnpm lint` — en verde.
-2. `pnpm test` — en verde. Si tocaste `packages/domain`, agregaste tests.
-3. Si tocaste el esquema: `pnpm db:reset && pnpm db:test`. Las 18 pruebas de invariantes tienen que seguir pasando, y agregaste una por cada invariante nuevo.
-4. Si tocaste inventario o contabilidad: verificá que `v_balance_drift` devuelva cero filas y que los asientos cuadren.
-5. Si tocaste algo que un ADR menciona, releé el ADR y confirmá que no lo violaste.
+2. `pnpm format:check` — en verde. No es decorativo: si queda en rojo por defecto, nadie distingue lo preexistente de lo que rompiste vos.
+3. `pnpm test` — en verde. Si tocaste `packages/domain`, agregaste tests.
+4. Si tocaste el esquema: `pnpm db:reset && pnpm db:test`. Las 18 pruebas de invariantes tienen que seguir pasando, y agregaste una por cada invariante nuevo.
+5. Si tocaste inventario o contabilidad: verificá que `v_balance_drift` devuelva cero filas y que los asientos cuadren.
+6. Si tocaste algo que un ADR menciona, releé el ADR y confirmá que no lo violaste.
 
 ---
 
@@ -156,16 +157,16 @@ No des una tarea por terminada sin esto:
 
 ## Estado actual
 
-| Bloque | Estado |
-|---|---|
-| A — Monorepo, `packages/domain`, contratos | Pendiente |
-| B — Esquema Postgres | **Validado** contra PG16 (61 tablas, 18/18 invariantes) |
-| C — API: auth, RBAC, catálogo, inventario, ventas, compras | Pendiente |
-| D — ETL, imágenes, reconciliación | Pendiente |
-| E — Admin migrado a la API | Pendiente |
-| F — **Corte a la nube** | Meta intermedia |
-| G — Storefront | Posterior al corte |
-| H — Motor de posteo + integración fiscal | Posterior |
+| Bloque                                                     | Estado                                                  |
+| ---------------------------------------------------------- | ------------------------------------------------------- |
+| A — Monorepo, `packages/domain`, contratos                 | Pendiente                                               |
+| B — Esquema Postgres                                       | **Validado** contra PG16 (61 tablas, 18/18 invariantes) |
+| C — API: auth, RBAC, catálogo, inventario, ventas, compras | Pendiente                                               |
+| D — ETL, imágenes, reconciliación                          | Pendiente                                               |
+| E — Admin migrado a la API                                 | Pendiente                                               |
+| F — **Corte a la nube**                                    | Meta intermedia                                         |
+| G — Storefront                                             | Posterior al corte                                      |
+| H — Motor de posteo + integración fiscal                   | Posterior                                               |
 
 El sistema v2 (Dexie) sigue en producción hasta el bloque F. Nada de lo que se escriba acá lo afecta: el ETL solo lee.
 

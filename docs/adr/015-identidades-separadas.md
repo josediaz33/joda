@@ -14,13 +14,13 @@ La opción simple era una tabla `users` con un discriminador `user_type`. La alt
 
 **Dos tablas: `customers` y `staff_users`**, con audiencias, cookies, dominios y políticas de sesión distintas.
 
-| | Cliente | Staff |
-|---|---|---|
-| Dominio | `jodaparfums.com` | `admin.jodaparfums.com` |
-| Cookie | `__Host-joda_c` | `__Host-joda_a`, scope al subdominio |
-| Audiencia | `customer` | `staff` |
-| MFA | Opcional | **Obligatoria** |
-| Sesión | 30 días | 8 h + refresh rotativo |
+|           | Cliente           | Staff                                |
+| --------- | ----------------- | ------------------------------------ |
+| Dominio   | `jodaparfums.com` | `admin.jodaparfums.com`              |
+| Cookie    | `__Host-joda_c`   | `__Host-joda_a`, scope al subdominio |
+| Audiencia | `customer`        | `staff`                              |
+| MFA       | Opcional          | **Obligatoria**                      |
+| Sesión    | 30 días           | 8 h + refresh rotativo               |
 
 ## Consecuencias
 

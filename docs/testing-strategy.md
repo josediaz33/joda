@@ -8,13 +8,13 @@ Qué se prueba, con qué herramienta, y qué se le exige a cada PR.
 
 ## 1. Los cinco niveles
 
-| Nivel | Qué cubre | Herramienta | Velocidad |
-|---|---|---|---|
-| **1 · Dominio** | Reglas puras: costeo, fraccionamiento, merma, IVA, redondeo, máquinas de estado | Vitest | ms |
-| **2 · Integración** | Transacciones, constraints, triggers, RLS | Vitest + Testcontainers | segundos |
-| **3 · Invariantes** | Cada guarda de la base rechaza lo que debe | psql sobre base efímera | segundos |
-| **4 · Dataset dorado** | Operaciones reales del negocio con resultados verificados a mano | Vitest | ms |
-| **5 · Extremo a extremo** | Flujos críticos completos en navegador | Playwright | minutos |
+| Nivel                     | Qué cubre                                                                       | Herramienta             | Velocidad |
+| ------------------------- | ------------------------------------------------------------------------------- | ----------------------- | --------- |
+| **1 · Dominio**           | Reglas puras: costeo, fraccionamiento, merma, IVA, redondeo, máquinas de estado | Vitest                  | ms        |
+| **2 · Integración**       | Transacciones, constraints, triggers, RLS                                       | Vitest + Testcontainers | segundos  |
+| **3 · Invariantes**       | Cada guarda de la base rechaza lo que debe                                      | psql sobre base efímera | segundos  |
+| **4 · Dataset dorado**    | Operaciones reales del negocio con resultados verificados a mano                | Vitest                  | ms        |
+| **5 · Extremo a extremo** | Flujos críticos completos en navegador                                          | Playwright              | minutos   |
 
 La pirámide se apoya en el nivel 1. Si te encontrás escribiendo un test de extremo a extremo para verificar un cálculo, la lógica está en el lugar equivocado.
 
@@ -26,15 +26,15 @@ El más importante y el más barato. Funciones puras, sin levantar nada.
 
 ### 2.1 Cobertura exigida
 
-| Módulo | Mínimo | Motivo |
-|---|---|---|
-| `shared/money`, `shared/quantity` | **100%** | Todo lo demás depende de esto |
-| `tax/vat` | **100%** | Un error rechaza documentos fiscales |
-| `inventory/costing`, `inventory/allocation` | **100%** | Un error descuadra la contabilidad |
-| `decant/*` | **100%** | Es la ventaja competitiva del negocio |
-| `procurement/freight`, `procurement/landedCost` | **100%** | Determina todos los márgenes |
-| `accounting/posting` | **100%** | Un asiento mal derivado es un balance falso |
-| Resto de `packages/domain` | ≥ 90% | |
+| Módulo                                          | Mínimo   | Motivo                                      |
+| ----------------------------------------------- | -------- | ------------------------------------------- |
+| `shared/money`, `shared/quantity`               | **100%** | Todo lo demás depende de esto               |
+| `tax/vat`                                       | **100%** | Un error rechaza documentos fiscales        |
+| `inventory/costing`, `inventory/allocation`     | **100%** | Un error descuadra la contabilidad          |
+| `decant/*`                                      | **100%** | Es la ventaja competitiva del negocio       |
+| `procurement/freight`, `procurement/landedCost` | **100%** | Determina todos los márgenes                |
+| `accounting/posting`                            | **100%** | Un asiento mal derivado es un balance falso |
+| Resto de `packages/domain`                      | ≥ 90%    |                                             |
 
 100% de líneas **y** de ramas en esos módulos. Un `if` sin su caso contrario probado no cuenta.
 
@@ -72,16 +72,18 @@ Los 20 casos de `domain-rules.md` §"Catálogo de casos borde" tienen un test ca
 Para las invariantes matemáticas, `fast-check` en lugar de ejemplos:
 
 ```ts
-it('el prorrateo nunca pierde ni gana unidades', () => {
-  fc.assert(fc.property(
-    fc.bigInt({ min: 0n, max: 10_000_000n }),
-    fc.array(fc.integer({ min: 1, max: 1000 }), { minLength: 1, maxLength: 20 }),
-    (total, weights) => {
-      const parts = Money.pyg(total).allocate(weights);
-      const sum = parts.reduce((a, b) => a.plus(b), Money.pyg(0n));
-      expect(sum.minor).toBe(total);          // exacto, siempre
-    },
-  ));
+it("el prorrateo nunca pierde ni gana unidades", () => {
+  fc.assert(
+    fc.property(
+      fc.bigInt({ min: 0n, max: 10_000_000n }),
+      fc.array(fc.integer({ min: 1, max: 1000 }), { minLength: 1, maxLength: 20 }),
+      (total, weights) => {
+        const parts = Money.pyg(total).allocate(weights);
+        const sum = parts.reduce((a, b) => a.plus(b), Money.pyg(0n));
+        expect(sum.minor).toBe(total); // exacto, siempre
+      },
+    ),
+  );
 });
 ```
 
@@ -96,7 +98,7 @@ Postgres real vía Testcontainers. Nada de base en memoria ni de simulacros de P
 ```ts
 // test/setup/db.ts
 export async function withTestDb(fn: (db: PrismaClient) => Promise<void>) {
-  const container = await new PostgreSqlContainer('postgres:16').start();
+  const container = await new PostgreSqlContainer("postgres:16").start();
   await runMigrations(container.getConnectionUri());
   await runSeed(container.getConnectionUri());
   // ...
@@ -116,10 +118,10 @@ export async function withTestDb(fn: (db: PrismaClient) => Promise<void>) {
 Obligatoria y explícita: conectarse como `joda_api` (no como superusuario) y verificar que sin `tenant_id` en contexto no ve nada, y que con otro tenant tampoco.
 
 ```ts
-it('RLS aísla por tenant con el rol de aplicación', async () => {
-  const api = connectAs('joda_api');
+it("RLS aísla por tenant con el rol de aplicación", async () => {
+  const api = connectAs("joda_api");
   await api.query(`SELECT set_config('app.tenant_id', $1, false)`, [OTHER_TENANT]);
-  const { rowCount } = await api.query('SELECT * FROM app.products');
+  const { rowCount } = await api.query("SELECT * FROM app.products");
   expect(rowCount).toBe(0);
 });
 ```
@@ -191,6 +193,7 @@ Corre en cada PR. **Un cambio en un valor esperado del dataset dorado requiere j
 Playwright, solo para flujos donde la integración del navegador es parte del riesgo.
 
 **Cubiertos:**
+
 1. Checkout completo en el storefront hasta la confirmación de pago (con proveedor en modo prueba).
 2. Venta de mostrador en el admin, desde buscar producto hasta emitir el documento.
 3. Recepción de una orden de compra con prorrateo de flete.
@@ -205,15 +208,15 @@ Corren en el CI de la rama principal y antes de cada despliegue a producción, n
 
 ## 7. Qué exige cada PR
 
-| Tipo de cambio | Requisito |
-|---|---|
-| Regla de negocio nueva o modificada | Test de nivel 1 con referencia a `RN-XXX`, más sus casos borde |
-| Cambio de esquema | `pnpm db:reset && pnpm db:test` en verde, y prueba de invariante si agregó uno |
-| Endpoint nuevo | Test de integración del camino feliz + un caso de permiso denegado |
-| DTO público nuevo o modificado | Test que verifica que no filtra costos, proveedores, márgenes ni cantidades |
-| Corrección de bug | **Test que falla antes del arreglo y pasa después.** Sin excepción. |
-| Cambio de interfaz de usuario | Sin test obligatorio, salvo que toque un flujo del nivel 5 |
-| Refactor sin cambio de comportamiento | Los tests existentes deben pasar **sin modificarse** |
+| Tipo de cambio                        | Requisito                                                                      |
+| ------------------------------------- | ------------------------------------------------------------------------------ |
+| Regla de negocio nueva o modificada   | Test de nivel 1 con referencia a `RN-XXX`, más sus casos borde                 |
+| Cambio de esquema                     | `pnpm db:reset && pnpm db:test` en verde, y prueba de invariante si agregó uno |
+| Endpoint nuevo                        | Test de integración del camino feliz + un caso de permiso denegado             |
+| DTO público nuevo o modificado        | Test que verifica que no filtra costos, proveedores, márgenes ni cantidades    |
+| Corrección de bug                     | **Test que falla antes del arreglo y pasa después.** Sin excepción.            |
+| Cambio de interfaz de usuario         | Sin test obligatorio, salvo que toque un flujo del nivel 5                     |
+| Refactor sin cambio de comportamiento | Los tests existentes deben pasar **sin modificarse**                           |
 
 Esa última fila es la más importante: si un refactor obliga a cambiar tests, o no era un refactor, o los tests probaban la implementación en lugar del comportamiento.
 
