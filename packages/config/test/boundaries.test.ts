@@ -30,9 +30,14 @@ const DOMAIN_PACKAGE_DIR = path.join(REPO_ROOT, "packages/domain");
 // commitea (ver .gitignore).
 const GENERATED_FILE_RELATIVE = "src/__boundary-check.generated.ts";
 const GENERATED_FILE_ABSOLUTE = path.join(DOMAIN_PACKAGE_DIR, GENERATED_FILE_RELATIVE);
+// Mismo mecanismo, pero con nombre de test — para la excepción de
+// packages/domain/**/*.test.ts (ver packages/config/eslint/index.js).
+const GENERATED_TEST_FILE_RELATIVE = "src/__boundary-check.generated.test.ts";
+const GENERATED_TEST_FILE_ABSOLUTE = path.join(DOMAIN_PACKAGE_DIR, GENERATED_TEST_FILE_RELATIVE);
 
 afterEach(() => {
   rmSync(GENERATED_FILE_ABSOLUTE, { force: true });
+  rmSync(GENERATED_TEST_FILE_ABSOLUTE, { force: true });
 });
 
 interface EslintJsonMessage {
@@ -40,25 +45,32 @@ interface EslintJsonMessage {
   message: string;
 }
 
-function lintAsRealDomainFile(code: string): EslintJsonMessage[] {
-  mkdirSync(path.dirname(GENERATED_FILE_ABSOLUTE), { recursive: true });
-  writeFileSync(GENERATED_FILE_ABSOLUTE, code);
+function lintGeneratedFile(relativePath: string, absolutePath: string, code: string): EslintJsonMessage[] {
+  mkdirSync(path.dirname(absolutePath), { recursive: true });
+  writeFileSync(absolutePath, code);
 
   try {
     // eslint sale con código 1 cuando encuentra errores — no es un fallo del
     // subproceso, es el resultado que estamos evaluando. execFileSync lanza
     // en ese caso; el stdout con el JSON sigue viniendo en el error.
-    const stdout = execFileSync(
-      process.execPath,
-      [ESLINT_BIN, "--format", "json", GENERATED_FILE_RELATIVE],
-      { cwd: DOMAIN_PACKAGE_DIR, encoding: "utf8" },
-    );
+    const stdout = execFileSync(process.execPath, [ESLINT_BIN, "--format", "json", relativePath], {
+      cwd: DOMAIN_PACKAGE_DIR,
+      encoding: "utf8",
+    });
     return JSON.parse(stdout)[0].messages;
   } catch (error) {
     const stdout = (error as { stdout?: string }).stdout;
     if (!stdout) throw error;
     return JSON.parse(stdout)[0].messages;
   }
+}
+
+function lintAsRealDomainFile(code: string): EslintJsonMessage[] {
+  return lintGeneratedFile(GENERATED_FILE_RELATIVE, GENERATED_FILE_ABSOLUTE, code);
+}
+
+function lintAsDomainTestFile(code: string): EslintJsonMessage[] {
+  return lintGeneratedFile(GENERATED_TEST_FILE_RELATIVE, GENERATED_TEST_FILE_ABSOLUTE, code);
 }
 
 // El arranque en frío del subproceso de ESLint (cargar parser y plugins)
@@ -97,6 +109,35 @@ describe("pureza de packages/domain (restricción mecánica, no convención)", (
       const messages = lintAsRealDomainFile(
         "export const suma = (a: number, b: number) => a + b;\n",
       );
+
+      expect(messages).toHaveLength(0);
+    },
+    ESLINT_COLD_START_TIMEOUT,
+  );
+
+  // pnpm crea packages/domain/node_modules/<paquete> por cada dependencia
+  // declarada en su package.json. Esa ruta cae DENTRO de "packages/domain/**",
+  // así que sin checkInternals:true el plugin trata esa dependencia como
+  // "interna" y la excluye del chequeo — cualquier paquete instalado ahí
+  // (Prisma incluido) pasaría el lint en silencio. Se usa "vitest" porque es
+  // el único paquete externo real que packages/domain ya tiene instalado;
+  // no importa cuál sea, lo que se prueba es el mecanismo de resolución, no
+  // que vitest en particular esté prohibido.
+  it(
+    "rechaza un paquete externo aunque esté instalado como dependencia de packages/domain",
+    () => {
+      const messages = lintAsRealDomainFile('import { describe } from "vitest";\nvoid describe;\n');
+
+      expect(messages).toHaveLength(1);
+      expect(messages[0]?.ruleId).toBe("boundaries/dependencies");
+    },
+    ESLINT_COLD_START_TIMEOUT,
+  );
+
+  it(
+    "permite ese mismo import en un archivo *.test.ts — los tests no son código que se shippea",
+    () => {
+      const messages = lintAsDomainTestFile('import { describe } from "vitest";\nvoid describe;\n');
 
       expect(messages).toHaveLength(0);
     },

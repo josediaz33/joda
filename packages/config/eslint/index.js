@@ -61,6 +61,18 @@ export default [
         {
           default: "allow",
           checkAllOrigins: true,
+          // pnpm crea packages/domain/node_modules/<paquete> por cada
+          // dependencia declarada en su package.json — esa ruta resuelta cae
+          // DENTRO de "packages/domain/**", así que el plugin clasifica esa
+          // dependencia como "interna" (relationship.to: "internal"), no
+          // como una dependencia externa cualquiera. Sin checkInternals:true
+          // esas dependencias "internas" nunca se evalúan contra las
+          // políticas de abajo — cualquier paquete que se instale acá (sea
+          // Prisma, sea lo que sea) queda exento del chequeo en silencio.
+          // Solo se atrapan los imports de paquetes NO instalados. Verificado
+          // con ESLINT_PLUGIN_BOUNDARIES_DEBUG=1; test de regresión en
+          // packages/config/test/boundaries.test.ts.
+          checkInternals: true,
           policies: [
             {
               from: { element: { type: "domain" } },
@@ -101,6 +113,21 @@ export default [
             "packages/domain no puede usar Math.random: la aleatoriedad entra por el puerto IdGenerator (.claude/rules/domain.md).",
         },
       ],
+    },
+  },
+
+  // Los tests de packages/domain sí pueden traer su propio tooling (vitest,
+  // fast-check, ...): la pureza aplica al código que se shippea, no a los
+  // tests que lo verifican (mismo criterio que .claude/rules/testing.md,
+  // que trata **/*.test.ts como un dominio de reglas aparte). Este bloque
+  // va DESPUÉS del de arriba a propósito: en flat config, cuando dos
+  // bloques matchean el mismo archivo, el de más abajo gana regla por
+  // regla — acá solo se pisa "boundaries/dependencies", no-restricted-*
+  // sigue activo para los tests.
+  {
+    files: ["packages/domain/**/*.test.ts", "packages/domain/vitest.config.ts"],
+    rules: {
+      "boundaries/dependencies": "off",
     },
   },
 ];
