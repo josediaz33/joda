@@ -3,6 +3,7 @@
 - **Estado:** Aceptada
 - **Fecha:** 2026-09-09
 - **Ámbito:** Dinero
+- **Corrección (2026-09-11):** la Decisión cita `packages/domain/src/money.ts`; la ruta correcta es `packages/domain/src/shared/money.ts`, junto con `quantity.ts`, `percentage.ts`, `result.ts` y `errors.ts` (ya así en `docs/domain-contracts.md` §2 y `docs/engineering-principles.md` Parte III desde el commit inicial). No cambia ninguna otra parte de esta decisión — bigint, snapshot de FX, redondeo único e IVA siguen intactos. Argumento completo en ADR-024.
 
 ---
 
