@@ -13,6 +13,9 @@ Detalle completo: `docs/testing-strategy.md`.
 
 - Cada `describe` referencia la regla que verifica: `RN-XXX-nn`. Sin referencia,
   el test es una afirmación sin fundamento.
+- Excepción: los objetos de valor de `shared/` (Money, Quantity, Percentage,
+  Result, errors) citan la sección de `docs/domain-contracts.md` que los
+  define en vez de un `RN-XXX-nn` — ver `docs/testing-strategy.md` §2.2.
 - **Sin lógica en los tests.** Sin `if`, sin bucles calculando el esperado. El
   valor esperado se escribe literal.
 - Nombres que describen comportamiento, no la función.

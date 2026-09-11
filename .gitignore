@@ -14,3 +14,4 @@ packages/db/prisma/.reference-dump.sql
 # Generado y borrado por packages/config/test/boundaries.test.ts en cada
 # corrida; red de seguridad si un test cortado a la mitad lo deja tirado.
 packages/domain/src/__boundary-check.generated.ts
+packages/domain/src/__boundary-check.generated.test.ts

@@ -3,10 +3,10 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Lógica de negocio pura, sin I/O (CLAUDE.md § Código). Esqueleto (WP-A01); Money/Quantity/Result llegan en WP-A03.",
+  "description": "Lógica de negocio pura, sin I/O (CLAUDE.md § Código).",
   "scripts": {
-    "build": "node ../../scripts/pending-task.mjs \"build (domain)\" WP-A03",
-    "test": "node ../../scripts/pending-task.mjs \"test (domain)\" WP-A03",
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint ."
   },
@@ -16,6 +16,9 @@
     "@eslint/js": "catalog:",
     "typescript-eslint": "catalog:",
     "eslint-plugin-boundaries": "catalog:",
-    "eslint-config-prettier": "catalog:"
+    "eslint-config-prettier": "catalog:",
+    "vitest": "catalog:",
+    "@vitest/coverage-v8": "catalog:",
+    "fast-check": "catalog:"
   }
 }

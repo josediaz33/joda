@@ -91,7 +91,7 @@ Estas no son preferencias de estilo. Romper cualquiera de ellas produce pérdida
 
 - **Los guaraníes son `bigint` de unidades enteras.** Nunca `float`, nunca `numeric(x,2)`, nunca `number` de JavaScript para acumular.
 - **Toda operación en moneda extranjera guarda cuatro campos:** `amount_minor`, `currency`, `fx_rate_to_pyg`, `amount_pyg`. El último es un snapshot, no un cálculo en vivo.
-- **El redondeo vive en un solo lugar:** `packages/domain/src/money.ts` y su espejo `app.round_pyg()`. Si escribís `Math.round` sobre un importe fuera de ahí, está mal.
+- **El redondeo vive en un solo lugar:** `packages/domain/src/shared/money.ts` y su espejo `app.round_pyg()`. Si escribís `Math.round` sobre un importe fuera de ahí, está mal.
 - **IVA paraguayo va sobre precio con impuesto incluido:** 10% = total/11, 5% = total/21. Nunca `total * 0.10`.
 
 ### Seguridad
