@@ -1,6 +1,10 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { CurrencyMismatchError, InvalidAllocationError, InvalidMoneyAmountError } from "./errors.js";
+import {
+  CurrencyMismatchError,
+  InvalidAllocationError,
+  InvalidMoneyAmountError,
+} from "./errors.js";
 import { Money, roundPyg } from "./money.js";
 
 describe("Money — representación (RN-DIN-01)", () => {
@@ -110,7 +114,11 @@ describe("Money.toJSON", () => {
 
 describe("Money.allocate — prorrateo exacto (docs/domain-contracts.md §3.1)", () => {
   it("reparte en partes iguales cuando el total es divisible exacto", () => {
-    expect(Money.pyg(9n).allocate([1, 1, 1]).map((p) => p.minor)).toEqual([3n, 3n, 3n]);
+    expect(
+      Money.pyg(9n)
+        .allocate([1, 1, 1])
+        .map((p) => p.minor),
+    ).toEqual([3n, 3n, 3n]);
   });
 
   it("imputa el resto a los pesos con mayor remanente, desempatando por índice ascendente", () => {

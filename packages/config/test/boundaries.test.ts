@@ -45,7 +45,11 @@ interface EslintJsonMessage {
   message: string;
 }
 
-function lintGeneratedFile(relativePath: string, absolutePath: string, code: string): EslintJsonMessage[] {
+function lintGeneratedFile(
+  relativePath: string,
+  absolutePath: string,
+  code: string,
+): EslintJsonMessage[] {
   mkdirSync(path.dirname(absolutePath), { recursive: true });
   writeFileSync(absolutePath, code);
 

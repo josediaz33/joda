@@ -27,7 +27,10 @@ export class CurrencyMismatchError extends DomainError {
     readonly expected: Currency,
     readonly actual: Currency,
   ) {
-    super("CURRENCY_MISMATCH", `No se puede operar Money de "${expected}" con Money de "${actual}".`);
+    super(
+      "CURRENCY_MISMATCH",
+      `No se puede operar Money de "${expected}" con Money de "${actual}".`,
+    );
   }
 }
 
@@ -37,7 +40,10 @@ export class UomMismatchError extends DomainError {
     readonly expected: Uom,
     readonly actual: Uom,
   ) {
-    super("UOM_MISMATCH", `No se puede operar Quantity de "${expected}" con Quantity de "${actual}".`);
+    super(
+      "UOM_MISMATCH",
+      `No se puede operar Quantity de "${expected}" con Quantity de "${actual}".`,
+    );
   }
 }
 

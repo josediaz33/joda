@@ -60,7 +60,9 @@ export class Quantity {
 
   times(factor: number): Quantity {
     if (!Number.isFinite(factor)) {
-      throw new InvalidQuantityError(`Quantity.times requiere un factor finito, recibido ${factor}.`);
+      throw new InvalidQuantityError(
+        `Quantity.times requiere un factor finito, recibido ${factor}.`,
+      );
     }
     return new Quantity(this.value * factor, this.uom);
   }

@@ -9,7 +9,9 @@ export class Percentage {
 
   static of(value: number): Percentage {
     if (!Number.isFinite(value) || value < 0 || value > 1) {
-      throw new InvalidPercentageError(`Percentage.of requiere un valor en [0, 1], recibido ${value}.`);
+      throw new InvalidPercentageError(
+        `Percentage.of requiere un valor en [0, 1], recibido ${value}.`,
+      );
     }
     return new Percentage(value);
   }

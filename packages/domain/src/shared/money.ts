@@ -2,7 +2,11 @@
 // decimal.js para PYG (CLAUDE.md § Dinero, RN-DIN-01). El redondeo vive
 // acá y en ningún otro lugar (RN-DIN-02): cualquier Math.round sobre un
 // importe fuera de esta función está mal.
-import { CurrencyMismatchError, InvalidAllocationError, InvalidMoneyAmountError } from "./errors.js";
+import {
+  CurrencyMismatchError,
+  InvalidAllocationError,
+  InvalidMoneyAmountError,
+} from "./errors.js";
 
 export type Currency = "PYG" | "USD" | "BRL" | "ARS";
 
@@ -82,7 +86,9 @@ export class Money {
   /** Multiplica por un factor y redondea el resultado con roundPyg — el único redondeo del paquete. */
   times(factor: number): Money {
     if (!Number.isFinite(factor)) {
-      throw new InvalidMoneyAmountError(`Money.times requiere un factor finito, recibido ${factor}.`);
+      throw new InvalidMoneyAmountError(
+        `Money.times requiere un factor finito, recibido ${factor}.`,
+      );
     }
     return new Money(roundPyg(Number(this.minor) * factor), this.currency);
   }
@@ -117,7 +123,9 @@ export class Money {
 
     const totalWeight = scaledWeights.reduce((sum, weight) => sum + weight, 0n);
     if (totalWeight === 0n) {
-      throw new InvalidAllocationError("Money.allocate requiere que al menos un peso sea mayor que cero.");
+      throw new InvalidAllocationError(
+        "Money.allocate requiere que al menos un peso sea mayor que cero.",
+      );
     }
 
     const shares = scaledWeights.map((weight) => floorDiv(this.minor * weight, totalWeight));
@@ -133,12 +141,16 @@ export class Money {
     const bumpedIndexes = new Set(
       remainders
         .map((remainder, index) => ({ remainder, index }))
-        .sort((a, b) => (a.remainder === b.remainder ? a.index - b.index : a.remainder > b.remainder ? -1 : 1))
+        .sort((a, b) =>
+          a.remainder === b.remainder ? a.index - b.index : a.remainder > b.remainder ? -1 : 1,
+        )
         .slice(0, leftover)
         .map((entry) => entry.index),
     );
 
-    return shares.map((share, index) => new Money(bumpedIndexes.has(index) ? share + 1n : share, this.currency));
+    return shares.map(
+      (share, index) => new Money(bumpedIndexes.has(index) ? share + 1n : share, this.currency),
+    );
   }
 
   isZero(): boolean {
