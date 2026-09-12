@@ -4,3 +4,4 @@
 // eslint-plugin-boundaries (ver packages/config/eslint/index.js), no la
 // convención.
 export * from "./shared/index.js";
+export * from "./tax/index.js";

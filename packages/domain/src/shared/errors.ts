@@ -74,3 +74,10 @@ export class InvalidAllocationError extends DomainError {
     super("INVALID_ALLOCATION", message);
   }
 }
+
+/** breakdownDocument() con un arreglo de líneas vacío: no hay bruto que desglosar (RN-IVA). */
+export class InvalidVatDocumentError extends DomainError {
+  constructor(message: string) {
+    super("INVALID_VAT_DOCUMENT", message);
+  }
+}

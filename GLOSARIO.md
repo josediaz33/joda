@@ -257,6 +257,12 @@ IVA 10% = total / 11        IVA 5% = total / 21        Exenta = 0
 
 **Nunca `total * 0.10`.** El redondeo se resuelve a nivel de documento, que es lo que valida SIFEN, y la diferencia se imputa a la última línea.
 
+### Base gravada
+
+Lo que queda de un bruto con IVA incluido después de extraer el IVA: `base = bruto − iva`, nunca un cálculo independiente (RN-IVA-04) — así `base + iva = bruto` siempre, exacto. RN-FIS-02 lo confirma literal: "cada `taxed_*` es la base gravada".
+
+**Dos formas, mismo concepto (no es una inconsistencia).** `packages/domain/src/tax/vat.ts` la nombra `base` (campo) / `taxBase()` (función): un campo genérico por línea, porque cada línea ya lleva su `rate` como dato. Las migraciones SQL la parten en `taxed_10_pyg` / `taxed_5_pyg` / `exempt_pyg` (`sale_orders`, `fiscal_documents`, RN-FIS-02): tres columnas porque una tabla relacional necesita una por tasa. Es la misma "base gravada" expresada de dos formas obligadas por la forma de cada capa — como `flete_por_aire`/`flete_por_barco` en SQL para lo que en dominio es un único "costo de flete" con un campo `method`. No hay rename pendiente.
+
 ### Guaraní / PYG
 
 Moneda de Paraguay, **sin subdivisión operativa**. En el código, `bigint` de unidades enteras. Nunca `float`, nunca decimales.

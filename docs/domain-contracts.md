@@ -345,6 +345,22 @@ export function taxBase(gross: Money, rate: VatRate): Money;
 export function breakdownDocument(
   lines: readonly { gross: Money; rate: VatRate }[],
 ): DocumentVatBreakdown;
+
+export interface DocumentVatLine {
+  gross: Money;
+  rate: VatRate;
+  vat: Money;
+  base: Money;
+  /** RN-IVA-03: lo que esta línea recibió por ser la última de su tasa, ya incluido en `vat`. Cero si no hubo ajuste. */
+  roundingAdjustment: Money;
+}
+
+export interface DocumentVatBreakdown {
+  lines: readonly DocumentVatLine[];
+  totalGross: Money;
+  totalVat: Money;
+  totalBase: Money;
+}
 ```
 
 ### 6.4 Prorrateo de flete
