@@ -81,3 +81,14 @@ export class InvalidVatDocumentError extends DomainError {
     super("INVALID_VAT_DOCUMENT", message);
   }
 }
+
+/**
+ * computeLandedCost() con un fxRateToPyg no finito o no positivo, o con
+ * componentes ya en PYG (nada que convertir); computeUnitLandedCost() con
+ * qtyInitial no positivo (RN-COS-01, RN-COS-03).
+ */
+export class InvalidLandedCostInputError extends DomainError {
+  constructor(message: string) {
+    super("INVALID_LANDED_COST_INPUT", message);
+  }
+}
