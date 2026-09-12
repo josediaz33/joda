@@ -369,11 +369,20 @@ export interface DocumentVatBreakdown {
 export function allocateFreight(input: {
   freight: Money;
   method: FreightMethod;
-  lines: readonly { id: string; value: Money; qty: Quantity; volume?: number }[];
+  lines: readonly {
+    id: string;
+    value: Money;
+    qty: Quantity;
+    volume?: number;
+    /** Requerido si `method` es `"manual"`; ignorado en los demás. */
+    manualAmount?: Money;
+  }[];
 }): Result<ReadonlyMap<string, Money>, FreightError>;
 ```
 
-Usa `Money.allocate` internamente: la suma de las partes es exactamente el flete total, siempre.
+`by_value`, `by_unit` y `by_volume` reparten con **el mismo algoritmo — `Money.allocate`** (§3.1): la suma de las partes es exactamente el flete total, siempre, sin caso especial por método. Lo único que cambia es el peso que cada uno le pasa a `allocate` — `value.minor`, `qty.value` o `volume`, respectivamente —, y ese peso es la **magnitud cruda de la línea**, nunca una proporción ya calculada: `Money.allocate` admite hasta 6 decimales por peso (ver su JSDoc en `shared/money.ts`), así que una proporción periódica (`1/3`) lo haría fallar donde la magnitud cruda no.
+
+`manual` no prorratea: el llamador ya decidió `manualAmount` para cada línea; `allocateFreight` solo valida que la suma de esos montos sea igual a `freight` y devuelve `FreightError` si no coincide — no ajusta nada por detrás. Ver RN-COS-02.
 
 ### 6.5 Máquinas de estado
 
