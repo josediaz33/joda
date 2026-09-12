@@ -52,6 +52,20 @@ describe("RN-COS-02 · by_value — reparte en proporción al valor de línea", 
 
     expect(result).toEqual({ ok: false, error: { code: "ZERO_TOTAL_WEIGHT" } });
   });
+
+  it("falla con LINE_CURRENCY_MISMATCH si las líneas no comparten moneda en value (RN-DIN-03)", () => {
+    const lines: readonly FreightLine[] = [
+      { id: "A", value: Money.pyg(1_000_000n), qty: Quantity.units(1) },
+      { id: "B", value: Money.of(100_000n, "USD"), qty: Quantity.units(1) },
+    ];
+
+    const result = allocateFreight({ freight: Money.pyg(300_000n), method: "by_value", lines });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "LINE_CURRENCY_MISMATCH", lineId: "B", expected: "PYG", actual: "USD" },
+    });
+  });
 });
 
 describe("RN-COS-02 · by_unit — reparte en proporción a la cantidad de línea, no al valor", () => {
@@ -66,6 +80,20 @@ describe("RN-COS-02 · by_unit — reparte en proporción a la cantidad de líne
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected ok");
     expect(minorsOf(result.value)).toEqual({ A: 10n, B: 30n });
+  });
+
+  it("falla con LINE_UOM_MISMATCH si las líneas no comparten Uom en qty (ADR-009)", () => {
+    const lines: readonly FreightLine[] = [
+      { id: "A", value: Money.pyg(500_000n), qty: Quantity.units(1) },
+      { id: "B", value: Money.pyg(500_000n), qty: Quantity.ml(3) },
+    ];
+
+    const result = allocateFreight({ freight: Money.pyg(40n), method: "by_unit", lines });
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "LINE_UOM_MISMATCH", lineId: "B", expected: "unit", actual: "ml" },
+    });
   });
 });
 

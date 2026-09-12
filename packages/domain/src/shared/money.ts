@@ -185,8 +185,13 @@ export class Money {
   }
 
   /**
-   * Multiplica por un factor y redondea el resultado con roundPyg — el
-   * único redondeo del paquete.
+   * Multiplica por un factor y redondea el resultado con roundPyg — la
+   * única FUNCIÓN de redondeo del paquete (RN-DIN-02), aunque no el único
+   * call site: `procurement/landedCost.ts::convertToPyg` también la llama
+   * directo, sin pasar por `.times()`, porque necesita dividir por 100
+   * antes de aplicar el fx (RN-DIN-04) y `.times()` no divide. Lo que
+   * importa es que el redondeo en sí vive en un solo lugar (`roundPyg`),
+   * no que exista un único punto de entrada a él.
    *
    * `Number(this.minor)` pierde exactitud por encima de
    * `Number.MAX_SAFE_INTEGER` (2^53 − 1): un bigint más grande que eso se

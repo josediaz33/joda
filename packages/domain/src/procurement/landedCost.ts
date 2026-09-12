@@ -19,6 +19,12 @@ const FOREIGN_CURRENCY_MINOR_SCALE = 100;
  * recalcula después. Vive acá y no en shared/money.ts porque hoy solo lo
  * necesita el costeo de procurement; si otro módulo llega a necesitarlo,
  * se promueve a shared/ en ese momento, no antes (alcance de WP-A05).
+ *
+ * Deliberadamente NO se separan sus dos guardas en una función de
+ * validación aparte: cada una es una línea con su propio mensaje, ya se
+ * lee de arriba a abajo sin necesidad de saltar a otro lado, y partirla
+ * no le agrega información al lector — sí lo haría si esta función
+ * creciera más allá de "validar + una cuenta de dos pasos".
  */
 function convertToPyg(amount: Money, fxRateToPyg: number): Money {
   if (amount.currency === "PYG") {
@@ -26,6 +32,11 @@ function convertToPyg(amount: Money, fxRateToPyg: number): Money {
       "convertToPyg requiere un importe en moneda extranjera; recibió un importe ya en PYG.",
     );
   }
+  // Excepción, no Result: "argumento fuera de rango" está listado como
+  // caso de excepción en docs/domain-contracts.md §4.2 y
+  // .claude/rules/domain.md, no como fallo que el negocio "contempla"
+  // (tipo InsufficientStockError). Un fx <= 0 no es una situación de
+  // negocio con un camino de recuperación — es un dato imposible.
   if (!Number.isFinite(fxRateToPyg) || fxRateToPyg <= 0) {
     throw new InvalidLandedCostInputError(
       `fxRateToPyg debe ser un número finito y positivo, recibido ${fxRateToPyg}.`,
@@ -40,7 +51,13 @@ export interface LandedCostComponents {
   /** Precio del proveedor, en la moneda extranjera de la recepción. */
   readonly supplierPrice: Money;
   readonly freight?: Money;
+  /** Despacho aduanero. */
   readonly customsClearance?: Money;
+  /**
+   * Impuestos/aranceles y comisiones (GLOSARIO.md "Costo puesto / landed
+   * cost"): no tienen campo propio, van acá hasta que el motor de posteo
+   * (Bloque H) necesite distinguirlos por cuenta contable.
+   */
   readonly other?: Money;
 }
 
@@ -72,13 +89,15 @@ export function computeLandedCost(input: ComputeLandedCostInput): Money {
 
 /**
  * RN-COS-03 · costo unitario del lote = costo puesto / cantidad inicial,
- * redondeado con roundPyg (vía Money.times, el único redondeo del
- * paquete).
+ * redondeado con roundPyg (vía Money.times, la única función de
+ * redondeo del paquete).
  *
  * **Ejemplo.** El frasco de Layton anterior, convertido a granel:
  * `1.496.500 / 125 ml` = Gs. 11.972/ml.
  */
 export function computeUnitLandedCost(landedCostPyg: Money, qtyInitial: Quantity): Money {
+  // Excepción, no Result — misma razón que fxRateToPyg en convertToPyg:
+  // "argumento fuera de rango" (docs/domain-contracts.md §4.2).
   if (!(qtyInitial.value > 0)) {
     throw new InvalidLandedCostInputError(
       `computeUnitLandedCost requiere una cantidad inicial positiva, recibido ${qtyInitial.value}.`,

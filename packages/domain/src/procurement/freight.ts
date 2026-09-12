@@ -11,8 +11,9 @@
 // `manual` no prorratea nada: el operador ya fijó el flete de cada línea
 // (`manualAmount`); esta función solo valida que la suma coincida con el
 // flete total.
+import type { Currency } from "../shared/money.js";
 import { Money } from "../shared/money.js";
-import type { Quantity } from "../shared/quantity.js";
+import type { Quantity, Uom } from "../shared/quantity.js";
 import { err, ok, type Result } from "../shared/result.js";
 
 export type FreightMethod = "by_value" | "by_unit" | "by_volume" | "manual";
@@ -27,11 +28,36 @@ export interface FreightLine {
   readonly manualAmount?: Money;
 }
 
+// FreightError es una unión de OBJETOS PLANOS con `code`, no una jerarquía
+// de clases como DomainError (shared/errors.ts) — a propósito, y por una
+// razón distinta en cada caso:
+//   · DomainError es para lo que se LANZA sin capturar (bug del llamador);
+//     estos valores se DEVUELVEN dentro de un Result (fallo que el negocio
+//     contempla, docs/domain-contracts.md §4.1) — no necesitan la
+//     maquinaria de Error (stack, mensaje, prototipo) porque nadie los
+//     hace throw.
+//   · Un objeto plano con `code` se compara con `toEqual` en los tests
+//     (`expect(result).toEqual({ ok: false, error: { code: "..." } })`)
+//     sin depender de un mensaje de texto que se pueda desalinear del
+//     código; una instancia de clase obligaría a comparar por campos uno
+//     por uno o a ignorar el mensaje.
 export type FreightError =
   | { readonly code: "EMPTY_LINES" }
   | { readonly code: "ZERO_TOTAL_WEIGHT" }
   | { readonly code: "MISSING_VOLUME"; readonly lineId: string }
   | { readonly code: "MISSING_MANUAL_AMOUNT"; readonly lineId: string }
+  | {
+      readonly code: "LINE_CURRENCY_MISMATCH";
+      readonly lineId: string;
+      readonly expected: Currency;
+      readonly actual: Currency;
+    }
+  | {
+      readonly code: "LINE_UOM_MISMATCH";
+      readonly lineId: string;
+      readonly expected: Uom;
+      readonly actual: Uom;
+    }
   | {
       readonly code: "MANUAL_SUM_MISMATCH";
       readonly expected: Money;
@@ -54,9 +80,66 @@ function weightOf(method: ProportionalMethod, line: FreightLine): number {
     case "by_unit":
       return line.qty.value;
     case "by_volume":
-      // Validado por allocateProportional antes de llegar acá.
+      // Validado por validateProportionalLines antes de llegar acá.
       return line.volume!;
   }
+}
+
+/** by_value pesa `value.minor`: si dos líneas no comparten moneda, esa magnitud no es comparable entre ellas (RN-DIN-03). */
+function findCurrencyMismatch(lines: readonly FreightLine[]): FreightError | undefined {
+  const expected = lines[0]!.value.currency;
+  const mismatched = lines.find((line) => line.value.currency !== expected);
+  if (!mismatched) return undefined;
+  return {
+    code: "LINE_CURRENCY_MISMATCH",
+    lineId: mismatched.id,
+    expected,
+    actual: mismatched.value.currency,
+  };
+}
+
+/** by_unit pesa `qty.value`: si dos líneas no comparten Uom (`ml` vs. `unit`), esa magnitud tampoco es comparable (ADR-009). */
+function findUomMismatch(lines: readonly FreightLine[]): FreightError | undefined {
+  const expected = lines[0]!.qty.uom;
+  const mismatched = lines.find((line) => line.qty.uom !== expected);
+  if (!mismatched) return undefined;
+  return {
+    code: "LINE_UOM_MISMATCH",
+    lineId: mismatched.id,
+    expected,
+    actual: mismatched.qty.uom,
+  };
+}
+
+/** by_volume pesa `volume`: no hay nada que lo derive de otro campo si falta. */
+function findMissingVolume(lines: readonly FreightLine[]): FreightError | undefined {
+  const missing = lines.find((line) => line.volume === undefined);
+  if (!missing) return undefined;
+  return { code: "MISSING_VOLUME", lineId: missing.id };
+}
+
+/**
+ * Cada método proporcional valida solo lo que su propio peso necesita —
+ * ninguno de los tres necesita las tres validaciones a la vez. Separado
+ * de `computeWeights` para que "esto no se puede prorratear con datos
+ * así" y "así se prorratea" sean dos preguntas distintas.
+ */
+function validateProportionalLines(
+  method: ProportionalMethod,
+  lines: readonly FreightLine[],
+): FreightError | undefined {
+  switch (method) {
+    case "by_value":
+      return findCurrencyMismatch(lines);
+    case "by_unit":
+      return findUomMismatch(lines);
+    case "by_volume":
+      return findMissingVolume(lines);
+  }
+}
+
+function computeWeights(method: ProportionalMethod, lines: readonly FreightLine[]): number[] {
+  return lines.map((line) => weightOf(method, line));
 }
 
 function allocateProportional(
@@ -64,14 +147,18 @@ function allocateProportional(
   method: ProportionalMethod,
   lines: readonly FreightLine[],
 ): Result<ReadonlyMap<string, Money>, FreightError> {
-  if (method === "by_volume") {
-    const missingVolume = lines.find((line) => line.volume === undefined);
-    if (missingVolume) {
-      return err({ code: "MISSING_VOLUME", lineId: missingVolume.id });
-    }
+  const validationError = validateProportionalLines(method, lines);
+  if (validationError) {
+    return err(validationError);
   }
 
-  const weights = lines.map((line) => weightOf(method, line));
+  const weights = computeWeights(method, lines);
+  // Se intercepta ACÁ, antes de llamar a Money.allocate, en vez de dejar
+  // que allocate() tire su propia InvalidAllocationError: esto es un
+  // fallo de negocio (todas las líneas de la recepción con valor/cantidad
+  // en cero) que el llamador puede provocar con datos reales, no un bug
+  // de programación — corresponde Result (docs/domain-contracts.md §4.1),
+  // no una excepción sin capturar.
   if (weights.every((weight) => weight === 0)) {
     return err({ code: "ZERO_TOTAL_WEIGHT" });
   }
