@@ -74,6 +74,15 @@ describe("Money.times — docs/domain-contracts.md §3.1", () => {
   it("rechaza un factor no finito", () => {
     expect(() => Money.pyg(100n).times(Number.NaN)).toThrow(InvalidMoneyAmountError);
   });
+
+  it("pierde exactitud por encima de Number.MAX_SAFE_INTEGER — Number(minor) redondea al representable más cercano", () => {
+    // Number.MAX_SAFE_INTEGER = 9_007_199_254_740_991 = 2^53 − 1. Dos
+    // unidades por encima (2^53 + 1) no es representable como Number: se
+    // redondea a 2^53 antes de que roundPyg vea nada. times(1) debería
+    // devolver el mismo minor recibido y no lo hace — documenta la
+    // pérdida, no la evita (ningún guaraní real se acerca a esta magnitud).
+    expect(Money.pyg(9_007_199_254_740_993n).times(1).minor).toBe(9_007_199_254_740_992n);
+  });
 });
 
 describe("Money.isZero / Money.isNegative — docs/domain-contracts.md §3.1", () => {

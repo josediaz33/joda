@@ -15,9 +15,13 @@ export type Currency = "PYG" | "USD" | "BRL" | "ARS";
 // exacta hacia +infinito, sin rama aparte para negativos — no es un
 // truco que solo funcione para el −0,5 de la tabla de la regla. Ese
 // caso puntual (−0,5 → 0, no −1) es simplemente lo que da "hacia
-// +infinito" ahí: coincide con "hacia el cero" únicamente en esa mitad,
-// no en general (−1,5 redondea a −1, que sigue siendo "hacia
-// +infinito" pero ya no es "hacia el cero").
+// +infinito" ahí: coincide con "hacia el cero" únicamente en esa mitad
+// (y en cualquier otra mitad negativa: floor(−1,5 + 0,5) = −1, que
+// también es "hacia el cero" desde −1,5). Los dos criterios no
+// difieren nunca en una mitad negativa — "hacia +infinito" es,
+// simplemente, la regla real; "hacia el cero" es una forma de leer el
+// mismo resultado que solo funciona para negativos, no en general (para
+// positivos "hacia +infinito" y "hacia arriba" sí coinciden siempre).
 const HALF_UNIT_ROUNDING = 0.5;
 
 /** RN-DIN-02 · redondeo de guaraníes: media unidad hacia arriba (hacia +infinito), siempre. */
@@ -180,7 +184,22 @@ export class Money {
     return new Money(this.minor - other.minor, this.currency);
   }
 
-  /** Multiplica por un factor y redondea el resultado con roundPyg — el único redondeo del paquete. */
+  /**
+   * Multiplica por un factor y redondea el resultado con roundPyg — la
+   * única FUNCIÓN de redondeo del paquete (RN-DIN-02), aunque no el único
+   * call site: `procurement/landedCost.ts::convertToPyg` también la llama
+   * directo, sin pasar por `.times()`, porque necesita dividir por 100
+   * antes de aplicar el fx (RN-DIN-04) y `.times()` no divide. Lo que
+   * importa es que el redondeo en sí vive en un solo lugar (`roundPyg`),
+   * no que exista un único punto de entrada a él.
+   *
+   * `Number(this.minor)` pierde exactitud por encima de
+   * `Number.MAX_SAFE_INTEGER` (2^53 − 1): un bigint más grande que eso se
+   * redondea al `number` representable más cercano antes de multiplicar
+   * por `factor`. No es un problema para los importes de este dominio
+   * (ningún guaraní real se acerca a 2^53), pero es real — ver el test
+   * "cerca de Number.MAX_SAFE_INTEGER" en money.test.ts.
+   */
   times(factor: number): Money {
     if (!Number.isFinite(factor)) {
       throw new InvalidMoneyAmountError(
@@ -201,6 +220,15 @@ export class Money {
    * división) para que el error de punto flotante nunca toque el total.
    * Los cuatro pasos del método tienen nombre propio en scaleWeights,
    * computeShares y distributeRemainder — acá solo se los encadena.
+   *
+   * `weights` son MAGNITUDES CRUDAS de cada línea — valor en unidades
+   * menores, cantidad, volumen —, nunca proporciones ya calculadas
+   * (`0.6`/`0.4`, no `60`/`40`). `scaleWeights` admite hasta 6 decimales
+   * por peso: una proporción periódica como `1/3 = 0,3333333...` se
+   * trunca ahí y `allocate` lanza `InvalidAllocationError`. Pasar la
+   * magnitud cruda (el `value`/`qty`/`volume` de la línea, sin dividir
+   * por el total) es lo que evita el problema, además de ser lo que
+   * describe `docs/domain-contracts.md` §6.4 para `allocateFreight`.
    */
   allocate(weights: readonly number[]): Money[] {
     const { scaledWeights, totalWeight } = scaleWeights(weights);

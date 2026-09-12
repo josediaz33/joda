@@ -22,12 +22,12 @@ Las monedas extranjeras se representan en unidades menores: USD 190,00 → `1900
 
 Media unidad hacia arriba, siempre, en una sola función.
 
-| Valor      | Resultado                                             |
-| ---------- | ----------------------------------------------------- |
-| 113.636,36 | 113.636                                               |
-| 113.636,50 | 113.637                                               |
-| 113.636,64 | 113.637                                               |
-| −0,5       | 0 (se redondea hacia el cero para importes negativos) |
+| Valor      | Resultado                                                                                                |
+| ---------- | -------------------------------------------------------------------------------------------------------- |
+| 113.636,36 | 113.636                                                                                                  |
+| 113.636,50 | 113.637                                                                                                  |
+| 113.636,64 | 113.637                                                                                                  |
+| −0,5       | 0 (media unidad hacia +infinito — en esta mitad coincide con «hacia el cero», pero no es la misma regla) |
 
 ### RN-DIN-03 · Suma entre monedas
 
@@ -111,13 +111,13 @@ El tipo de cambio es el **real de la recepción**, no el estimado de la orden de
 
 Métodos disponibles: `by_value`, `by_unit`, `by_volume`, `manual`. El método usado se persiste en la recepción para que el costo sea reproducible.
 
+Los tres métodos proporcionales (`by_value`, `by_unit`, `by_volume`) reparten con el **mismo algoritmo: el método del mayor resto** (`Money.allocate`, `packages/domain/src/shared/money.ts` — ver `docs/domain-contracts.md` §3.1). Lo único que cambia entre ellos es de dónde sale el peso de cada línea — valor, cantidad o volumen —, nunca el criterio de desempate. Un solo algoritmo de reparto en todo el sistema, ya probado con pruebas de propiedades.
+
 **`by_value`** (predeterminado): cada línea recibe flete en proporción a su valor.
 
 ```
 flete_línea = round_pyg(flete_total × (valor_línea / valor_total))
 ```
-
-La diferencia de redondeo se imputa a la línea de mayor valor.
 
 **Ejemplo.** Flete Gs. 300.000 sobre tres líneas de 1.000.000, 500.000 y 200.000:
 
@@ -127,6 +127,20 @@ Línea B: 300.000 × (  500.000/1.700.000) =  88.235
 Línea C: 300.000 × (  200.000/1.700.000) =  35.294
 Suma = 300.000  →  sin ajuste
 ```
+
+Este ejemplo **no** distingue el mayor resto de un criterio distinto ("la diferencia va a la línea de mayor valor"): en los dos casos el ajuste termina en la línea A, así que da lo mismo cuál de los dos se use. **Contraejemplo que sí distingue:** dos líneas de peso 60 y 40, flete Gs. 7.
+
+```
+Piso:         60 → 4,2 → 4      40 → 2,8 → 2      (suma de pisos = 6, falta 1)
+Mayor resto:  resto de A = 0,2  resto de B = 0,8   → el 1 que falta va a B → 4 / 3
+Mayor valor:  A es la línea más grande              → el 1 que falta va a A → 5 / 2
+```
+
+Este documento usa **mayor resto**: `by_value` sobre 60/40 con flete 7 da `4 / 3`, no `5 / 2`. "Mayor valor" no es otro nombre para el mismo resultado: sesga sistemáticamente el redondeo hacia la línea más cara, recepción tras recepción — quien más paga, más carga. Una versión anterior de esta regla decía "la diferencia de redondeo se imputa a la línea de mayor valor"; fue un atajo al redactar el ejemplo de arriba, donde por casualidad coincidía con el mayor resto, no una decisión meditada. Se corrige acá: no hay caso especial por método, `Money.allocate` decide en los tres, sin sesgo y de forma determinística.
+
+`manual` no prorratea nada: el operador ya fijó el flete de cada línea (`manualAmount`, `docs/domain-contracts.md` §6.4); la función solo valida que la suma coincida con el flete total y falla si no coincide. Ajustar esos montos por detrás volvería poco confiable un costeo que el operador declaró a propósito.
+
+> **¿Por qué RN-IVA-03 sí imputa a una línea fija (la última de la tasa) y esto no es incoherente con lo anterior?** Ahí el redondeo se resuelve a **nivel de documento** (RN-IVA-02) porque es lo que valida el ente fiscal: una regla posicional, trivial de explicar y auditar frente a un contador, importa más que la ausencia de sesgo. El flete no tiene una autoridad externa que exija una posición fija — ahí manda el criterio técnico (mayor resto, sin sesgo), no uno regulatorio. Son dos reglas distintas a propósito, no una inconsistencia entre RN-IVA-03 y RN-COS-02.
 
 ### RN-COS-03 · Costo unitario
 

@@ -288,6 +288,30 @@ export interface CostLayer {
 export function totalCost(layers: readonly CostLayer[]): Money;
 ```
 
+**Costo puesto de una recepción** (RN-COS-01, RN-COS-03; `procurement/landedCost.ts`, WP-A05):
+
+```ts
+export interface LandedCostComponents {
+  /** Precio del proveedor, en la moneda extranjera de la recepción. */
+  supplierPrice: Money;
+  freight?: Money;
+  customsClearance?: Money;
+  /** Incluye impuestos/aranceles y comisiones — GLOSARIO.md "Costo puesto / landed cost" — hasta que el motor de posteo (Bloque H) necesite cuentas contables separadas. */
+  other?: Money;
+}
+
+/** RN-COS-01 · (precio + flete + despacho + otros) × fx REAL de la recepción, sumado en la moneda extranjera y convertido una sola vez. */
+export function computeLandedCost(input: {
+  components: LandedCostComponents;
+  fxRateToPyg: number;
+}): Money;
+
+/** RN-COS-03 · costo puesto / cantidad inicial del lote. */
+export function computeUnitLandedCost(landedCostPyg: Money, qtyInitial: Quantity): Money;
+```
+
+Todos los componentes de `LandedCostComponents` deben compartir moneda con `supplierPrice`; mezclar monedas lanza `CurrencyMismatchError` (RN-DIN-03). `fxRateToPyg` no positivo/finito o `qtyInitial` no positivo lanzan `InvalidLandedCostInputError` — son argumentos fuera de rango (§4.2), no un fallo que el negocio contemple.
+
 ### 6.2 Fraccionamiento
 
 ```ts
@@ -369,11 +393,22 @@ export interface DocumentVatBreakdown {
 export function allocateFreight(input: {
   freight: Money;
   method: FreightMethod;
-  lines: readonly { id: string; value: Money; qty: Quantity; volume?: number }[];
+  lines: readonly {
+    id: string;
+    value: Money;
+    qty: Quantity;
+    volume?: number;
+    /** Requerido si `method` es `"manual"`; ignorado en los demás. */
+    manualAmount?: Money;
+  }[];
 }): Result<ReadonlyMap<string, Money>, FreightError>;
 ```
 
-Usa `Money.allocate` internamente: la suma de las partes es exactamente el flete total, siempre.
+`by_value`, `by_unit` y `by_volume` reparten con **el mismo algoritmo — `Money.allocate`** (§3.1): la suma de las partes es exactamente el flete total, siempre, sin caso especial por método. Lo único que cambia es el peso que cada uno le pasa a `allocate` — `value.minor`, `qty.value` o `volume`, respectivamente —, y ese peso es la **magnitud cruda de la línea**, nunca una proporción ya calculada: `Money.allocate` admite hasta 6 decimales por peso (ver su JSDoc en `shared/money.ts`), así que una proporción periódica (`1/3`) lo haría fallar donde la magnitud cruda no.
+
+Cada método proporcional valida solo lo que su propio peso necesita antes de repartir: `by_value` exige que todas las líneas compartan `value.currency` (`LINE_CURRENCY_MISMATCH` si no — RN-DIN-03, la magnitud no es comparable entre monedas distintas); `by_unit` exige que todas compartan `qty.uom` (`LINE_UOM_MISMATCH` si no — ADR-009); `by_volume` exige que todas traigan `volume` (`MISSING_VOLUME` si no). Un total de pesos en cero (todas las líneas en cero) es `ZERO_TOTAL_WEIGHT`, no una excepción de `Money.allocate`: es un dato de negocio posible, no un bug.
+
+`manual` no prorratea: el llamador ya decidió `manualAmount` para cada línea; `allocateFreight` solo valida que la suma de esos montos sea igual a `freight` y devuelve `FreightError` si no coincide — no ajusta nada por detrás. Ver RN-COS-02.
 
 ### 6.5 Máquinas de estado
 

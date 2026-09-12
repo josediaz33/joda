@@ -145,11 +145,13 @@ El pedido al proveedor. Máquina de estados: `draft → pending_approval → app
 
 ### Costo puesto / landed cost (`landed_cost_pyg`)
 
-Lo que realmente cuesta la mercadería en Encarnación: precio + flete + despacho + impuestos + comisiones, con el **FX real de esa recepción**, no el estimado de la orden. Es lo que se usa para calcular márgenes.
+Lo que realmente cuesta la mercadería en Encarnación: precio (`supplierPrice`) + flete (`freight`) + despacho (`customsClearance`) + impuestos y comisiones (`other`), con el **FX real de esa recepción**, no el estimado de la orden. Es lo que se usa para calcular márgenes. Impuestos y comisiones no tienen campo propio — van dentro de `other` hasta que el motor de posteo (Bloque H) necesite distinguirlos por cuenta contable.
+
+`computeLandedCost` (`packages/domain/src/procurement/landedCost.ts`) asume una sola moneda extranjera por recepción: todos los componentes tienen que compartir moneda con `supplierPrice`. En una importación real el despacho, los aranceles y el despachante se pagan en guaraníes mientras el proveedor cobra en USD/BRL — hoy eso se resuelve convirtiendo esos gastos a la moneda de la recepción **antes** de pasarlos a `computeLandedCost` (ver la limitación conocida en `docs/backlog.md`, nota de WP-A05).
 
 ### Prorrateo de flete
 
-Distribución del flete entre las líneas de una recepción. Métodos: `by_value`, `by_unit`, `by_volume`, `manual`. El criterio elegido se guarda para que el costo sea reproducible.
+Distribución del flete entre las líneas de una recepción. Métodos: `by_value`, `by_unit`, `by_volume`, `manual`. El criterio elegido se guarda para que el costo sea reproducible. En `manual` el operador fija el flete de cada línea a mano (`manualAmount`) y el sistema solo valida que la suma cierre contra el flete total — no reparte nada.
 
 ### Snapshot de FX (`fx_rate_to_pyg`)
 

@@ -284,6 +284,11 @@ Catálogo de los patrones efectivamente usados. **Usá estos; no introduzcas otr
 `Money`, `Quantity`, `Percentage`. Encapsulan una regla (no sumar monedas distintas) que un tipo primitivo no puede expresar.
 **Dónde:** `packages/domain/src/shared/`.
 
+### `Result<T, E>` para fallos de negocio
+
+`{ ok: true; value } | { ok: false; error }` (`shared/result.ts`, `domain-contracts.md` §4.1) para lo que el negocio contempla — nunca para un bug del llamador, que se lanza sin capturar (§4.2). El `E` de cada módulo es una unión de objetos planos con `code` (no una jerarquía de clases como `DomainError`): nadie hace `throw` de un valor de `Result`, así que no necesita la maquinaria de `Error`, y un objeto plano se compara con `toEqual` en los tests sin depender de un mensaje de texto.
+**Dónde:** primer ejemplo real, `procurement/freight.ts::allocateFreight` (`FreightError`, WP-A05) — usalo como precedente antes de inventar una forma distinta para el próximo módulo.
+
 ### Puerto y adaptador
 
 El dominio define la interfaz; la infraestructura la implementa. Permite arrancar con un adaptador manual y cambiarlo sin tocar el núcleo.
