@@ -202,7 +202,7 @@ availability.
 Criterio de aceptación: el caso Layton completo da COGS 131.210, desglosado
 en 119.720 de líquido, 4.190 de merma y 7.300 de insumos. La disponibilidad
 con 114,65 ml de granel y decant de 10 ml al 2% da 11 unidades.
-Los casos borde 1 a 5 del catálogo de domain-rules.md con test cada uno.
+Los casos borde 1 a 4 del catálogo de domain-rules.md con test cada uno.
 
 TRAMPAS DE ESTA TAREA — es la parte más delicada del sistema:
 · El decant tiene DOS momentos. planDecant calcula la reserva;
@@ -214,6 +214,10 @@ TRAMPAS DE ESTA TAREA — es la parte más delicada del sistema:
   más etiqueta. Si el COGS no incluye insumos, el margen está mal.
 · La disponibilidad es el mínimo entre lo que da el líquido y lo que dan
   los insumos.
+· El caso borde 5 (abrir un frasco ya abierto) NO es de decant/: es la
+  conversión de apertura de lote, RN-LOT-02 y ADR-009, y vive en
+  inventory/lotOpening.ts. Lo cubre WP-A13. Abrir un frasco no es
+  fraccionarlo.
 
 Alcance: solo decant/. Un PR.
 ```
@@ -234,7 +238,10 @@ Objetivo: esqueleto de los tres apps (`storefront`, `admin`, `api`) con un
 "hola mundo" cada uno, y el pipeline de CI corriendo sobre eso.
 
 Criterio de aceptación: `pnpm build` produce los tres artefactos; el CI
-corre en un PR.
+corre en un PR; con el pipeline ya existente, queda evaluado con José si
+conviene GitHub Pro y activar `required_status_checks` del lado del
+servidor con los nombres de los jobs (hoy `main` solo tiene el hook local
+`pre-push`, ver CONTRIBUTING.md §10).
 
 TRAMPAS DE ESTA TAREA:
 · Esto está vencido, no es una tarea más: sin pipeline, siete PR ya se
@@ -247,13 +254,13 @@ TRAMPAS DE ESTA TAREA:
   backlog ya trae el workaround verificado, no lo redescubras de cero.
 · No incluye Lighthouse CI: eso es WP-G02, posterior al storefront. Acá
   solo typecheck, lint, `format:check`, test y build.
+· GitHub Pro es una decisión de cuenta y de costo, no del agente: dejala
+  evaluada y propuesta, no activada por tu cuenta.
 
 Alcance: los tres jobs de CI (typecheck+lint+format:check, test, build)
-sobre el esqueleto de los tres apps. Al terminar, evaluá con José si
-conviene GitHub Pro y activar `required_status_checks` del lado del
-servidor con los nombres de los jobs — es una decisión de cuenta, no del
-agente (CONTRIBUTING.md §10, hoy `main` solo tiene el hook local
-`pre-push`). Si el alcance crece, pará y consultá.
+sobre el esqueleto de los tres apps, más la evaluación de GitHub Pro —
+activar `required_status_checks` en sí queda para después de que José lo
+confirme, no es parte de esta sesión. Si el alcance crece, pará y consultá.
 ```
 
 ---
@@ -545,13 +552,17 @@ Excepción a la regla de un paquete por sesión: estos tres son incorporación, 
 ```
 Tomá WP-B01, WP-B02 y WP-B03 del backlog.
 
-Leé primero: packages/db/README.md, docs/data-model.md, ADR-018.
+Leé primero: packages/db/README.md, docs/data-model.md, ADR-018,
+docs/security-spec.md (§2.1 Matriz de roles).
 
 Objetivo: incorporar las migraciones ya validadas al flujo del repositorio,
 con los scripts db:migrate, db:seed, db:reset, db:test y db:pull.
 
-Criterio de aceptación: `pnpm db:reset` desde cero sin errores.
-`pnpm db:test` con 18/18 invariantes en verde, corriendo en CI.
+Criterio de aceptación: `pnpm db:reset` desde cero sin errores. `pnpm
+db:seed` idempotente, con la matriz de roles del seed (`owner`, `manager`,
+`vendedor`, `deposito`) coincidiendo exactamente con la de
+docs/security-spec.md §2.1. `pnpm db:test` con 18/18 invariantes en verde,
+corriendo en CI.
 
 TRAMPAS DE ESTA TAREA:
 · NUNCA corras `prisma migrate dev`. El esquema es SQL escrito a mano;
@@ -560,6 +571,9 @@ TRAMPAS DE ESTA TAREA:
   y sus 18 invariantes probados. Si algo te parece mejorable, decilo, no
   lo cambies.
 · El orden de las migraciones importa y está en el nombre del archivo.
+· `db:seed` tiene que poder correrse más de una vez sin duplicar filas ni
+  fallar por choque de clave — "idempotente" es parte del criterio de
+  aceptación, no un detalle de implementación.
 
 Alcance: incorporación e integración con CI. Sin cambios al esquema.
 ```
@@ -614,7 +628,8 @@ actual. Los tokens se DERIVAN de eso, no se inventan.
 Criterio de aceptación: entre 4 y 6 colores base con nombre y hexadecimal,
 dos tipografías como máximo con roles distintos, una escala tipográfica y
 una de espaciado, y un radio por jerarquía. Contraste AA verificado en cada
-par texto/fondo, con los números.
+par texto/fondo, con los números. El archivo es consumible desde
+`apps/storefront` y `apps/admin` por igual, sin nada específico de uno solo.
 
 TRAMPAS DE ESTA TAREA:
 · NO produzcas ninguno de los defaults de frontend-spec.md §3.3: fondo crema
