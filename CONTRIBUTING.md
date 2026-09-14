@@ -54,6 +54,12 @@ push origin main` por costumbre.
 
 ## 2. Ramas
 
+La rama se crea **antes de tocar el primer archivo, nunca al terminar**. No es una preferencia de estilo — tres motivos concretos:
+
+- **Trabajar sobre `main` deja el trabajo sin punto de retorno si la sesión se corta.** No hay commit al que volver, solo un árbol de trabajo sucio que alguien tiene que reconstruir o descartar.
+- **El hook `pre-push` (§1) recién avisa cuando ya querés subir el cambio, no mientras trabajás.** Para entonces ya podrías tener horas de trabajo hechas sobre la rama equivocada.
+- **La revisión cruzada (§4.3) necesita `git diff main...rama`, que no existe hasta que hay rama.** Sin rama, no hay contra qué diffear.
+
 ```
 main                    protegida · siempre desplegable
 feat/<área>-<tema>      funcionalidad nueva
@@ -157,6 +163,7 @@ Prettier decide el formato. **No se discute formato en revisiones.**
 
 Una tarea está terminada cuando **todas** se cumplen:
 
+- [ ] El trabajo se hizo en una rama propia creada antes de empezar, no sobre `main`.
 - [ ] El comportamiento pedido funciona, incluidos los casos borde documentados.
 - [ ] `typecheck`, `lint` y `test` en verde localmente y en el CI.
 - [ ] Cobertura del dominio dentro de los umbrales de `testing-strategy.md`.

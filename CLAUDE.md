@@ -146,6 +146,7 @@ No des una tarea por terminada sin esto:
 
 ## Cómo trabajar
 
+- **Toda tarea empieza creando la rama. Nunca trabajes sobre `main`.**
 - **Preguntá antes de asumir una regla de negocio.** Este dominio tiene reglas contraintuitivas (la merma tiene tres componentes, la seña es pasivo, el frasco abierto no se vende sellado). Si `docs/domain-rules.md` no la cubre, preguntá en lugar de inventar. Una regla inventada que parece razonable es peor que una pregunta.
 - **Alcance acotado.** Una tarea, un PR. Si mientras trabajás encontrás otro problema, anotalo y seguí; no lo arregles de paso.
 - **No refactorices lo que no pediste tocar.**

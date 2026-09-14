@@ -8,9 +8,12 @@ Cómo avanzar el proyecto sesión por sesión después del prompt maestro. Cada 
 
 ## 1. Anatomía de un buen prompt de tarea
 
-`CLAUDE.md` se carga solo en cada sesión y ya lleva las reglas permanentes. El prompt de la tarea solo tiene que aportar cinco cosas:
+El punto 0 va primero, y va aparte de los otros cinco, porque es lo único de toda la lista que hay que hacer ANTES de leer siquiera la documentación: no depende de qué WP es, no depende de qué dice `CLAUDE.md`, no depende de nada — se hace primero o se termina trabajando sobre `main` (ver CONTRIBUTING.md §2 sobre por qué eso sale caro).
+
+`CLAUDE.md` se carga solo en cada sesión y ya lleva las reglas permanentes. El prompt de la tarea solo tiene que aportar seis cosas:
 
 ```
+0. RAMA          crearla antes de tocar cualquier archivo
 1. QUÉ LEER      los documentos específicos del área (CLAUDE.md no los carga)
 2. QUÉ HACER     el identificador del paquete, no una descripción libre
 3. CUÁNDO ESTÁ   el criterio de aceptación, repetido explícitamente
@@ -35,6 +38,8 @@ El `PROMPT_MAESTRO.md`. Solo estructura, colocación de documentos y commit inic
 ### Sesión 2 — WP-A01 · Monorepo base
 
 ```
+Antes de tocar nada: git checkout -b feat/a01-monorepo-base
+
 Tomá WP-A01 del backlog.
 
 Leé primero: CLAUDE.md, CONTRIBUTING.md, docs/engineering-principles.md,
@@ -63,6 +68,8 @@ del esqueleto. Si el alcance crece, pará y consultá.
 ### Sesión 3 — WP-A03 · Objetos de valor
 
 ```
+Antes de tocar nada: git checkout -b feat/a03-domain-value-objects
+
 Tomá WP-A03 del backlog.
 
 Leé primero: docs/domain-contracts.md (secciones 1, 3 y 4),
@@ -92,6 +99,8 @@ Alcance: solo shared/. Nada de costeo ni de IVA todavía.
 ### Sesión 4 — WP-A04 · IVA
 
 ```
+Antes de tocar nada: git checkout -b feat/a04-tax-vat
+
 Tomá WP-A04 del backlog.
 
 Leé primero: docs/domain-rules.md (RN-IVA completo), docs/domain-contracts.md
@@ -120,6 +129,8 @@ Alcance: solo tax/. Un PR.
 ### Sesión 5 — WP-A05 · Costo puesto y flete
 
 ```
+Antes de tocar nada: git checkout -b feat/a05-procurement-landed-cost
+
 Tomá WP-A05 del backlog.
 
 Leé primero: docs/domain-rules.md (RN-COS-01 a RN-COS-03),
@@ -147,6 +158,8 @@ Alcance: solo procurement/. No toques inventario todavía.
 ### Sesión 6 — WP-A06 · Selección de lotes y capas de costo
 
 ```
+Antes de tocar nada: git checkout -b feat/a06-inventory-allocation
+
 Tomá WP-A06 del backlog.
 
 Leé primero: docs/domain-rules.md (RN-COS-04, RN-COS-05, RN-LOT-05),
@@ -266,6 +279,8 @@ Alcance: solo este test.
 El primer paquete de frontend merece su propio prompt porque es donde un agente, sin instrucciones, produce la estética genérica.
 
 ```
+Antes de tocar nada: git checkout -b feat/e01-design-tokens
+
 Tomá WP-E01 del backlog.
 
 Leé primero: docs/frontend-spec.md COMPLETO, ADR-023, ADR-003.
@@ -301,6 +316,8 @@ El paso final —plan antes que código— es el que más diferencia hace. Un ag
 ### Sesión de ejemplo — WP-G03 · URLs y facetas
 
 ```
+Antes de tocar nada: git checkout -b feat/g03-storefront-urls-facets
+
 Tomá WP-G03 del backlog.
 
 Leé primero: docs/frontend-spec.md §6 completo, docs/data-model.md §5.
@@ -328,6 +345,8 @@ filtros es WP-G04.
 ## 3. Plantilla para el resto
 
 ```
+Antes de tocar nada: git checkout -b feat/<área>-<tema>
+
 Tomá WP-<id> del backlog.
 
 Leé primero: .claude/rules/<área>.md y <documentos del área>.
@@ -375,6 +394,9 @@ uno por uno, con la salida real de los comandos.
 
 Después revisá la lista de docs/engineering-principles.md
 "Antes de abrir un PR" y decime honestamente cuáles no cumplís.
+
+Confirmá también que el trabajo está en una rama propia, creada antes
+de empezar, y commiteado — no suelto en el árbol de trabajo sobre main.
 
 Si algo no está, no lo arregles todavía: listalo primero.
 ```
