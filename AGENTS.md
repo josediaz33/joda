@@ -44,6 +44,14 @@ Además, `.claude/rules/` contiene reglas con alcance por ruta que se cargan sol
 | `.claude/rules/contracts.md` | `packages/contracts/**/*.ts`                                                      | Zod `.strict()` en todo esquema, dinero como `string` (nunca número), DTOs públicos y administrativos como esquemas distintos con su test de claves prohibidas.                                                         |
 | `.claude/rules/testing.md`   | `**/*.test.ts`, `**/*.test.tsx`, `**/*.spec.ts`, `e2e/**`, `packages/db/tests/**` | Cada `describe` cita la regla (`RN-XXX-nn`) que verifica, sin lógica dentro del test, determinismo (reloj e ids inyectados), integración con Postgres real vía Testcontainers.                                          |
 
+## Herramientas por agente
+
+- **Claude Code** carga solo `AGENTS.md` (vía el import de `CLAUDE.md`) y los archivos de `.claude/rules/` que coincidan por ruta, y tiene skills, subagentes y hooks configurados en `.claude/`.
+- **Codex** carga solo `AGENTS.md`. No descubre `.claude/skills/`, `.claude/agents/`, `.claude/rules/` ni los hooks. Todo lo que necesite leer hay que nombrarlo explícitamente en el prompt.
+- **Los guardas mecánicos** —prettier automático, bloqueo de `prisma migrate`, bloqueo de edición de migraciones aplicadas— **no protegen a Codex.** Los hooks de git (`commit-msg`, `pre-push`) sí, porque son de git y no del agente.
+
+Esa última línea es la importante: quien trabaje con Codex tiene que saber que las reglas que en Claude Code son mecánicas, ahí vuelven a ser de confianza.
+
 ---
 
 ## Estructura del repositorio
