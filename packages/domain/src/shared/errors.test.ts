@@ -3,6 +3,7 @@ import {
   CurrencyMismatchError,
   DomainError,
   InvalidAllocationError,
+  InvalidAllocationRequestError,
   InvalidMoneyAmountError,
   InvalidPercentageError,
   InvalidQuantityError,
@@ -49,5 +50,12 @@ describe("jerarquía de errores de dominio — docs/domain-contracts.md §4.2", 
     expect(new InvalidMoneyAmountError("x").code).toBe("INVALID_MONEY_AMOUNT");
     expect(new InvalidAllocationError("x").code).toBe("INVALID_ALLOCATION");
     expect(new InvalidVatDocumentError("x").code).toBe("INVALID_VAT_DOCUMENT");
+  });
+
+  it("InvalidAllocationRequestError lleva su propio código (RN-COS-04)", () => {
+    const error = new InvalidAllocationRequestError("x");
+
+    expect(error).toBeInstanceOf(DomainError);
+    expect(error.code).toBe("INVALID_ALLOCATION_REQUEST");
   });
 });

@@ -1,7 +1,7 @@
 import { defineConfig } from "vitest/config";
 
-// Umbral de cobertura de shared/, tax/ y procurement/ (100% líneas y ramas —
-// WP-A03/A04/A05, ver docs/testing-strategy.md §2.1 y
+// Umbral de cobertura de shared/, tax/, procurement/ e inventory/ (100%
+// líneas y ramas — WP-A03/A04/A05/A06, ver docs/testing-strategy.md §2.1 y
 // docs/domain-contracts.md §8). Los barrels (index.ts) quedan afuera: son
 // solo re-exports, sin lógica que cubrir.
 export default defineConfig({
@@ -9,11 +9,17 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reporter: ["text", "html"],
-      include: ["src/shared/**/*.ts", "src/tax/**/*.ts", "src/procurement/**/*.ts"],
+      include: [
+        "src/shared/**/*.ts",
+        "src/tax/**/*.ts",
+        "src/procurement/**/*.ts",
+        "src/inventory/**/*.ts",
+      ],
       exclude: [
         "src/shared/index.ts",
         "src/tax/index.ts",
         "src/procurement/index.ts",
+        "src/inventory/index.ts",
         "**/*.test.ts",
       ],
       thresholds: {
