@@ -213,7 +213,9 @@ Según `allocation_policy` de la variante:
 | `serial` | Se elige la unidad serializada explícitamente               |
 | `manual` | El operador elige el lote                                   |
 
-Ante empate, desempata el `id` ascendente. **El orden de bloqueo siempre es `lot_id` ascendente**, para evitar interbloqueos en pedidos multi-línea.
+Ante empate, desempata el `id` ascendente.
+
+**El orden de bloqueo es una propiedad de la API, no de la política de consumo.** Cuando una línea de venta necesita más de un lote, la API toma el `SELECT ... FOR UPDATE` de esos lotes siempre en `id` ascendente, para evitar interbloqueos entre pedidos multi-línea concurrentes — sin importar qué política decidió cuánto sale de cada uno: `fifo` consume del más antiguo primero y `fefo` del que vence antes, pero eso solo decide las cantidades, nunca el orden de bloqueo. Por la misma razón, la función de dominio que arma las capas de costo (`allocateFromLots`, RN-COS-04) devuelve el resultado ordenado por `id` ascendente, aunque haya consumido los lotes en otro orden — es lo que la API bloquea, en el mismo orden en que lo recibe.
 
 ---
 

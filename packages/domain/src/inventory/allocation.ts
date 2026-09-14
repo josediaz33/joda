@@ -1,7 +1,9 @@
 // Selección de lotes por política (RN-LOT-05; docs/domain-contracts.md
 // §6.1). Esta función decide de QUÉ lotes conviene consumir primero; no
 // decide CUÁNTO se consume de cada uno ni arma las capas de costo — eso es
-// costing.ts (RN-COS-04), que usa el orden que esta función produce.
+// costing.ts (RN-COS-04), que usa el orden que esta función produce para
+// decidir cuánto sale de cada lote, pero devuelve el resultado ordenado
+// por id ascendente (RN-LOT-05, orden de bloqueo), no en este orden.
 import type { Money } from "../shared/money.js";
 import type { Quantity } from "../shared/quantity.js";
 
@@ -71,10 +73,12 @@ function compareByExpiryAt(a: LotSnapshot, b: LotSnapshot): number {
  *   que quedaron, y para eso usa el mismo desempate universal, id
  *   ascendente, en vez de inventar un criterio que RN-LOT-05 no da.
  *
- * Esto NO es todavía el orden de bloqueo final (RN-LOT-05: "el orden de
- * bloqueo siempre es lot_id ascendente") — ese orden lo fija
- * `allocateFromLots` (costing.ts) sobre las capas ya construidas,
- * independiente de cuál política decidió las cantidades.
+ * Esto NO es todavía el orden de bloqueo final. RN-LOT-05 es explícito en
+ * que ese orden es una propiedad de la API (el `SELECT ... FOR UPDATE`
+ * siempre en id ascendente, para evitar interbloqueos en pedidos
+ * multi-línea), no de la política de consumo — lo fija `allocateFromLots`
+ * (costing.ts) sobre las capas ya construidas, independiente de cuál
+ * política decidió las cantidades.
  */
 export function selectLotsByPolicy(
   lots: readonly LotSnapshot[],

@@ -147,4 +147,24 @@ describe("pureza de packages/domain (restricción mecánica, no convención)", (
     },
     ESLINT_COLD_START_TIMEOUT,
   );
+
+  // Caso simétrico del de arriba, para "Date" en vez de un import externo:
+  // sin este test, nada fija que la excepción de no-restricted-globals para
+  // *.test.ts (packages/config/eslint/index.js) realmente PERMITE lo que
+  // dice permitir — solo hay cobertura de que Date sigue prohibido en
+  // producción (el primer test de este describe). Si alguien angosta mal
+  // ese patrón, un fixture con receivedAt/expiryAt (LotSnapshot,
+  // inventory/allocation.ts) deja de compilar por lint y ningún test lo
+  // explica.
+  it(
+    "permite Date en un archivo *.test.ts, junto con un import externo — la excepción de no-restricted-globals para tests",
+    () => {
+      const messages = lintAsDomainTestFile(
+        'import { describe } from "vitest";\nvoid describe;\nconst receivedAt = new Date("2026-01-01T00:00:00Z");\nvoid receivedAt;\n',
+      );
+
+      expect(messages).toHaveLength(0);
+    },
+    ESLINT_COLD_START_TIMEOUT,
+  );
 });

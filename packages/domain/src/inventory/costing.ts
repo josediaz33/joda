@@ -52,10 +52,10 @@ function takeFrom(remaining: Quantity, lot: LotSnapshot): Quantity {
  * 2.800.000 + 1.550.000 = 4.350.000, no `3 × promedio`.
  *
  * El orden de las capas devueltas es SIEMPRE lot id ascendente,
- * independiente del orden en que la política decidió consumir — es el
- * orden de bloqueo que usa la API (RN-LOT-05: "el orden de bloqueo
- * siempre es lot_id ascendente, para evitar interbloqueos en pedidos
- * multi-línea") y tiene que ser determinístico sin importar la política.
+ * independiente del orden en que la política decidió consumir. RN-LOT-05
+ * es explícito en que el orden de bloqueo es una propiedad de la API —el
+ * `SELECT ... FOR UPDATE` siempre en id ascendente, para evitar
+ * interbloqueos en pedidos multi-línea—, no de la política de consumo:
  * fifo consume del más antiguo primero, pero eso decide CUÁNTO sale de
  * cada lote, no en qué orden se devuelven ni se bloquean las filas.
  */
