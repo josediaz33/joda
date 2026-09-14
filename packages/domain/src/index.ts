@@ -7,3 +7,4 @@ export * from "./shared/index.js";
 export * from "./tax/index.js";
 export * from "./procurement/index.js";
 export * from "./inventory/index.js";
+export * from "./decant/index.js";
