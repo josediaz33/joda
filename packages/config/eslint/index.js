@@ -122,12 +122,32 @@ export default [
   // que trata **/*.test.ts como un dominio de reglas aparte). Este bloque
   // va DESPUÉS del de arriba a propósito: en flat config, cuando dos
   // bloques matchean el mismo archivo, el de más abajo gana regla por
-  // regla — acá solo se pisa "boundaries/dependencies", no-restricted-*
-  // sigue activo para los tests.
+  // regla — acá solo se pisa "boundaries/dependencies" entero.
   {
     files: ["packages/domain/**/*.test.ts", "packages/domain/vitest.config.ts"],
     rules: {
       "boundaries/dependencies": "off",
+      // "Date" (no fetch/crypto) se exceptúa acá, y solo acá: un fixture
+      // como `new Date("2026-01-01")` es un literal fijo pasado por
+      // parámetro al código bajo prueba, no una lectura del reloj real —
+      // es justo la distinción que traza .claude/rules/testing.md
+      // ("Nada de `new Date()` ... en el código bajo prueba", no en el
+      // fixture que lo alimenta). LotSnapshot.receivedAt/expiryAt
+      // (docs/domain-contracts.md §6.1) son `Date`, así que
+      // inventory/*.test.ts (WP-A06) necesita poder construirlos.
+      "no-restricted-globals": [
+        "error",
+        {
+          name: "fetch",
+          message:
+            "packages/domain no hace I/O de red: el acceso HTTP entra por puerto (docs/engineering-principles.md Parte I·D).",
+        },
+        {
+          name: "crypto",
+          message:
+            "packages/domain no puede generar aleatoriedad: entra por el puerto IdGenerator (docs/engineering-principles.md Parte I·D).",
+        },
+      ],
     },
   },
 ];
