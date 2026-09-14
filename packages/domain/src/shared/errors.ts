@@ -92,3 +92,10 @@ export class InvalidLandedCostInputError extends DomainError {
     super("INVALID_LANDED_COST_INPUT", message);
   }
 }
+
+/** allocateFromLots() con `required` negativo: argumento fuera de rango, no un fallo que el negocio contemple (RN-COS-04). */
+export class InvalidAllocationRequestError extends DomainError {
+  constructor(message: string) {
+    super("INVALID_ALLOCATION_REQUEST", message);
+  }
+}
