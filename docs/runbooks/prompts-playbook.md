@@ -580,7 +580,111 @@ Alcance: incorporación e integración con CI. Sin cambios al esquema.
 
 ---
 
-### Sesión 17 — WP-B06 · Prueba de aislamiento
+### Sesión 17 — WP-B04 · Prisma por introspección
+
+```
+Antes de tocar nada: git checkout -b feat/b04-prisma-introspection
+
+Tomá WP-B04 del backlog.
+
+Leé primero: .claude/rules/database.md, packages/db/README.md (sección
+"Por qué SQL-first y no prisma migrate"), ADR-018.
+
+Objetivo: packages/db/prisma/schema.prisma generado por introspección
+(`npx prisma db pull` + `npx prisma generate`) y commiteado, con el script
+`db:pull` encadenado a `db:migrate`.
+
+Criterio de aceptación: el cliente tipado compila y expone los 61 modelos.
+
+TRAMPAS DE ESTA TAREA:
+· NUNCA `prisma migrate dev`. El esquema es SQL escrito a mano;
+  `schema.prisma` se regenera por introspección con `db:pull` y se
+  commitea — nunca se edita a mano. Ver ADR-018.
+· Si el cliente generado no expone los 61 modelos, el problema está en la
+  introspección o en el `search_path` de la conexión (el esquema vive en
+  `app`, no en `public`), no en el esquema SQL: no "arregles" schema.prisma
+  a mano para que compile, arreglá la conexión con la que corre `db pull`.
+· `db:pull` va encadenado a `db:migrate` en el script, no como paso manual
+  aparte — para que regenerar el cliente no dependa de que alguien se
+  acuerde de correrlo después de cada migración.
+
+Alcance: solo la introspección y el script db:pull. Sin cambios al esquema.
+```
+
+---
+
+### Sesión 18 — WP-B05 · Testcontainers
+
+```
+Antes de tocar nada: git checkout -b feat/b05-testcontainers
+
+Tomá WP-B05 del backlog.
+
+Leé primero: .claude/rules/database.md, .claude/rules/testing.md,
+docs/testing-strategy.md (sección 3, Nivel 2 — Integración).
+
+Objetivo: base Postgres efímera vía Testcontainers, una por corrida de
+tests de integración.
+
+Criterio de aceptación: un test de integración de ejemplo corre en CI en
+menos de 60 s.
+
+TRAMPAS DE ESTA TAREA:
+· Postgres real vía Testcontainers, NUNCA base en memoria ni un simulacro
+  de Prisma — los invariantes (los 18 de packages/db/tests/invariants.sql)
+  viven en PostgreSQL, y un simulacro no los tiene.
+· La base efímera corre migraciones Y seed antes de cada corrida
+  (`runMigrations` + `runSeed`, ver el ejemplo de docs/testing-strategy.md
+  §3), o los tests de permisos y RLS no tienen contra qué correr: necesitan
+  los roles y el plan de cuentas del seed, no una base vacía recién
+  migrada.
+· El objetivo de tiempo es por CORRIDA, no por test: si el ejemplo tarda
+  más de 60 s, sospechá que el contenedor se está recreando por cada test
+  en vez de una vez por corrida completa.
+
+Alcance: la infraestructura de test (el contenedor + un test de ejemplo).
+Los tests de integración de cada módulo se escriben junto con ese módulo.
+```
+
+---
+
+### Sesión 19 — WP-B07 · docker-compose
+
+```
+Antes de tocar nada: git checkout -b feat/b07-docker-compose
+
+Tomá WP-B07 del backlog.
+
+Leé primero: .claude/rules/database.md, CONTRIBUTING.md (§1 Entorno
+local — ya describe el flujo `docker compose up -d` → `pnpm db:reset` →
+`pnpm dev` que este WP tiene que hacer real), packages/db/README.md.
+
+Objetivo: infra/docker/docker-compose.yml con Postgres y Redis para
+desarrollo local.
+
+Criterio de aceptación: arranque completo desde cero (`git clone` →
+`docker compose up -d` → `pnpm db:reset` → `pnpm dev`) en menos de 15
+minutos.
+
+TRAMPAS DE ESTA TAREA:
+· Postgres y Redis, nada más. Versión de Postgres fijada a 16 — la misma
+  contra la que se validó el esquema (packages/db/README.md), no `latest`.
+· El criterio es real, no estimado: cronometrá el arranque completo desde
+  cero (`docker compose down -v` y de nuevo desde el paso 1 de CONTRIBUTING.md
+  §1) y poné el número real en el PR, no una estimación de cuánto "debería"
+  tardar.
+· Volúmenes con NOMBRE, no anónimos. Un `db:reset` corre migraciones sobre
+  la base existente: no debería obligar a recrear el contenedor, y un
+  reinicio de docker-compose no debería perder los datos de Redis entre medio.
+
+Alcance: solo docker-compose.yml y su documentación de uso en
+CONTRIBUTING.md si hace falta ajustarla. Sin scripts de aplicación nuevos
+más allá de lo que ya existe.
+```
+
+---
+
+### Sesión 20 — WP-B06 · Prueba de aislamiento
 
 Merece su propia sesión aunque sea chica, porque es el test que protege toda la capa de seguridad.
 
