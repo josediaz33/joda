@@ -99,3 +99,18 @@ export class InvalidAllocationRequestError extends DomainError {
     super("INVALID_ALLOCATION_REQUEST", message);
   }
 }
+
+/**
+ * Argumento fuera de rango en packages/domain/src/decant/*: `unitsRequested`
+ * no entero o no positivo, `mlPerUnit`/`perUnit` no positivo, o un saldo
+ * restante negativo en `evaluateUnusableResidue`. Mismo criterio que
+ * `InvalidLandedCostInputError`: "argumento fuera de rango" es un bug del
+ * llamador (docs/domain-contracts.md §4.2), no un fallo que el negocio
+ * contemple — a diferencia de granel o insumo insuficiente, que sí lo son
+ * y por eso viajan en `DecantError` (decant/planning.ts), no acá.
+ */
+export class InvalidDecantInputError extends DomainError {
+  constructor(message: string) {
+    super("INVALID_DECANT_INPUT", message);
+  }
+}
