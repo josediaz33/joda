@@ -87,14 +87,22 @@ export interface DecantPlan {
  * trabajo) y decide si SE PUEDE abrir un lote; esta decide si un lote YA
  * ABIERTO sirve como fuente de un decant, que es una pregunta distinta.
  *
- * `open_for_decant` es el único estado en el que un lote de granel existe
- * mientras tiene saldo vendible: RN-LOT-02 lo crea así, y RN-LOT-04 lo pasa
- * a `depleted` recién al agotarse. `quarantine`, `damaged`, `depleted`, o
- * un `available` que en realidad es un sellado sin convertir, no sirven
- * como origen de un decant. Se exporta porque execution.ts necesita la
- * misma validación sobre el mismo campo (mismo criterio que
- * `selectLotsByPolicy` en inventory/allocation.ts, reusado por
- * inventory/costing.ts).
+ * **Incompleta a propósito, no una validación completa sobre otro
+ * criterio.** Descarta lo que claramente NO sirve —`quarantine`, `damaged`,
+ * `depleted`, o un `available` que en realidad es un sellado sin
+ * convertir—, pero `open_for_decant` NO identifica únicamente al lote de
+ * granel: según `packages/db/tests/smoke_business_flow.sql`, al abrir un
+ * frasco el lote sellado PADRE también queda en `open_for_decant` (además
+ * del granel hijo que nace ahí) — es justo por eso que el trigger de la
+ * base (`assert_sealed_lot_not_open`, `packages/db/migrations/0009_invariants.sql`)
+ * necesita `variant_type = 'sealed' AND status = 'open_for_decant'` para
+ * detectar el caso: el status solo no alcanza. `LotSnapshot`
+ * (inventory/allocation.ts) no expone `variantType` ni `uom`, así que esta
+ * función no tiene cómo distinguir hoy el granel hijo del sellado padre
+ * recién abierto — un `LotSnapshot` de ese sellado pasa esta validación sin
+ * deber pasarla. Completarla es WP-A15 (`docs/backlog.md`). Se exporta
+ * porque execution.ts necesita la misma validación, incompleta de la misma
+ * forma, sobre el mismo campo.
  */
 export function assertBulkLotIsDecantable(status: LotStatus): DecantError | undefined {
   if (status !== "open_for_decant") {

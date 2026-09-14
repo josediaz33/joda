@@ -88,6 +88,13 @@ function resolveBomComponent(
   required: { readonly componentId: string; readonly qty: Quantity },
   lot: BomLotSnapshot | undefined,
 ): Result<BomComponentOutcome, DecantError> {
+  // required.qty.minus(required.qty): la forma de obtener un CERO en la
+  // misma unidad que required.qty sin conocerla de antemano — Quantity, a
+  // diferencia de Money, no tiene un Quantity.zero(uom) (evaluar agregarlo
+  // en WP-A12, packages/domain/src/shared/quantity.ts). NO simplificar a
+  // Quantity.units(0): si el componente estuviera medido en 'ml', eso
+  // lanzaría UomMismatchError en el `available.compare(required.qty)` de
+  // abajo en vez de devolver cero.
   const available = lot?.available ?? required.qty.minus(required.qty);
   const hasEnough = lot !== undefined && available.compare(required.qty) >= 0;
 

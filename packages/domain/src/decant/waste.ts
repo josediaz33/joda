@@ -77,5 +77,6 @@ export function evaluateUnusableResidue(input: {
 // obvia, pero seguiría siendo una regla de negocio inventada por este
 // agente, no una tomada del negocio — exactamente lo que CLAUDE.md pide no
 // hacer ("una regla inventada que parece razonable es peor que una
-// pregunta"). No se implementa acá: queda anotado en docs/backlog.md como
-// trabajo pendiente con dueño (nueva WP), no como un olvido silencioso.
+// pregunta"). No se implementa acá: queda declarada como WP-A14 en
+// docs/backlog.md, con su propio criterio de aceptación, no como un olvido
+// silencioso.
