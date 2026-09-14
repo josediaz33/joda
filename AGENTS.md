@@ -33,6 +33,25 @@ Antes de trabajar en un área, leé lo que corresponde. **No inventes decisiones
 
 Además, `.claude/rules/` contiene reglas con alcance por ruta que se cargan solas cuando trabajás con archivos que coincidan. Llevan los no negociables de cada área; la profundidad sigue estando en los documentos de arriba. El nombre del directorio es un resto de cuando solo existía Claude Code — las reglas no son específicas de esa herramienta, aplican igual acá.
 
+**Codex no tiene carga automática por ruta.** Los seis archivos son estos — abrí el que corresponda antes de tocar esa área:
+
+| Archivo                      | Alcance (paths)                                                                   | Qué cubre                                                                                                                                                                                                               |
+| ---------------------------- | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `.claude/rules/domain.md`    | `packages/domain/**/*.ts`                                                         | Pureza mecánica (sin Prisma, React, `fetch`, `Date`, `Math.random`, etc.), `Result` vs. excepción, `Money`/`Quantity` en vez de `number`, dónde vive el redondeo, umbrales de cobertura 100% por módulo.                |
+| `.claude/rules/database.md`  | `packages/db/**`                                                                  | SQL-first: prohibición de `prisma migrate dev` y de editar `schema.prisma` a mano o una migración ya aplicada, `tenant_id` obligatorio en tabla nueva, triggers solo para invariantes, expand/contract.                 |
+| `.claude/rules/api.md`       | `apps/api/**/*.ts`                                                                | Rol `joda_api` (`NOBYPASSRLS`, nunca `service_role` en runtime), `set_config` con tercer parámetro `true`, 404 en vez de 403, capas router/service/repository/domain, bloqueo de lotes en orden ascendente de `lot_id`. |
+| `.claude/rules/frontend.md`  | `apps/storefront/**`, `apps/admin/**`, `packages/ui/**`                           | Server components por defecto y `"use client"` lo más abajo posible, presupuesto de rendimiento, formateo solo desde `packages/ui/format`, stock mostrado como estado, defaults visuales genéricos prohibidos.          |
+| `.claude/rules/contracts.md` | `packages/contracts/**/*.ts`                                                      | Zod `.strict()` en todo esquema, dinero como `string` (nunca número), DTOs públicos y administrativos como esquemas distintos con su test de claves prohibidas.                                                         |
+| `.claude/rules/testing.md`   | `**/*.test.ts`, `**/*.test.tsx`, `**/*.spec.ts`, `e2e/**`, `packages/db/tests/**` | Cada `describe` cita la regla (`RN-XXX-nn`) que verifica, sin lógica dentro del test, determinismo (reloj e ids inyectados), integración con Postgres real vía Testcontainers.                                          |
+
+## Herramientas por agente
+
+- **Claude Code** carga solo `AGENTS.md` (vía el import de `CLAUDE.md`) y los archivos de `.claude/rules/` que coincidan por ruta, y tiene skills, subagentes y hooks configurados en `.claude/`.
+- **Codex** carga solo `AGENTS.md`. No descubre `.claude/skills/`, `.claude/agents/`, `.claude/rules/` ni los hooks. Todo lo que necesite leer hay que nombrarlo explícitamente en el prompt.
+- **Los guardas mecánicos** —prettier automático, bloqueo de `prisma migrate`, bloqueo de edición de migraciones aplicadas— **no protegen a Codex.** Los hooks de git (`commit-msg`, `pre-push`) sí, porque son de git y no del agente.
+
+Esa última línea es la importante: quien trabaje con Codex tiene que saber que las reglas que en Claude Code son mecánicas, ahí vuelven a ser de confianza.
+
 ---
 
 ## Estructura del repositorio

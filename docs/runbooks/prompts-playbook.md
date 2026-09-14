@@ -857,11 +857,27 @@ Decime, en este orden:
 2. ¿Viola alguna regla no negociable de CLAUDE.md o algún ADR? Citá cuál.
 3. ¿Los tests prueban comportamiento o implementación?
 4. ¿Qué no va a entender alguien que lea esto en seis meses?
+5. Verificá las afirmaciones sobre el esquema, los documentos o el
+   comportamiento de terceros que haga el código o el PR. No las des por
+   buenas: abrí packages/db/migrations, los tests SQL y los documentos
+   citados, y confirmá que dicen lo que el PR dice que dicen.
+6. Si el PR declara algo como "anotado en el backlog", "pendiente de otra
+   WP" o "fuera de alcance", verificá que exista realmente, con ID y
+   criterio de aceptación. Un comentario que promete una WP inexistente es
+   peor que un pendiente declarado.
+7. Si algo no se puede verificar con la evidencia disponible, decilo así.
+   No completes con la explicación más plausible.
 
 No arregles nada. Solo reportá.
 ```
 
 Que sea una sesión nueva importa: un agente que acaba de escribir el código está sesgado a validarlo.
+
+El circuito es de una sola vía: el revisor solo reporta. Los hallazgos vuelven
+a la sesión de desarrollo, que es la que tiene la rama y el contexto de por
+qué cada cosa quedó como quedó. Una vez entregado el análisis, la sesión de
+revisión se cierra: dos sesiones opinando sobre el mismo código se
+contradicen.
 
 ### 4.3 Cuando se desvía
 
