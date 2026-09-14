@@ -29,6 +29,8 @@ El punto 4 es el que más rinde. Cada área tiene un error predecible: en dinero
 
 ## 2. Secuencia de arranque
 
+**La numeración es orientativa, no un contrato.** Marca un orden de trabajo razonable, no una promesa de que cada paquete ocupa exactamente una sesión. Si uno termina llevando dos, anotalo como tal (`Sesión 11 y 11b`, por ejemplo) en vez de correr la numeración de todo lo que sigue — renumerar entero por cada ajuste es más trabajo que valor.
+
 ### Sesión 1 — Andamiaje
 
 El `PROMPT_MAESTRO.md`. Solo estructura, colocación de documentos y commit inicial. Sin código.
@@ -200,7 +202,7 @@ availability.
 Criterio de aceptación: el caso Layton completo da COGS 131.210, desglosado
 en 119.720 de líquido, 4.190 de merma y 7.300 de insumos. La disponibilidad
 con 114,65 ml de granel y decant de 10 ml al 2% da 11 unidades.
-Los casos borde 1 a 5 del catálogo de domain-rules.md con test cada uno.
+Los casos borde 1 a 4 del catálogo de domain-rules.md con test cada uno.
 
 TRAMPAS DE ESTA TAREA — es la parte más delicada del sistema:
 · El decant tiene DOS momentos. planDecant calcula la reserva;
@@ -212,26 +214,355 @@ TRAMPAS DE ESTA TAREA — es la parte más delicada del sistema:
   más etiqueta. Si el COGS no incluye insumos, el margen está mal.
 · La disponibilidad es el mínimo entre lo que da el líquido y lo que dan
   los insumos.
+· El caso borde 5 (abrir un frasco ya abierto) NO es de decant/: es la
+  conversión de apertura de lote, RN-LOT-02 y ADR-009, y vive en
+  inventory/lotOpening.ts. Lo cubre WP-A13. Abrir un frasco no es
+  fraccionarlo.
 
 Alcance: solo decant/. Un PR.
 ```
 
 ---
 
-### Sesión 8 — WP-B01 a WP-B03 · Esquema
+### Sesión 8 — WP-A02 · CI
+
+```
+Antes de tocar nada: git checkout -b feat/a02-ci-pipeline
+
+Tomá WP-A02 del backlog.
+
+Leé primero: CONTRIBUTING.md (§1 Hooks de Git, §10 Despliegue),
+docs/backlog.md ("Riesgo conocido para A02", debajo de la tabla del bloque A).
+
+Objetivo: esqueleto de los tres apps (`storefront`, `admin`, `api`) con un
+"hola mundo" cada uno, y el pipeline de CI corriendo sobre eso.
+
+Criterio de aceptación: `pnpm build` produce los tres artefactos; el CI
+corre en un PR; con el pipeline ya existente, queda evaluado con José si
+conviene GitHub Pro y activar `required_status_checks` del lado del
+servidor con los nombres de los jobs (hoy `main` solo tiene el hook local
+`pre-push`, ver CONTRIBUTING.md §10).
+
+TRAMPAS DE ESTA TAREA:
+· Esto está vencido, no es una tarea más: sin pipeline, siete PR ya se
+  verificaron a mano, y así `format:check` quedó roto sin que nadie lo
+  viera y la verificación salió por fuera de `turbo` dos veces.
+· El pipeline corre por `turbo run`, no por binarios sueltos a mano.
+  Si `turbo` no encuentra `pnpm` como ejecutable real en el `PATH` del
+  runner, cualquier job falla con "Unable to find package manager binary"
+  aunque `corepack pnpm <comando>` funcione bien — la nota de riesgo del
+  backlog ya trae el workaround verificado, no lo redescubras de cero.
+· No incluye Lighthouse CI: eso es WP-G02, posterior al storefront. Acá
+  solo typecheck, lint, `format:check`, test y build.
+· GitHub Pro es una decisión de cuenta y de costo, no del agente: dejala
+  evaluada y propuesta, no activada por tu cuenta.
+
+Alcance: los tres jobs de CI (typecheck+lint+format:check, test, build)
+sobre el esqueleto de los tres apps, más la evaluación de GitHub Pro —
+activar `required_status_checks` en sí queda para después de que José lo
+confirme, no es parte de esta sesión. Si el alcance crece, pará y consultá.
+```
+
+---
+
+### Sesión 9 — WP-A13 · Apertura de frasco (`lotOpening`)
+
+```
+Antes de tocar nada: git checkout -b feat/a13-lot-opening
+
+Tomá WP-A13 del backlog.
+
+Leé primero: .claude/rules/domain.md, docs/domain-rules.md (RN-LOT-02,
+RN-LOT-03), ADR-009, GLOSARIO.md (entrada "Apertura de frasco").
+
+Objetivo: packages/domain/src/inventory/lotOpening.ts — la conversión
+sellado → granel al abrir un frasco.
+
+Criterio de aceptación: RN-LOT-02 y RN-LOT-03 con test cada una. El caso
+borde 5 del catálogo de docs/domain-rules.md (abrir un lote ya abierto se
+rechaza) con su propio test.
+
+TRAMPAS DE ESTA TAREA:
+· No es un cambio de estado, es una CONVERSIÓN entre dos lotes (ADR-009):
+  cuatro pasos en una sola transacción — `transfer_out` del sellado,
+  `status → open_for_decant`, alta del lote de granel hijo con
+  `parent_lot_id`, `transfer_in` del granel. No lo colapses en un simple
+  `UPDATE` de estado.
+· El lote sellado padre TAMBIÉN queda en `open_for_decant`, igual que el
+  granel hijo recién nacido — no es un error tuyo, es el resultado
+  correcto de este mismo WP. Los dos lotes van a compartir `status`, y eso
+  es exactamente lo que `LotSnapshot` (`inventory/allocation.ts`) todavía
+  no puede distinguir. No lo arregles acá: es WP-A15, la sesión siguiente.
+· El costo se hereda ÍNTEGRO al granel
+  (`unit_landed_cost_pyg = round_pyg(landed_cost_pyg / nominal_volume_ml)`),
+  no se recalcula desde ningún otro dato.
+
+Alcance: solo lotOpening.ts. La distinción sellado-recién-abierto vs.
+granel en LotSnapshot es WP-A15, no de esta sesión.
+```
+
+---
+
+### Sesión 10 — WP-A15 · Completar la validación de origen del granel
+
+```
+Antes de tocar nada: git checkout -b feat/a15-bulk-lot-origin-validation
+
+Tomá WP-A15 del backlog.
+
+Leé primero: .claude/rules/domain.md, docs/backlog.md (las notas de A07 y
+A15 debajo de la tabla del bloque A — son la especificación real de esta
+tarea), packages/domain/src/decant/planning.ts (`assertBulkLotIsDecantable`
+tal como quedó), packages/db/tests/smoke_business_flow.sql,
+packages/db/migrations/0009_invariants.sql (trigger
+`assert_sealed_lot_not_open`, para ver qué campos usa la base para
+distinguir el caso).
+
+Objetivo: completar `assertBulkLotIsDecantable` (`planning.ts`, compartida
+por `planDecant` y `executeDecant`) para que rechace un `LotSnapshot` de un
+lote SELLADO recién abierto, no solo valide su `status`.
+
+Criterio de aceptación: `LotSnapshot` expone `variantType` y `uom`. Un
+`LotSnapshot` de lote SELLADO en `open_for_decant` es rechazado por
+`planDecant` (y por `executeDecant`). Test con fixtures que cubran: sellado
+en `open_for_decant` (rechazado), granel en `open_for_decant` (aceptado),
+sellado en otro estado (rechazado por status, como ya validaba).
+
+TRAMPAS DE ESTA TAREA:
+· No es un criterio nuevo, es COMPLETAR el que ya existe. No reescribas
+  `assertBulkLotIsDecantable` desde cero ni le cambies el nombre — hoy
+  valida `status`, tiene que seguir validándolo y sumar `variantType`+`uom`.
+· `LotSnapshot` necesita los dos campos nuevos sin romper los call sites
+  que ya la usan desde A06 y A07.
+· El criterio "contra un lote real" no se puede dar por cumplido hoy: no
+  existe ningún lugar que construya un `LotSnapshot` desde una fila real
+  de `inventory_lots` (eso es WP-C11/WP-C13). Con fixtures alcanza para
+  cerrar esta sesión, pero decilo explícitamente en el PR — no se cierra
+  en silencio como si estuviera verificado contra datos reales.
+
+Alcance: solo la validación de origen (`variantType` + `uom`) en
+`assertBulkLotIsDecantable` y el tipo `LotSnapshot`. Nada de C11/C13.
+```
+
+---
+
+### Sesión 11 — WP-A08 · Máquinas de estado
+
+```
+Antes de tocar nada: git checkout -b feat/a08-state-machines
+
+Tomá WP-A08 del backlog.
+
+Leé primero: .claude/rules/domain.md, docs/domain-contracts.md (sección
+6.5, con el ejemplo de orden de compra), docs/domain-rules.md (RN-VTA-02,
+RN-FRA-01), packages/db/migrations/0001_foundation.sql (los enums
+`po_status`, `sale_order_status`, `decant_wo_status`),
+packages/db/migrations/0006_sales.sql (`sale_order_status_history`, pista
+de qué transiciones ya contempla el esquema).
+
+Objetivo: las tres máquinas de estado —orden de compra, pedido de venta,
+orden de fraccionamiento— en packages/domain, como tabla de transición de
+datos.
+
+Criterio de aceptación: transiciones como dato (igual al ejemplo de
+`PURCHASE_ORDER_TRANSITIONS` en docs/domain-contracts.md §6.5). Test
+exhaustivo de la matriz completa: cada transición inválida tiene su propio
+caso, no solo el camino feliz.
+
+TRAMPAS DE ESTA TAREA:
+· docs/domain-contracts.md §6.5 solo da la tabla de orden de compra como
+  ejemplo. Las de `sale_order_status` y `decant_wo_status` NO están
+  escritas en ningún documento como lista de aristas — hay que derivarlas
+  de domain-rules.md y de los enums+historial de las migraciones. Si al
+  armar una transición dudás si es válida (¿un pedido `paid` puede volver
+  a `awaiting_payment`? ¿una orden de fraccionamiento `cancelled` se
+  reactiva?), esa es una regla de negocio que ningún documento cubre —
+  preguntá, no la inventes porque suena razonable.
+· `sales/order.ts` es el mismo archivo que WP-A09 (la sesión siguiente) va
+  a extender con totales. Dejalo en condiciones de que A09 solo agregue
+  funciones, no reescriba la máquina de estados que dejaste acá.
+· Transiciones como DATOS: un `Record<Status, Status[]>` o equivalente, no
+  un `switch` esparcido por el código.
+
+Alcance: las tres máquinas de estado, sin la lógica de qué hacer al entrar
+a cada estado — eso es de otros WP. Un PR.
+```
+
+---
+
+### Sesión 12 — WP-A09 · Ventas
+
+```
+Antes de tocar nada: git checkout -b feat/a09-sales-domain
+
+Tomá WP-A09 del backlog.
+
+Leé primero: .claude/rules/domain.md, docs/domain-rules.md (RN-VTA
+completo, RN-RES completo, RN-SEN completo), docs/domain-contracts.md
+(sección 2, mapa de módulos — `sales/order.ts`, `pricing.ts`,
+`reservation.ts`, `deposit.ts`).
+
+Objetivo: packages/domain/src/sales/ — totales, descuentos, TTL de
+reserva, señas.
+
+Criterio de aceptación: RN-VTA-01, RN-RES-02, RN-SEN-01…04, con test cada
+una.
+
+TRAMPAS DE ESTA TAREA:
+· RN-VTA-01: el total es `subtotal − descuento + envío`, y la base lo
+  impone. No lo recalcules de otra forma aunque el resultado numérico
+  coincida.
+· La seña es pasivo: `applied_pyg + refunded_pyg ≤ amount_pyg` es un
+  INVARIANTE (RN-SEN-02), no una validación opcional que se salta si el
+  caller ya confía en el dato.
+· Los TTL de reserva son la tabla de RN-RES-02 (15 min checkout, 30 min
+  tarjeta, 48 h transferencia, hasta el vencimiento de la seña, hasta 30
+  días la retención manual), no números inventados ni un único TTL genérico.
+· `sales/order.ts` ya trae la máquina de estados de WP-A08 (sesión
+  anterior). No la dupliques ni la reescribas: agregá los totales al
+  mismo archivo.
+· RN-SEN-04: una seña vencida con saldo sin aplicar NO se cancela
+  automáticamente. No agregues esa lógica "para prolijidad" — es una
+  decisión humana, y el dominio solo la deja en condiciones de reportarse.
+
+Alcance: solo sales/. La máquina de estados es WP-A08.
+```
+
+---
+
+### Sesión 13 — WP-A11 · Contracts
+
+```
+Antes de tocar nada: git checkout -b feat/a11-contracts-base
+
+Tomá WP-A11 del backlog.
+
+Leé primero: .claude/rules/contracts.md, docs/api-conventions.md (§3
+Validación, §7 DTOs por audiencia), docs/domain-contracts.md (sección 2,
+mapa de módulos).
+
+Objetivo: packages/contracts — esquemas Zod base (dinero como string, ids,
+paginación) y un procedimiento de ejemplo tipado extremo a extremo.
+
+Criterio de aceptación: un procedimiento de ejemplo tipado extremo a
+extremo compila.
+
+TRAMPAS DE ESTA TAREA:
+· Todo esquema con `.strict()`. Sin eso un campo no declarado
+  (`{ role: 'owner' }`) puede colarse hasta un `update` mal escrito.
+· El dinero viaja como STRING, nunca como número: `"245000"`, no `245000`.
+  Un `bigint` no sobrevive `JSON.stringify` y un `number` grande pierde
+  precisión.
+· DTO público y administrativo son esquemas DISTINTOS, no el mismo con
+  campos opcionales — y el público necesita su propio test que verifique
+  que NO aparece ninguna de las claves prohibidas (`cost`, `landed`,
+  `supplier`, `margin`, `fx_rate`). No declararlas no alcanza si alguien
+  extiende el objeto por descuido más adelante.
+
+Alcance: la base y un ejemplo extremo a extremo. Los DTO de cada módulo se
+arman junto con el WP de ese módulo en el bloque C.
+```
+
+---
+
+### Sesión 14 — WP-A10 · Dataset dorado
+
+```
+Antes de tocar nada: git checkout -b feat/a10-golden-dataset
+
+Tomá WP-A10 del backlog.
+
+Leé primero: docs/domain-contracts.md (sección 8.1), GLOSARIO.md (entrada
+"Dataset dorado"), docs/backlog.md (nota sobre A10, debajo de la tabla del
+bloque A).
+
+Objetivo: packages/domain/test/golden/ con veinte operaciones reales del
+v2 (compras con flete, aperturas de frasco, fraccionamientos, ventas
+mixtas), corriendo en CI.
+
+Criterio de aceptación: corre en CI; cada caso cita su origen (qué
+operación real del v2 lo generó).
+
+TRAMPAS DE ESTA TAREA — esta es la sesión que se frena, no se completa sola:
+· Los valores esperados salen de la operación real del v2 —planillas de
+  costos, ventas históricas—, NO del código nuevo de A04-A09. Si el
+  dataset lo genera el mismo código que va a probar, los tests miden
+  contra sí mismos y no protegen nada.
+· Los veinte números los pone José, no el agente. Armá la estructura (el
+  formato del caso, el runner que lo corre en CI, la cita de origen), pero
+  no completes los valores esperados por tu cuenta aunque el cálculo te
+  cierre.
+· Si un valor esperado no coincide con lo que da el código nuevo, la
+  primera pregunta es cuál de los dos está mal — a veces es el sistema
+  viejo el que tenía el error (ver la nota sobre A10 en docs/backlog.md).
+
+Alcance: estructura + runner + los casos que José vaya confirmando. No
+cierres la sesión completando números por tu cuenta para avanzar: pará y
+pedilos. Ver también §7 más abajo.
+```
+
+---
+
+### Sesión 15 — WP-A12 · Endurecer el lint de pureza en tests
+
+```
+Antes de tocar nada: git checkout -b feat/a12-domain-test-lint-hardening
+
+Tomá WP-A12 del backlog.
+
+Leé primero: .claude/rules/domain.md, .claude/rules/testing.md,
+docs/backlog.md (nota sobre A12, con las tres vías, y la nota sobre
+`Quantity.zero(uom)` para evaluar de paso), packages/config/eslint/index.js.
+
+Objetivo: la excepción de la regla de pureza de packages/domain para
+archivos de test hoy se activa por sufijo de nombre (`*.test.ts`), no por
+contenido ni ubicación. Evaluar y aplicar una de las tres vías del
+backlog, o justificar por escrito por qué ninguna corresponde.
+
+Criterio de aceptación: evaluada y aplicada una de las tres opciones de la
+nota del backlog (acotar a un directorio `test/`, acotar a los globals que
+realmente hacen falta, o documentar cada ampliación con fecha/motivo/WP en
+el propio archivo de config) — o justificado por escrito por qué ninguna
+corresponde.
+
+TRAMPAS DE ESTA TAREA:
+· No es lint por lint: la excepción ya se ensanchó dos veces
+  (`checkInternals` en A03, `Date` en A06) sin registro centralizado de
+  por qué. El riesgo no es un test malicioso — es la erosión acumulada de
+  una regla que existe para ser MECÁNICA, no discrecional.
+· Las tres vías no son excluyentes entre sí. Podés aplicar más de una si
+  tiene sentido, pero decidilo explícitamente, no por default.
+· De paso, evaluá `Quantity.zero(uom)` en `shared/quantity.ts` (nota del
+  backlog): es la solución real al truco de `execution.ts`
+  (`required.qty.minus(required.qty)`) para conseguir una `Quantity` en
+  cero sin arriesgar `UomMismatchError`. Es un método de una línea — no
+  abras un WP nuevo para eso.
+
+Alcance: la config de lint, más `Quantity.zero(uom)` si corresponde. No es
+urgente si el argumento para postergar es sólido, pero sí antes del bloque
+C, cuando se multiplique la cantidad de paquetes que dependen de esta regla.
+```
+
+---
+
+### Sesión 16 — WP-B01 a WP-B03 · Esquema
 
 Excepción a la regla de un paquete por sesión: estos tres son incorporación, no diseño.
 
 ```
 Tomá WP-B01, WP-B02 y WP-B03 del backlog.
 
-Leé primero: packages/db/README.md, docs/data-model.md, ADR-018.
+Leé primero: packages/db/README.md, docs/data-model.md, ADR-018,
+docs/security-spec.md (§2.1 Matriz de roles).
 
 Objetivo: incorporar las migraciones ya validadas al flujo del repositorio,
 con los scripts db:migrate, db:seed, db:reset, db:test y db:pull.
 
-Criterio de aceptación: `pnpm db:reset` desde cero sin errores.
-`pnpm db:test` con 18/18 invariantes en verde, corriendo en CI.
+Criterio de aceptación: `pnpm db:reset` desde cero sin errores. `pnpm
+db:seed` idempotente, con la matriz de roles del seed (`owner`, `manager`,
+`vendedor`, `deposito`) coincidiendo exactamente con la de
+docs/security-spec.md §2.1. `pnpm db:test` con 18/18 invariantes en verde,
+corriendo en CI.
 
 TRAMPAS DE ESTA TAREA:
 · NUNCA corras `prisma migrate dev`. El esquema es SQL escrito a mano;
@@ -240,13 +571,120 @@ TRAMPAS DE ESTA TAREA:
   y sus 18 invariantes probados. Si algo te parece mejorable, decilo, no
   lo cambies.
 · El orden de las migraciones importa y está en el nombre del archivo.
+· `db:seed` tiene que poder correrse más de una vez sin duplicar filas ni
+  fallar por choque de clave — "idempotente" es parte del criterio de
+  aceptación, no un detalle de implementación.
 
 Alcance: incorporación e integración con CI. Sin cambios al esquema.
 ```
 
 ---
 
-### Sesión 9 — WP-B06 · Prueba de aislamiento
+### Sesión 17 — WP-B04 · Prisma por introspección
+
+```
+Antes de tocar nada: git checkout -b feat/b04-prisma-introspection
+
+Tomá WP-B04 del backlog.
+
+Leé primero: .claude/rules/database.md, packages/db/README.md (sección
+"Por qué SQL-first y no prisma migrate"), ADR-018.
+
+Objetivo: packages/db/prisma/schema.prisma generado por introspección
+(`npx prisma db pull` + `npx prisma generate`) y commiteado, con el script
+`db:pull` encadenado a `db:migrate`.
+
+Criterio de aceptación: el cliente tipado compila y expone los 61 modelos.
+
+TRAMPAS DE ESTA TAREA:
+· NUNCA `prisma migrate dev`. El esquema es SQL escrito a mano;
+  `schema.prisma` se regenera por introspección con `db:pull` y se
+  commitea — nunca se edita a mano. Ver ADR-018.
+· Si el cliente generado no expone los 61 modelos, el problema está en la
+  introspección o en el `search_path` de la conexión (el esquema vive en
+  `app`, no en `public`), no en el esquema SQL: no "arregles" schema.prisma
+  a mano para que compile, arreglá la conexión con la que corre `db pull`.
+· `db:pull` va encadenado a `db:migrate` en el script, no como paso manual
+  aparte — para que regenerar el cliente no dependa de que alguien se
+  acuerde de correrlo después de cada migración.
+
+Alcance: solo la introspección y el script db:pull. Sin cambios al esquema.
+```
+
+---
+
+### Sesión 18 — WP-B05 · Testcontainers
+
+```
+Antes de tocar nada: git checkout -b feat/b05-testcontainers
+
+Tomá WP-B05 del backlog.
+
+Leé primero: .claude/rules/database.md, .claude/rules/testing.md,
+docs/testing-strategy.md (sección 3, Nivel 2 — Integración).
+
+Objetivo: base Postgres efímera vía Testcontainers, una por corrida de
+tests de integración.
+
+Criterio de aceptación: un test de integración de ejemplo corre en CI en
+menos de 60 s.
+
+TRAMPAS DE ESTA TAREA:
+· Postgres real vía Testcontainers, NUNCA base en memoria ni un simulacro
+  de Prisma — los invariantes (los 18 de packages/db/tests/invariants.sql)
+  viven en PostgreSQL, y un simulacro no los tiene.
+· La base efímera corre migraciones Y seed antes de cada corrida
+  (`runMigrations` + `runSeed`, ver el ejemplo de docs/testing-strategy.md
+  §3), o los tests de permisos y RLS no tienen contra qué correr: necesitan
+  los roles y el plan de cuentas del seed, no una base vacía recién
+  migrada.
+· El objetivo de tiempo es por CORRIDA, no por test: si el ejemplo tarda
+  más de 60 s, sospechá que el contenedor se está recreando por cada test
+  en vez de una vez por corrida completa.
+
+Alcance: la infraestructura de test (el contenedor + un test de ejemplo).
+Los tests de integración de cada módulo se escriben junto con ese módulo.
+```
+
+---
+
+### Sesión 19 — WP-B07 · docker-compose
+
+```
+Antes de tocar nada: git checkout -b feat/b07-docker-compose
+
+Tomá WP-B07 del backlog.
+
+Leé primero: .claude/rules/database.md, CONTRIBUTING.md (§1 Entorno
+local — ya describe el flujo `docker compose up -d` → `pnpm db:reset` →
+`pnpm dev` que este WP tiene que hacer real), packages/db/README.md.
+
+Objetivo: infra/docker/docker-compose.yml con Postgres y Redis para
+desarrollo local.
+
+Criterio de aceptación: arranque completo desde cero (`git clone` →
+`docker compose up -d` → `pnpm db:reset` → `pnpm dev`) en menos de 15
+minutos.
+
+TRAMPAS DE ESTA TAREA:
+· Postgres y Redis, nada más. Versión de Postgres fijada a 16 — la misma
+  contra la que se validó el esquema (packages/db/README.md), no `latest`.
+· El criterio es real, no estimado: cronometrá el arranque completo desde
+  cero (`docker compose down -v` y de nuevo desde el paso 1 de CONTRIBUTING.md
+  §1) y poné el número real en el PR, no una estimación de cuánto "debería"
+  tardar.
+· Volúmenes con NOMBRE, no anónimos. Un `db:reset` corre migraciones sobre
+  la base existente: no debería obligar a recrear el contenedor, y un
+  reinicio de docker-compose no debería perder los datos de Redis entre medio.
+
+Alcance: solo docker-compose.yml y su documentación de uso en
+CONTRIBUTING.md si hace falta ajustarla. Sin scripts de aplicación nuevos
+más allá de lo que ya existe.
+```
+
+---
+
+### Sesión 20 — WP-B06 · Prueba de aislamiento
 
 Merece su propia sesión aunque sea chica, porque es el test que protege toda la capa de seguridad.
 
@@ -294,7 +732,8 @@ actual. Los tokens se DERIVAN de eso, no se inventan.
 Criterio de aceptación: entre 4 y 6 colores base con nombre y hexadecimal,
 dos tipografías como máximo con roles distintos, una escala tipográfica y
 una de espaciado, y un radio por jerarquía. Contraste AA verificado en cada
-par texto/fondo, con los números.
+par texto/fondo, con los números. El archivo es consumible desde
+`apps/storefront` y `apps/admin` por igual, sin nada específico de uno solo.
 
 TRAMPAS DE ESTA TAREA:
 · NO produzcas ninguno de los defaults de frontend-spec.md §3.3: fondo crema
@@ -549,6 +988,8 @@ Si notás que ignora una instrucción, `/context` es el primer diagnóstico: cas
 Tres momentos en los que la sesión se detiene y decidís vos, no el agente:
 
 **WP-A10, el dataset dorado.** Los valores esperados salen de tu operación real: planillas de costos, ventas históricas del v2. Si los genera el código, los tests miden contra sí mismos y no protegen nada. Esos veinte números los ponés vos.
+
+**WP-A15, la validación contra un lote real.** Completar `assertBulkLotIsDecantable` con fixtures cierra el código, pero no cierra el criterio de aceptación completo: hoy no existe ningún lugar que construya un `LotSnapshot` real desde `inventory_lots` (eso es WP-C11/WP-C13). Que los tests con fixture pasen no equivale a haber verificado el rechazo contra un lote real. Si alcanza con fixtures para cerrar la sesión, o si conviene esperar a C11/C13, lo decidís vos, no el agente.
 
 **WP-D08, la reconciliación.** El reporte tiene que cerrar con tolerancia cero en stock, caja y señas. Si no cierra, el corte no procede. No hay margen de interpretación acá, y ningún agente debería decidir que una diferencia "es aceptable".
 
