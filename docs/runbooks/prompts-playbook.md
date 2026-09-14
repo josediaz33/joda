@@ -847,7 +847,18 @@ Pedir el listado antes del arreglo evita que corrija tres cosas de apuro y rompa
 En una sesión **nueva y limpia**, sin el contexto de quien escribió el código:
 
 ```
+Revisá el PR de la rama <rama> como si no lo hubieras escrito vos.
 
+Leé CLAUDE.md, docs/engineering-principles.md y los documentos del área
+que toca el cambio.
+
+Decime, en este orden:
+1. ¿Resuelve el problema declarado en el PR?
+2. ¿Viola alguna regla no negociable de CLAUDE.md o algún ADR? Citá cuál.
+3. ¿Los tests prueban comportamiento o implementación?
+4. ¿Qué no va a entender alguien que lea esto en seis meses?
+
+No arregles nada. Solo reportá.
 ```
 
 Que sea una sesión nueva importa: un agente que acaba de escribir el código está sesgado a validarlo.
