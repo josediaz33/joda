@@ -279,19 +279,15 @@ subagente decide **quién** ejecuta ese prompt, con qué modelo y con qué
 herramientas.
 
 **Nota sobre `AGENTS.md`/`CLAUDE.md`:** que `CLAUDE.md` sea una sola línea
-(`@AGENTS.md`) se verificó contra la documentación oficial de Claude Code
-(el import funciona igual en CLI y en la extensión de VS Code cuando ambos
-archivos están en la raíz del repo), pero **no se pudo confirmar corriendo
-`/context` dentro de una sesión** — ese comando no está expuesto como algo
-que la sesión pueda invocarse a sí misma, en ninguna de las dos sesiones que
-trabajaron en este mecanismo. Evidencia indirecta a favor: al arrancar una
-sesión nueva, el contenido completo de `AGENTS.md` aparece listado como
-archivo de instrucciones del proyecto junto con `CLAUDE.md` (no solo la línea
-`@AGENTS.md`), lo cual es consistente con que el import se resolvió — pero no
-reemplaza confirmarlo con `/context` a mano. Si alguien lo corre y `AGENTS.md`
-no aparece bajo "Memory files", es una señal de que el import no resolvió y
-hay que volver al symlink (con permisos de administrador o modo desarrollador
-en Windows).
+(`@AGENTS.md`) se verificó contra la documentación oficial de Claude Code (el
+import funciona igual en CLI y en la extensión de VS Code cuando ambos
+archivos están en la raíz del repo) **y se confirmó corriendo `/context`**:
+`AGENTS.md` aparece con ~6.0k de contenido y `CLAUDE.md` con 14 tokens (el
+tamaño de la línea `@AGENTS.md` sola), lo que confirma que el import se
+resuelve y no se está cargando contenido duplicado. Si en algún momento
+`/context` deja de mostrar `AGENTS.md` así, es una señal de que el import
+dejó de resolver y hay que volver al symlink (con permisos de administrador o
+modo desarrollador en Windows).
 
 ### 11.1 Hooks (`.claude/settings.json`)
 

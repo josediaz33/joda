@@ -49,6 +49,7 @@ Además, `.claude/rules/` contiene reglas con alcance por ruta que se cargan sol
 - **Claude Code** carga solo `AGENTS.md` (vía el import de `CLAUDE.md`) y los archivos de `.claude/rules/` que coincidan por ruta, y tiene skills, subagentes y hooks configurados en `.claude/`.
 - **Codex** carga solo `AGENTS.md`. No descubre `.claude/skills/`, `.claude/agents/`, `.claude/rules/` ni los hooks. Todo lo que necesite leer hay que nombrarlo explícitamente en el prompt.
 - **Los guardas mecánicos** —prettier automático, bloqueo de `prisma migrate`, bloqueo de edición de migraciones aplicadas— **no protegen a Codex.** Los hooks de git (`commit-msg`, `pre-push`) sí, porque son de git y no del agente.
+- **No se mantienen espejos de la configuración de `.claude/` para otras herramientas.** Si Codex necesita una instrucción, se le nombra el archivo en el prompt — no se copian `.claude/skills/` ni `.claude/agents/` a un directorio propio de Codex. Que Codex regenere algo como `.codex/` por su cuenta no es problema mientras quede en `.gitignore` y nadie lo trate como fuente de verdad, pero una copia de las skills no puede volver a versionarse: una skill duplicada y desactualizada es peor que ninguna, porque Codex la sigue creyendo vigente.
 
 Esa última línea es la importante: quien trabaje con Codex tiene que saber que las reglas que en Claude Code son mecánicas, ahí vuelven a ser de confianza. Por eso Codex no trabaja sobre `packages/db/`.
 

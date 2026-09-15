@@ -11,6 +11,13 @@ packages/db/prisma/.reference-dump.sql
 # Configuración local de Claude Code (no compartida)
 .claude/settings.local.json
 
+# Codex puede regenerar esto por su cuenta al correr en el repo. No se
+# versiona: no es fuente de verdad, y .agents/ en particular no puede volver
+# a traer copias de las skills de .claude/skills/ (ver AGENTS.md § Herramientas
+# por agente) — una skill duplicada y desactualizada es peor que ninguna.
+.agents/
+.codex/
+
 # Generado y borrado por packages/config/test/boundaries.test.ts en cada
 # corrida; red de seguridad si un test cortado a la mitad lo deja tirado.
 packages/domain/src/__boundary-check.generated.ts
