@@ -50,7 +50,7 @@ Además, `.claude/rules/` contiene reglas con alcance por ruta que se cargan sol
 - **Codex** carga solo `AGENTS.md`. No descubre `.claude/skills/`, `.claude/agents/`, `.claude/rules/` ni los hooks. Todo lo que necesite leer hay que nombrarlo explícitamente en el prompt.
 - **Los guardas mecánicos** —prettier automático, bloqueo de `prisma migrate`, bloqueo de edición de migraciones aplicadas— **no protegen a Codex.** Los hooks de git (`commit-msg`, `pre-push`) sí, porque son de git y no del agente.
 
-Esa última línea es la importante: quien trabaje con Codex tiene que saber que las reglas que en Claude Code son mecánicas, ahí vuelven a ser de confianza.
+Esa última línea es la importante: quien trabaje con Codex tiene que saber que las reglas que en Claude Code son mecánicas, ahí vuelven a ser de confianza. Por eso Codex no trabaja sobre `packages/db/`.
 
 ---
 

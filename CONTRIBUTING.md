@@ -281,12 +281,17 @@ herramientas.
 **Nota sobre `AGENTS.md`/`CLAUDE.md`:** que `CLAUDE.md` sea una sola línea
 (`@AGENTS.md`) se verificó contra la documentación oficial de Claude Code
 (el import funciona igual en CLI y en la extensión de VS Code cuando ambos
-archivos están en la raíz del repo), pero **no se pudo confirmar en vivo**
-corriendo `/context` dentro de una sesión — ese comando no está expuesto
-como algo que la sesión pueda invocarse a sí misma. Si alguien lo corre y
-`AGENTS.md` no aparece bajo "Memory files", es una señal de que el import no
-resolvió y hay que volver al symlink (con permisos de administrador o modo
-desarrollador en Windows).
+archivos están en la raíz del repo), pero **no se pudo confirmar corriendo
+`/context` dentro de una sesión** — ese comando no está expuesto como algo
+que la sesión pueda invocarse a sí misma, en ninguna de las dos sesiones que
+trabajaron en este mecanismo. Evidencia indirecta a favor: al arrancar una
+sesión nueva, el contenido completo de `AGENTS.md` aparece listado como
+archivo de instrucciones del proyecto junto con `CLAUDE.md` (no solo la línea
+`@AGENTS.md`), lo cual es consistente con que el import se resolvió — pero no
+reemplaza confirmarlo con `/context` a mano. Si alguien lo corre y `AGENTS.md`
+no aparece bajo "Memory files", es una señal de que el import no resolvió y
+hay que volver al symlink (con permisos de administrador o modo desarrollador
+en Windows).
 
 ### 11.1 Hooks (`.claude/settings.json`)
 
@@ -326,16 +331,22 @@ sección.
 
 ### 11.2 Skills (`.claude/skills/`)
 
-- **`.claude/skills/tomar-wp/SKILL.md`** — arma el prompt de tarea de un WP
-  del backlog siguiendo la anatomía de seis puntos de
-  `docs/runbooks/prompts-playbook.md` §1 (con el punto 0, la rama, primero) y
-  la plantilla de §3. Se invoca a mano: `/tomar-wp`.
-- **`.claude/skills/revisar-pr/SKILL.md`** — el prompt de revisión cruzada de
-  `docs/runbooks/prompts-playbook.md` §4.2, con las siete preguntas en orden
-  y el circuito de una sola vía (el revisor solo reporta). Se invoca a mano
-  con `/revisar-pr`, y también se activa sola cuando alguien pide "revisá el
-  PR de \<rama\>" — la `description` del frontmatter nombra esa frase para
-  que el mecanismo de activación automática la reconozca.
+- **`.claude/skills/tomar-wp/SKILL.md`** — **ejecuta** un WP del backlog de
+  punta a punta en la misma sesión: rama, lectura de contexto (playbook §2 si
+  existe sesión escrita, si no backlog + documentos del área), ambigüedades
+  preguntadas todas juntas antes de escribir código, implementación,
+  autoverificación contra `AGENTS.md`/`CLAUDE.md` y
+  `docs/engineering-principles.md` Parte V, y PR. **No arma un prompt para
+  correr después** — esa fue justamente la falla que motivó reescribirla
+  (terminó devolviendo un prompt en vez de trabajar, en WP-A08). Se invoca a
+  mano: `/tomar-wp`.
+- **`.claude/skills/revisar-pr/SKILL.md`** — aplica el prompt de revisión
+  cruzada de `docs/runbooks/prompts-playbook.md` §4.2 (las siete preguntas y
+  el circuito de una sola vía) **citándolo, sin duplicar su texto** en la
+  skill — una sola copia, para que no se desincronicen. Se invoca a mano con
+  `/revisar-pr`, y también se activa sola cuando alguien pide "revisá el PR
+  de \<rama\>" — la `description` del frontmatter nombra esa frase para que
+  el mecanismo de activación automática la reconozca.
 
 ### 11.3 Subagentes (`.claude/agents/`)
 
@@ -350,28 +361,63 @@ Grep, Glob, Bash]` — sin `Edit` ni `Write`. Esto es una restricción
 
 ### Cómo se verificó cada pieza
 
-- Los cuatro hooks: probados de verdad con fixtures, como se detalla en
-  §11.1.
-- Las skills y el subagente: escritos y ubicados según la especificación,
-  pero **su verificación en vivo (invocación manual, activación automática,
-  y que el subagente efectivamente no pueda escribir) quedó pendiente de un
-  reinicio de sesión** — ver la nota siguiente.
+Todo lo de abajo se probó de verdad, con la herramienta real (no revisando
+el código a ojo), en dos sesiones — la que escribió los archivos y una
+sesión reiniciada después, que es la que pudo confirmar lo que la primera
+dejó pendiente:
+
+- **Los cuatro hooks:** con fixtures de stdin (§11.1) y, además, con las
+  herramientas reales: un `Edit` sobre `packages/db/migrations/0001_foundation.sql`
+  (ya existe) fue bloqueado; un `Write` sobre un `.sql` nuevo en ese mismo
+  directorio se permitió (y se borró después, era solo la prueba); un
+  `npx prisma migrate dev` real fue bloqueado citando ADR-018.
+- **Invocación manual de `/tomar-wp` y `/revisar-pr`:** confirmada — ambas
+  aparecen en el listado de skills disponibles después de reiniciar la
+  sesión y se invocan con la herramienta `Skill` por nombre.
+- **Que `/tomar-wp` ejecuta en vez de devolver un prompt:** confirmado con
+  un subagente en un worktree aislado y descartable, al que se le pidió
+  "Tomá WP-A12 del backlog" sin más contexto. Creó la rama
+  `feat/a12-domain-test-lint-hardening`, leyó `docs/backlog.md` y la Sesión
+  15 de `docs/runbooks/prompts-playbook.md` de verdad (no que un prompt se
+  los sugiriera), y llegó a editar `packages/domain/src/shared/quantity.ts`
+  (agregó `Quantity.zero(uom)`, autorizado por la nota del backlog) antes de
+  frenar — el diagnóstico no necesitaba terminar el WP entero, solo
+  demostrar que arrancaba a trabajar. El worktree se descartó después.
+- **Que `revisar-pr` se activa sola al pedir "revisá el PR de X":** confirmado
+  con un subagente al que se le dio exactamente esa frase, sin nombrar
+  ninguna skill. Invocó `Skill(skill="revisar-pr", ...)` por su cuenta, por
+  el match con la `description` del frontmatter, y a su vez delegó la
+  ejecución mecánica al subagente `revisor`.
+- **Que el subagente `revisor` no puede escribir:** confirmado explícitamente
+  — se le pidió que editara un archivo y reportó que `Edit`/`Write` ni
+  siquiera figuran en su lista de herramientas invocables, no que existan y
+  fallen por permisos.
+- **Que el subagente carga la skill sin buscarla:** confirmado — reportó que
+  el texto completo de `revisar-pr` le llegó inyectado en el mensaje que
+  activó su conversación, y que no tiene `Skill` ni `ToolSearch` entre sus
+  herramientas para haber podido buscarla aunque quisiera.
+
+En el camino, la revisión cruzada real que hicieron esos subagentes sobre
+esta misma rama encontró un problema genuino que se corrigió antes de abrir
+el PR: los cambios estaban escritos pero nunca commiteados (ver el historial
+de commits de esta rama para confirmar que se corrigió).
 
 ### Nota: skills y subagentes no se recargan en caliente
 
 A diferencia de los hooks, el listado de skills y de tipos de subagente
 disponibles se arma **una sola vez, al arrancar la sesión**, y no se
-vuelve a escanear después. Se confirmó así en la práctica: ni la sesión
-principal ni un subagente nuevo generado durante la misma sesión (que
-arranca su propio contexto) vieron `tomar-wp`, `revisar-pr` ni `revisor`
-recién creados — ambos siguen mostrando el listado fijo con el que arrancó
-el proceso.
+vuelve a escanear después. Se confirmó así en la práctica en una sesión
+anterior: ni la sesión principal ni un subagente nuevo generado durante esa
+misma sesión (que arranca su propio contexto) vieron `tomar-wp`, `revisar-pr`
+ni `revisor` recién creados — ambos seguían mostrando el listado fijo con el
+que arrancó el proceso. Reiniciando la sesión (recargar ventana en la
+extensión de VS Code, o salir y volver a entrar en la CLI), el listado se
+actualiza y las tres piezas quedan disponibles — así se pudo completar la
+verificación de esta sección.
 
 Esto no es un bug del repositorio: es cómo Claude Code arma el system
 prompt. La consecuencia práctica es que **una skill o un subagente nuevo (o
-editado) recién queda disponible después de reiniciar la sesión** (en la
-extensión de VS Code, recargar la ventana / reiniciar el panel de Claude
-Code; en la CLI, salir y volver a entrar). Si agregás o cambiás algo en
-`.claude/skills/` o `.claude/agents/`, decilo en el PR y probalo en una
-sesión nueva antes de darlo por andando — no alcanza con que el archivo
-"se vea bien".
+editado) recién queda disponible después de reiniciar la sesión**. Si
+agregás o cambiás algo en `.claude/skills/` o `.claude/agents/`, decilo en el
+PR y probalo en una sesión nueva antes de darlo por andando — no alcanza con
+que el archivo "se vea bien".
