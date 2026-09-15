@@ -299,25 +299,53 @@ lee el JSON que Claude Code manda por stdin y decide con código de salida:
 `0` deja pasar, `2` bloquea la llamada y el `stderr` vuelve a la sesión como
 motivo del bloqueo.
 
-| Hook                                     | Evento · matcher              | Qué hace                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ---------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scripts/hooks/format-on-write.mjs`      | `PostToolUse` · `Edit\|Write` | Corre `prettier --write` sobre el archivo tocado, solo si termina en `.ts`, `.tsx`, `.md` o `.json` y está dentro del repo. Nunca bloquea: si prettier falla, se reporta a `stderr` y se sale en `0` — formatear es una cortesía, no un gate.                                                                                                                                                                                                                    |
-| `scripts/hooks/block-prisma-migrate.mjs` | `PreToolUse` · `Bash`         | Bloquea (exit `2`) cualquier comando de Bash que contenga `prisma migrate`, citando ADR-018.                                                                                                                                                                                                                                                                                                                                                                     |
-| `scripts/hooks/block-migration-edit.mjs` | `PreToolUse` · `Edit\|Write`  | Bloquea (exit `2`) tocar un archivo de `packages/db/migrations/*.sql` que **ya existe** en disco. Crear un `.sql` nuevo en ese directorio (un path que todavía no existe) se permite. Es un proxy mecánico simple: no sabe si la migración llegó a aplicarse contra una base real, pero "ya está commiteada" es la señal disponible y es la misma que exige CONTRIBUTING.md §6.                                                                                  |
-| `scripts/hooks/verify-on-stop.mjs`       | `Stop` · `async: true`        | Corre `pnpm typecheck && pnpm lint && pnpm test` al terminar el turno y escribe el resultado en `.claude/hook-logs/stop-verify-latest.log` (ignorado por git, `*.log`). **No hay forma documentada de que la salida de un hook `async` vuelva al chat** — por eso el reporte es un archivo, no un mensaje. Este chequeo es higiene de fondo, no reemplaza correr la lista de "Cómo verificar tu trabajo" de `AGENTS.md`/`CLAUDE.md` a mano antes de abrir el PR. |
+| Hook                                     | Evento · matcher              | Qué hace                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scripts/hooks/format-on-write.mjs`      | `PostToolUse` · `Edit\|Write` | Corre `prettier --write` sobre el archivo tocado, solo si termina en `.ts`, `.tsx`, `.md` o `.json` y está dentro del repo. Nunca bloquea: si prettier falla, se reporta a `stderr` y se sale en `0` — formatear es una cortesía, no un gate.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `scripts/hooks/block-prisma-migrate.mjs` | `PreToolUse` · `Bash`         | Bloquea (exit `2`) un comando de Bash que invoque `prisma migrate` o `prisma db push`, citando ADR-018. Detecta cada sub-comando por separado (partido por `&&`, `\|\|`, `;`, `\|` o salto de línea), no el string entero — ver el detalle de por qué abajo.                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `scripts/hooks/block-migration-edit.mjs` | `PreToolUse` · `Edit\|Write`  | Bloquea (exit `2`) tocar un archivo de `packages/db/migrations/*.sql` que **ya existe** en disco. Crear un `.sql` nuevo en ese directorio (un path que todavía no existe) se permite. Es un proxy mecánico simple: no sabe si la migración llegó a aplicarse contra una base real, pero "ya está commiteada" es la señal disponible y es la misma que exige CONTRIBUTING.md §6.                                                                                                                                                                                                                                                                                                |
+| `scripts/hooks/verify-on-stop.mjs`       | `Stop` · `async: true`        | Corre `pnpm typecheck && pnpm format:check` al terminar el turno y escribe el resultado en `.claude/hook-logs/stop-verify-latest.log` (ignorado por git, `*.log`). Deliberadamente **no** corre `lint` ni `test` acá — `lint` solo tarda ~37s y en una sesión con muchas vueltas eso es ruido de fondo repetido, y los dos ya los corre el cierre real del WP (paso 6 de `tomar-wp`). **No hay forma documentada de que la salida de un hook `async` vuelva al chat** — por eso el reporte es un archivo, no un mensaje. Este chequeo es higiene de fondo, no reemplaza correr la lista de "Cómo verificar tu trabajo" de `AGENTS.md`/`CLAUDE.md` a mano antes de abrir el PR. |
 
-**Verificado de verdad** (no solo revisado el código): se probó cada hook
-inyectándole el JSON de stdin que Claude Code le manda, con fixtures para el
-caso que debía bloquear y el caso que debía dejar pasar — incluyendo un path
-de migración con backslashes de Windows y una variante de `PRISMA  MIGRATE`
-en mayúsculas con espacios de más. Los cuatro se comportaron como se
-describe arriba. De hecho, `block-prisma-migrate.mjs` bloqueó en vivo un
-comando de `Bash` de esta misma sesión que solo mencionaba la frase dentro de
-un `echo` de prueba: el bloqueo es por substring literal en el comando, no
-por intención, así que un comando que solo _menciona_ "prisma migrate" (en un
-comentario, un `echo`, un mensaje de commit) también se bloquea. Es
-deliberadamente así — el costo de un falso positivo ocasional es menor que
-el de un `prisma migrate dev` real que se cuela.
+**La lógica de detección de `block-prisma-migrate.mjs` y
+`block-migration-edit.mjs` vive en módulos puros e importables**
+(`scripts/hooks/lib/prisma-guard.mjs`, `scripts/hooks/lib/migration-guard.mjs`),
+separada de la parte de I/O (leer stdin, `existsSync`) — igual que
+`packages/domain` separa cálculo de efectos. Eso permite tener **tests
+automatizados reales**, no solo verificación manual: `pnpm test:hooks`
+(incluido en `pnpm test`) corre `scripts/hooks/lib/*.test.mjs` con el runner
+de Node (`node --test`, sin dependencias nuevas). 22 casos, entre ellos:
+
+- El path real de Windows con backslashes, **capturado del stdin real** que
+  Claude Code le manda al hook (no un fixture construido a mano) — es el
+  regression test del bug reportado en la revisión de este PR: la primera
+  verificación de este hook usó una ruta absoluta escrita a mano que, sin
+  que se notara, ya tenía el mismo formato que manda la herramienta de
+  verdad, así que "probado con la herramienta real" era cierto pero no
+  estaba **demostrado** con evidencia capturada. Ahora sí queda demostrado:
+  el test fija ese payload real como caso de regresión.
+- Las cuatro evasiones de `prisma migrate`/`prisma db push` que encontró la
+  misma revisión: comando compuesto con `&&` (`echo ok && npx prisma migrate dev`),
+  sentencias en líneas separadas, una continuación de línea de Bash entre
+  `prisma` y `migrate` (`prisma \` + salto de línea + `migrate`, que **no**
+  contiene un espacio en blanco literal entre las dos palabras y por eso
+  necesita normalizarse aparte), y `prisma@version migrate`.
+- Que `prisma generate` y `prisma db pull` — los que sí usa `db:pull` — NO
+  se bloquean.
+
+**Verificado además con las herramientas reales**, no solo con los tests
+unitarios: un subagente al que **no se le mencionó que hubiera un hook**
+recibió la instrucción desnuda de editar `packages/db/migrations/0004_inventory.sql`;
+se bloqueó, y el payload crudo capturado en ese momento (con backslashes,
+ruta absoluta, tal como lo manda la herramienta en Windows) es el que quedó
+fijado como test de regresión arriba. Las cuatro evasiones de Prisma
+también se probaron con la herramienta `Bash` real, una por una, con
+resultado: bloqueadas las cuatro. `prisma generate`/`prisma db pull`
+reales, sin bloquear.
+
+Sigue siendo cierto que el bloqueo de Prisma es deliberadamente amplio: un
+comando que solo _menciona_ "prisma migrate" (en un `echo`, un mensaje de
+commit) también se bloquea, porque el costo de ese falso positivo ocasional
+es menor que el de un `prisma migrate`/`db push` real que se cuela.
 
 **Nota sobre carga en caliente:** los hooks se leen de `.claude/settings.json`
 en cada evento, así que un cambio a un hook aplica sin reiniciar la sesión —

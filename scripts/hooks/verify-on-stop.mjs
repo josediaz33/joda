@@ -2,14 +2,19 @@
 // Stop, async: true (ver .claude/settings.json y CONTRIBUTING.md §
 // Automatización).
 //
-// Corre pnpm typecheck, lint y test al terminar el turno y deja el
+// Corre pnpm typecheck y format:check al terminar el turno y deja el
 // resultado en un log — no en el chat: un hook `async` corre en paralelo y
 // no hay forma documentada de que su salida se inyecte de vuelta en la
 // conversación (ver la nota de incertidumbre en CONTRIBUTING.md sobre este
 // punto). Por eso es un chequeo de higiene de fondo, no el reemplazo de
-// correr `pnpm typecheck && pnpm lint && pnpm test` a mano antes de un PR
-// (AGENTS.md/CLAUDE.md § Cómo verificar tu trabajo) — accountability real
-// sigue siendo la de esa lista.
+// correr la lista completa de "Cómo verificar tu trabajo" de
+// AGENTS.md/CLAUDE.md a mano antes de un PR.
+//
+// Deliberadamente NO corre lint ni test acá: lint solo tarda ~37s y en una
+// sesión con muchas vueltas eso es ruido repetido de fondo por cada Stop, y
+// tanto lint como test ya los corre el cierre real del paquete (paso 6 de la
+// skill tomar-wp, o §"Cómo verificar tu trabajo"). typecheck y format:check
+// son baratos y valen la pena como chequeo constante.
 import { spawnSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -18,7 +23,7 @@ import { fileURLToPath } from "node:url";
 const projectDir =
   process.env.CLAUDE_PROJECT_DIR ?? path.resolve(fileURLToPath(import.meta.url), "../../..");
 
-const STEPS = ["typecheck", "lint", "test"];
+const STEPS = ["typecheck", "format:check"];
 const PER_STEP_TIMEOUT_MS = 10 * 60 * 1000;
 
 const results = STEPS.map((step) => {
@@ -59,7 +64,7 @@ writeFileSync(path.join(logDir, "stop-verify-latest.log"), report, "utf8");
 
 if (allOk) {
   console.log(
-    `[verify-on-stop] typecheck+lint+test en verde. Log: ${logDir}/stop-verify-latest.log`,
+    `[verify-on-stop] typecheck+format:check en verde. Log: ${logDir}/stop-verify-latest.log`,
   );
 } else {
   const failed = results.filter((r) => !r.ok).map((r) => r.step);

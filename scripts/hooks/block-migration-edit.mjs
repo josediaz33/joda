@@ -12,22 +12,24 @@
 // no tiene forma de saberlo desde un hook— pero "ya existe en el repo" es
 // la señal disponible y es la misma que exige la regla: una migración
 // commiteada no se toca, se reemplaza por una nueva numerada.
+//
+// La lógica de "¿esta ruta es una migración?" vive en lib/migration-guard.mjs
+// (testeada aparte en lib/migration-guard.test.mjs, con el path real que
+// Windows manda — con backslashes) — este archivo solo hace la parte de I/O
+// (leer stdin, existsSync) y decide el código de salida.
 import { existsSync } from "node:fs";
 import { readHookInput, toPosixPath } from "./_read-hook-input.mjs";
-
-const MIGRATION_PATTERN = /(^|\/)packages\/db\/migrations\/[^/]+\.sql$/i;
+import { isMigrationFilePath } from "./lib/migration-guard.mjs";
 
 const input = await readHookInput();
 const filePath = input?.tool_input?.file_path;
 
 if (!filePath) process.exit(0);
-
-const posixPath = toPosixPath(filePath);
-if (!MIGRATION_PATTERN.test(posixPath)) process.exit(0);
+if (!isMigrationFilePath(filePath)) process.exit(0);
 
 if (existsSync(filePath)) {
   console.error(
-    `Bloqueado: ${posixPath} ya existe. Las migraciones no se editan una vez ` +
+    `Bloqueado: ${toPosixPath(filePath)} ya existe. Las migraciones no se editan una vez ` +
       "commiteadas (CONTRIBUTING.md §6, ADR-018). Si el cambio es necesario, " +
       "creá una migración nueva numerada a continuación en " +
       "packages/db/migrations/ en vez de tocar esta.",
