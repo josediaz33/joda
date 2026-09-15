@@ -402,6 +402,38 @@ Una seña con `expires_at` vencida y saldo sin aplicar **no se cancela automáti
 
 ---
 
+## RN-EST — Máquinas de estado
+
+Tres entidades tienen ciclo de vida propio con salida lateral (`cancelled`, `refunded`): orden de compra, pedido de venta, orden de fraccionamiento. El criterio de fondo es uno solo y gobierna las tres: **se cancela mientras no haya efectos irreversibles; una vez que hay movimientos de inventario o cobro, se revierte, no se cancela.** Las transiciones válidas viven como datos en `packages/domain` (docs/domain-contracts.md §6.5), nunca como `switch` esparcidos por la API.
+
+### RN-EST-01 · Orden de compra
+
+```
+draft → pending_approval → approved → sent → partially_received → received
+```
+
+Cancelable desde `draft`, `pending_approval`, `approved` y `sent`. **No** desde `partially_received` ni `received`: ya entró mercadería y hay lotes creados a partir de la recepción. Revertir una OC que ya recibió algo es una devolución a proveedor (fuera de alcance de esta máquina), no una cancelación de la orden.
+
+`pending_approval` puede volver a `draft` — rechazo del aprobador para corrección — sin pasar por `cancelled`.
+
+### RN-EST-02 · Pedido de venta
+
+```
+draft → awaiting_payment → paid → preparing → ready → shipped → delivered
+```
+
+Cancelable desde `draft`, `awaiting_payment` y `paid`: en esos tres estados RN-VTA-02 todavía no consumió inventario. Desde `preparing` en adelante ya se consumió inventario o se fraccionó, así que la salida es `refunded`, no `cancelled`. `refunded` es alcanzable desde `paid`, `preparing`, `ready`, `shipped` y `delivered`.
+
+### RN-EST-03 · Orden de fraccionamiento
+
+```
+pending → in_progress → done
+```
+
+Cancelable desde `pending` e `in_progress`. **No** desde `done`: los movimientos de la ejecución (RN-FRA-03) ya están en el ledger y son inmutables (`inventory_movements` es append-only).
+
+---
+
 ## RN-CTB — Contabilidad
 
 ### RN-CTB-01 · Los asientos se derivan
