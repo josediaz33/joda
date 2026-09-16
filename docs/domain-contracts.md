@@ -62,6 +62,7 @@ packages/domain/src/
 │   ├── quantity.ts          Quantity, Uom, aritmética de ml y unidades
 │   ├── result.ts            Result<T, E> para fallos esperados
 │   ├── errors.ts            jerarquía de errores de dominio
+│   ├── stateMachine.ts      motor genérico de máquina de estados
 │   └── ports.ts             Clock, IdGenerator
 ├── catalog/
 │   ├── variant.ts           reglas de coherencia de variantes
@@ -75,7 +76,8 @@ packages/domain/src/
 │   ├── planning.ts          cálculo de reserva y orden de fraccionamiento
 │   ├── execution.ts         movimientos de la ejecución
 │   ├── waste.ts             los tres componentes de merma
-│   └── availability.ts      disponibilidad de variante bajo pedido
+│   ├── availability.ts      disponibilidad de variante bajo pedido
+│   └── workOrder.ts         máquina de estados de la orden de fraccionamiento
 ├── procurement/
 │   ├── landedCost.ts        costo puesto
 │   ├── freight.ts           prorrateo de flete
@@ -410,7 +412,9 @@ Cada método proporcional valida solo lo que su propio peso necesita antes de re
 
 `manual` no prorratea: el llamador ya decidió `manualAmount` para cada línea; `allocateFreight` solo valida que la suma de esos montos sea igual a `freight` y devuelve `FreightError` si no coincide — no ajusta nada por detrás. Ver RN-COS-02.
 
-### 6.5 Máquinas de estado
+### 6.5 Máquinas de estado (WP-A08)
+
+Tres entidades, tres máquinas — orden de compra (`procurement/purchaseOrder.ts`), pedido de venta (`sales/order.ts`), orden de fraccionamiento (`decant/workOrder.ts`) — construidas sobre el mismo motor genérico, `shared/stateMachine.ts::defineStateMachine`. Las transiciones son **datos** (un `Record<Status, readonly Status[]>`), no `switch` esparcidos: así se testean exhaustivamente y se documentan solas. El criterio que gobierna las tres salidas laterales está en `docs/domain-rules.md` RN-EST-01…03: **se cancela mientras no haya efectos irreversibles; una vez que hay movimientos de inventario o cobro, se revierte, no se cancela.**
 
 ```ts
 export const PURCHASE_ORDER_TRANSITIONS: Readonly<Record<PoStatus, readonly PoStatus[]>> = {
@@ -418,16 +422,46 @@ export const PURCHASE_ORDER_TRANSITIONS: Readonly<Record<PoStatus, readonly PoSt
   pending_approval: ["approved", "draft", "cancelled"],
   approved: ["sent", "cancelled"],
   sent: ["partially_received", "received", "cancelled"],
-  partially_received: ["partially_received", "received", "cancelled"],
+  partially_received: ["partially_received", "received"],
   received: [],
   cancelled: [],
 };
 
-export function canTransition(from: PoStatus, to: PoStatus): boolean;
-export function transition(from: PoStatus, to: PoStatus): Result<PoStatus, TransitionError>;
+export const SALE_ORDER_TRANSITIONS: Readonly<Record<SaleOrderStatus, readonly SaleOrderStatus[]>> =
+  {
+    draft: ["awaiting_payment", "cancelled"],
+    awaiting_payment: ["paid", "cancelled"],
+    paid: ["preparing", "refunded"],
+    preparing: ["ready", "refunded"],
+    ready: ["shipped", "refunded"],
+    shipped: ["delivered", "refunded"],
+    delivered: ["refunded"],
+    cancelled: [],
+    refunded: [],
+  };
+
+export const DECANT_WORK_ORDER_TRANSITIONS: Readonly<
+  Record<DecantWoStatus, readonly DecantWoStatus[]>
+> = {
+  pending: ["in_progress", "cancelled"],
+  in_progress: ["done", "cancelled"],
+  done: [],
+  cancelled: [],
+};
 ```
 
-Las transiciones son **datos**, no `switch` esparcidos. Así se testean exhaustivamente y se documentan solas.
+**`partially_received` NO admite `cancelled`** (RN-EST-01) — a diferencia de una versión anterior de este contrato, que sí lo permitía: ya entró mercadería y hay lotes creados a partir de la recepción; revertir eso es una devolución a proveedor, no una cancelación de la OC. Corregido en el mismo PR que implementó WP-A08.
+
+**`paid` tampoco admite `cancelled`** (RN-EST-02), por el mismo criterio: RN-VTA-02 consume el inventario "al confirmarse el pago" — en el mismo momento en que el pedido entra a `paid`, no después —, así que para cuando el pedido está en `paid` ya hubo cobro y ya hubo movimiento de inventario. Revertirlo desde ahí es la anulación de RN-VTA-03 (movimientos `return_in`), no una cancelación sin efecto: por eso la única salida lateral desde `paid` en adelante es `refunded`. Una revisión cruzada de este PR encontró que una versión anterior de esta tabla sí permitía `paid → cancelled`, contradiciendo el criterio de la línea de arriba dentro del mismo PR — corregido antes de mergear.
+
+Cada máquina expone `canTransition` / `transition` con la firma genérica de `StateMachine<S>` (`shared/stateMachine.ts`):
+
+```ts
+export function canTransition(from: S, to: S): boolean;
+export function transition(from: S, to: S): Result<S, TransitionError<S>>;
+```
+
+En el código, estas dos funciones llevan el sufijo de la entidad (`canTransitionPurchaseOrder`, `canTransitionSaleOrder`, `canTransitionDecantWorkOrder`, e igual con `transition*`) — no el nombre a secas que muestra el ejemplo de arriba. `packages/domain/src/index.ts` junta `procurement/`, `sales/` y `decant/` en un solo barrel con `export *`, y las tres máquinas colisionarían en el mismo nombre.
 
 ### 6.6 Motor de posteo
 
