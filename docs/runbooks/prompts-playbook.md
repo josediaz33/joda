@@ -860,7 +860,12 @@ Decime, en este orden:
 5. Verificá las afirmaciones sobre el esquema, los documentos o el
    comportamiento de terceros que haga el código o el PR. No las des por
    buenas: abrí packages/db/migrations, los tests SQL y los documentos
-   citados, y confirmá que dicen lo que el PR dice que dicen.
+   citados, y confirmá que dicen lo que el PR dice que dicen. Si el PR toca
+   `.claude/settings.json` o los scripts de `scripts/hooks/`, esto incluye
+   verificar que cada guarda tenga un test que confirme que BLOQUEA el caso
+   que dice bloquear, no solo que corre sin explotar — un guarda roto falla
+   permitiendo, en silencio, y ese es el peor modo de falla posible para un
+   hook de seguridad.
 6. Si el PR declara algo como "anotado en el backlog", "pendiente de otra
    WP" o "fuera de alcance", verificá que exista realmente, con ID y
    criterio de aceptación. Un comentario que promete una WP inexistente es
