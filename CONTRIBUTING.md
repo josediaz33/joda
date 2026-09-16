@@ -275,22 +275,39 @@ no habilita branch protection ni rulesets para repos privados (exige GitHub
 Pro o hacer el repo público). El hook evita el descuido, no a alguien
 decidido a saltárselo con `--no-verify`.
 
-**El pipeline de CI ya existe (WP-A02):** `.github/workflows/ci.yml` corre
-en cada PR (y en cada push a `main`) con tres jobs — `quality` (typecheck +
-lint + format:check), `test` y `build` — sobre el esqueleto de los tres apps.
-Los nombres de job para `required_status_checks`, si se activa, serían
-`quality`, `test` y `build`.
+**El pipeline de CI ya existe (WP-A02):** `.github/workflows/ci.yml` corre en
+cada PR (y en cada push a `main`) con tres jobs. Los nombres de check que
+GitHub expone (y contra los que matchearía `required_status_checks`, si algún
+día se activa) son:
 
-**Evaluación de GitHub Pro — pendiente de que José la confirme, no activada
-en esta sesión.** Con el pipeline corriendo, activar `required_status_checks`
-del lado del servidor bloquearía un `push --force` a `main` además del
-descuido que ya cubre el hook — hoy nada impide eso salvo la disciplina.
-El plan gratuito de GitHub no ofrece esa protección en un repo privado;
-GitHub Pro (o hacer el repo público) sí. Es una decisión de cuenta y de
-costo — confirmar el precio vigente en github.com/pricing antes de
-decidir — no una decisión técnica, así que queda para que José la tome; una
-vez decidida, activar `required_status_checks` con los tres nombres de job
-de arriba es un cambio de configuración del repo, no de código.
+- `Typecheck + lint + format`
+- `Test`
+- `Build`
+
+**Ojo:** esos son los `name:` de cada job, no la clave del job en el YAML
+(`quality`/`test`/`build`). `required_status_checks` matchea por el nombre
+del check tal como lo reporta la API, no por la clave — configurarlo con la
+clave deja el check esperado sin matchear nunca contra ninguna corrida real,
+y la rama queda bloqueada para fusionar de forma permanente, silenciosa y
+difícil de diagnosticar (el status check nunca aparece como fallido: aparece
+como "pending" para siempre). Si el YAML cambia los nombres, resacar la lista
+real en vez de asumir la del YAML:
+
+```bash
+gh api repos/josediaz33/joda/commits/<sha>/check-runs --jq '.check_runs[].name'
+```
+
+**GitHub Pro — evaluado y descartado por ahora, no es un pendiente
+abierto.** El CI corriendo en cada PR ya cubre lo que importa: nadie fusiona
+sin que `Typecheck + lint + format`, `Test` y `Build` hayan pasado, porque
+alguien tiene que mirar el PR y fusionarlo a mano. Lo único que agregaría
+`required_status_checks` del lado del servidor es bloquear un `push --force`
+directo a `main` — algo que hoy ya cubre la disciplina de un solo
+desarrollador, no una herramienta. El plan gratuito de GitHub no ofrece esa
+protección en un repo privado; GitHub Pro (o hacer el repo público) sí.
+**Se reevalúa cuando entre alguien más al repositorio** — ahí "la disciplina
+de no fusionar en rojo" deja de alcanzar, porque ya no es una sola persona
+decidiendo. Hasta entonces, no hay nada que activar.
 
 ---
 
