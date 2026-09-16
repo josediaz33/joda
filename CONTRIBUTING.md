@@ -347,6 +347,20 @@ comando que solo _menciona_ "prisma migrate" (en un `echo`, un mensaje de
 commit) también se bloquea, porque el costo de ese falso positivo ocasional
 es menor que el de un `prisma migrate`/`db push` real que se cuela.
 
+**Comportamiento conocido: el hook se autobloquea al escribir sobre sí
+mismo.** Un `git commit -m` o un `gh pr comment`/`gh pr create` cuyo texto
+mencione las frases prohibidas —aunque sea citándolas, dentro de comillas,
+para documentar el propio guarda— dispara el bloqueo igual que una
+invocación real, porque el patrón busca la frase en el comando de `Bash`
+completo, no solo en lo que Prisma llegaría a ejecutar. Pasó varias veces
+mientras se escribía esta misma sección. Es inofensivo — el mensaje se
+reformula sin la frase contigua y listo — pero conviene tenerlo presente
+para no perder tiempo pensando que el hook se rompió. **Si esto estorba, la
+solución es ignorar el contenido de cadenas entrecomilladas del comando al
+buscar el patrón, nunca aflojar el patrón en sí:** un falso positivo en un
+mensaje de commit cuesta un reintento; un `prisma migrate`/`db push` real
+que pasa porque el patrón se relajó cuesta un esquema roto.
+
 **Nota sobre carga en caliente:** los hooks se leen de `.claude/settings.json`
 en cada evento, así que un cambio a un hook aplica sin reiniciar la sesión —
 se confirmó en la misma sesión que escribió este archivo. Las skills y los
