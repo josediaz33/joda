@@ -32,7 +32,7 @@ describe("RN-EST-02 · pedido de venta — matriz completa de transiciones", () 
     ["paid", "ready", false],
     ["paid", "shipped", false],
     ["paid", "delivered", false],
-    ["paid", "cancelled", true],
+    ["paid", "cancelled", false],
     ["paid", "refunded", true],
     ["preparing", "draft", false],
     ["preparing", "awaiting_payment", false],
@@ -110,9 +110,15 @@ describe("RN-EST-02 · pedido de venta — preparing en adelante sale por refund
     expect(canTransitionSaleOrder("delivered", "cancelled")).toBe(false);
   });
 
-  it("paid admite tanto cancelled como refunded: todavía no se consumió inventario, pero ya se cobró", () => {
-    expect(canTransitionSaleOrder("paid", "cancelled")).toBe(true);
+  it("paid tampoco admite cancelled, solo refunded: al confirmarse el pago ya se consumió inventario (RN-VTA-02), revertirlo es la anulación de RN-VTA-03, no un no-op", () => {
+    expect(canTransitionSaleOrder("paid", "cancelled")).toBe(false);
     expect(canTransitionSaleOrder("paid", "refunded")).toBe(true);
+  });
+
+  it("cancelable únicamente desde draft y awaiting_payment — los dos estados donde RN-VTA-02 garantiza que no hay movimiento de inventario", () => {
+    expect(canTransitionSaleOrder("draft", "cancelled")).toBe(true);
+    expect(canTransitionSaleOrder("awaiting_payment", "cancelled")).toBe(true);
+    expect(canTransitionSaleOrder("paid", "cancelled")).toBe(false);
   });
 });
 

@@ -5,11 +5,16 @@
 // Camino feliz:
 //   draft → awaiting_payment → paid → preparing → ready → shipped → delivered
 //
-// Cancelable solo desde `draft`, `awaiting_payment` y `paid`: en esos tres
-// estados RN-VTA-02 todavía no consumió inventario. Desde `preparing` en
-// adelante ya se consumió inventario o se fraccionó, así que la única salida
-// lateral es `refunded` (alcanzable desde `paid`, `preparing`, `ready`,
-// `shipped` y `delivered`), nunca `cancelled` (RN-EST-02).
+// Cancelable SOLO desde `draft` y `awaiting_payment`: son los dos únicos
+// estados donde RN-VTA-02 garantiza que todavía no se tocó el libro de
+// inventario. Desde `paid` en adelante ya hubo cobro y, por RN-VTA-02, el
+// inventario se consume "al confirmarse el pago" — es decir, en el mismo
+// momento en que el pedido ENTRA a `paid`, no después. Para cuando el pedido
+// está en `paid`, revertirlo ya no es un no-op: es la anulación de RN-VTA-03
+// (movimientos `return_in` de reversión), así que la única salida lateral
+// desde `paid` en adelante es `refunded` (alcanzable desde `paid`,
+// `preparing`, `ready`, `shipped` y `delivered`), nunca `cancelled`
+// (RN-EST-02).
 //
 // Solo la máquina de estados. Totales, descuentos, TTL de reserva y señas
 // son `sales/pricing.ts`, `sales/reservation.ts` y `sales/deposit.ts` —
@@ -31,7 +36,7 @@ export const SALE_ORDER_TRANSITIONS: Readonly<Record<SaleOrderStatus, readonly S
   {
     draft: ["awaiting_payment", "cancelled"],
     awaiting_payment: ["paid", "cancelled"],
-    paid: ["preparing", "cancelled", "refunded"],
+    paid: ["preparing", "refunded"],
     preparing: ["ready", "refunded"],
     ready: ["shipped", "refunded"],
     shipped: ["delivered", "refunded"],

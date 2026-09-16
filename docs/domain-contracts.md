@@ -431,7 +431,7 @@ export const SALE_ORDER_TRANSITIONS: Readonly<Record<SaleOrderStatus, readonly S
   {
     draft: ["awaiting_payment", "cancelled"],
     awaiting_payment: ["paid", "cancelled"],
-    paid: ["preparing", "cancelled", "refunded"],
+    paid: ["preparing", "refunded"],
     preparing: ["ready", "refunded"],
     ready: ["shipped", "refunded"],
     shipped: ["delivered", "refunded"],
@@ -451,6 +451,8 @@ export const DECANT_WORK_ORDER_TRANSITIONS: Readonly<
 ```
 
 **`partially_received` NO admite `cancelled`** (RN-EST-01) — a diferencia de una versión anterior de este contrato, que sí lo permitía: ya entró mercadería y hay lotes creados a partir de la recepción; revertir eso es una devolución a proveedor, no una cancelación de la OC. Corregido en el mismo PR que implementó WP-A08.
+
+**`paid` tampoco admite `cancelled`** (RN-EST-02), por el mismo criterio: RN-VTA-02 consume el inventario "al confirmarse el pago" — en el mismo momento en que el pedido entra a `paid`, no después —, así que para cuando el pedido está en `paid` ya hubo cobro y ya hubo movimiento de inventario. Revertirlo desde ahí es la anulación de RN-VTA-03 (movimientos `return_in`), no una cancelación sin efecto: por eso la única salida lateral desde `paid` en adelante es `refunded`. Una revisión cruzada de este PR encontró que una versión anterior de esta tabla sí permitía `paid → cancelled`, contradiciendo el criterio de la línea de arriba dentro del mismo PR — corregido antes de mergear.
 
 Cada máquina expone `canTransition` / `transition` con la firma genérica de `StateMachine<S>` (`shared/stateMachine.ts`):
 

@@ -422,7 +422,9 @@ Cancelable desde `draft`, `pending_approval`, `approved` y `sent`. **No** desde 
 draft → awaiting_payment → paid → preparing → ready → shipped → delivered
 ```
 
-Cancelable desde `draft`, `awaiting_payment` y `paid`: en esos tres estados RN-VTA-02 todavía no consumió inventario. Desde `preparing` en adelante ya se consumió inventario o se fraccionó, así que la salida es `refunded`, no `cancelled`. `refunded` es alcanzable desde `paid`, `preparing`, `ready`, `shipped` y `delivered`.
+Cancelable **solo** desde `draft` y `awaiting_payment`: son los dos únicos estados donde RN-VTA-02 garantiza que el inventario todavía no se tocó. Desde `paid` en adelante la salida es `refunded`, no `cancelled` — RN-VTA-02 dice que el inventario se consume "al confirmarse el pago", es decir en el mismo momento en que el pedido entra a `paid`, no después; para cuando el pedido está en `paid` ya hubo cobro y ya hubo movimiento de inventario, así que revertirlo es la anulación de RN-VTA-03 (movimientos `return_in`), no una cancelación sin efecto. `refunded` es alcanzable desde `paid`, `preparing`, `ready`, `shipped` y `delivered`.
+
+`cancelled` y `refunded` no son sinónimos con distinto nombre: `cancelled` es "nunca pasó nada", `refunded` es "pasó algo y se revierte" (RN-VTA-03).
 
 ### RN-EST-03 · Orden de fraccionamiento
 
