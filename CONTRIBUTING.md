@@ -50,6 +50,17 @@ push origin main` por costumbre.
 - **pnpm 9.15.4, no la última 12.x:** cumple el "pnpm 9+" de arriba sin forzar
   una migración de major que ningún paquete de trabajo pidió todavía.
 
+### Decisiones de versión (WP-A02)
+
+Frameworks de los tres apps (ADR-003, `JODA_Arquitectura_v5_Final.md`),
+instalados sin fijar un major a mano — la versión que resolvió el registro al
+tomar el paquete:
+
+- **Next.js 16.3.5** (App Router, Turbopack) + **React 19.3.0** — storefront.
+- **Vite 8.3.0** (catálogo) + **React 19.3.0** — admin.
+- **Fastify 5.12.5** — API. Sin tRPC todavía: el router tipado y las capas de
+  `docs/api-conventions.md` son WP-C01, no este paquete.
+
 ---
 
 ## 2. Ramas
@@ -264,9 +275,22 @@ no habilita branch protection ni rulesets para repos privados (exige GitHub
 Pro o hacer el repo público). El hook evita el descuido, no a alguien
 decidido a saltárselo con `--no-verify`.
 
-Cuando exista el pipeline de CI (WP-A02), evaluar GitHub Pro y activar
-`required_status_checks` del lado del servidor con los nombres de los jobs
-— eso sí protege contra un force-push, cosa que el hook no puede.
+**El pipeline de CI ya existe (WP-A02):** `.github/workflows/ci.yml` corre
+en cada PR (y en cada push a `main`) con tres jobs — `quality` (typecheck +
+lint + format:check), `test` y `build` — sobre el esqueleto de los tres apps.
+Los nombres de job para `required_status_checks`, si se activa, serían
+`quality`, `test` y `build`.
+
+**Evaluación de GitHub Pro — pendiente de que José la confirme, no activada
+en esta sesión.** Con el pipeline corriendo, activar `required_status_checks`
+del lado del servidor bloquearía un `push --force` a `main` además del
+descuido que ya cubre el hook — hoy nada impide eso salvo la disciplina.
+El plan gratuito de GitHub no ofrece esa protección en un repo privado;
+GitHub Pro (o hacer el repo público) sí. Es una decisión de cuenta y de
+costo — confirmar el precio vigente en github.com/pricing antes de
+decidir — no una decisión técnica, así que queda para que José la tome; una
+vez decidida, activar `required_status_checks` con los tres nombres de job
+de arriba es un cambio de configuración del repo, no de código.
 
 ---
 

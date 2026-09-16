@@ -1,9 +1,11 @@
 node_modules/
 dist/
+.next/
 .env
 .turbo/
 coverage/
 *.log
+*.tsbuildinfo
 
 # Dump de referencia local (no se versiona, ver packages/db/README.md)
 packages/db/prisma/.reference-dump.sql
