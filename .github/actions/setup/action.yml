@@ -1,0 +1,17 @@
+name: Setup pnpm + Node
+description: >
+  pnpm vía pnpm/action-setup (binario real en el PATH, ver "Riesgo conocido
+  para A02" en docs/backlog.md — Turborepo necesita resolver `pnpm` como
+  ejecutable, y corepack no es fiable en todos los runners), Node 22, caché
+  del store de pnpm y `pnpm install --frozen-lockfile`.
+
+runs:
+  using: composite
+  steps:
+    - uses: pnpm/action-setup@v4
+    - uses: actions/setup-node@v4
+      with:
+        node-version: "22"
+        cache: pnpm
+    - run: pnpm install --frozen-lockfile
+      shell: bash

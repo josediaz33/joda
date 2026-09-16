@@ -5,18 +5,22 @@
   "type": "module",
   "description": "Fastify + tRPC — único origen de escritura sobre PostgreSQL. Esqueleto (WP-A01); el hola mundo llega en WP-A02.",
   "scripts": {
-    "dev": "node ../../scripts/pending-task.mjs \"dev (api)\" WP-A02",
-    "build": "node ../../scripts/pending-task.mjs \"build (api)\" WP-A02",
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
     "test": "node ../../scripts/pending-task.mjs \"test (api)\" WP-C01",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint ."
   },
   "devDependencies": {
-    "typescript": "catalog:",
-    "eslint": "catalog:",
     "@eslint/js": "catalog:",
-    "typescript-eslint": "catalog:",
+    "eslint": "catalog:",
+    "eslint-config-prettier": "catalog:",
     "eslint-plugin-boundaries": "catalog:",
-    "eslint-config-prettier": "catalog:"
+    "tsx": "4.23.13",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:"
+  },
+  "dependencies": {
+    "fastify": "5.12.5"
   }
 }

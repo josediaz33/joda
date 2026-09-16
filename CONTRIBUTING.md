@@ -50,6 +50,17 @@ push origin main` por costumbre.
 - **pnpm 9.15.4, no la última 12.x:** cumple el "pnpm 9+" de arriba sin forzar
   una migración de major que ningún paquete de trabajo pidió todavía.
 
+### Decisiones de versión (WP-A02)
+
+Frameworks de los tres apps (ADR-003, `JODA_Arquitectura_v5_Final.md`),
+instalados sin fijar un major a mano — la versión que resolvió el registro al
+tomar el paquete:
+
+- **Next.js 16.3.5** (App Router, Turbopack) + **React 19.3.0** — storefront.
+- **Vite 8.3.0** (catálogo) + **React 19.3.0** — admin.
+- **Fastify 5.12.5** — API. Sin tRPC todavía: el router tipado y las capas de
+  `docs/api-conventions.md` son WP-C01, no este paquete.
+
 ---
 
 ## 2. Ramas
@@ -264,9 +275,39 @@ no habilita branch protection ni rulesets para repos privados (exige GitHub
 Pro o hacer el repo público). El hook evita el descuido, no a alguien
 decidido a saltárselo con `--no-verify`.
 
-Cuando exista el pipeline de CI (WP-A02), evaluar GitHub Pro y activar
-`required_status_checks` del lado del servidor con los nombres de los jobs
-— eso sí protege contra un force-push, cosa que el hook no puede.
+**El pipeline de CI ya existe (WP-A02):** `.github/workflows/ci.yml` corre en
+cada PR (y en cada push a `main`) con tres jobs. Los nombres de check que
+GitHub expone (y contra los que matchearía `required_status_checks`, si algún
+día se activa) son:
+
+- `Typecheck + lint + format`
+- `Test`
+- `Build`
+
+**Ojo:** esos son los `name:` de cada job, no la clave del job en el YAML
+(`quality`/`test`/`build`). `required_status_checks` matchea por el nombre
+del check tal como lo reporta la API, no por la clave — configurarlo con la
+clave deja el check esperado sin matchear nunca contra ninguna corrida real,
+y la rama queda bloqueada para fusionar de forma permanente, silenciosa y
+difícil de diagnosticar (el status check nunca aparece como fallido: aparece
+como "pending" para siempre). Si el YAML cambia los nombres, resacar la lista
+real en vez de asumir la del YAML:
+
+```bash
+gh api repos/josediaz33/joda/commits/<sha>/check-runs --jq '.check_runs[].name'
+```
+
+**GitHub Pro — evaluado y descartado por ahora, no es un pendiente
+abierto.** El CI corriendo en cada PR ya cubre lo que importa: nadie fusiona
+sin que `Typecheck + lint + format`, `Test` y `Build` hayan pasado, porque
+alguien tiene que mirar el PR y fusionarlo a mano. Lo único que agregaría
+`required_status_checks` del lado del servidor es bloquear un `push --force`
+directo a `main` — algo que hoy ya cubre la disciplina de un solo
+desarrollador, no una herramienta. El plan gratuito de GitHub no ofrece esa
+protección en un repo privado; GitHub Pro (o hacer el repo público) sí.
+**Se reevalúa cuando entre alguien más al repositorio** — ahí "la disciplina
+de no fusionar en rojo" deja de alcanzar, porque ya no es una sola persona
+decidiendo. Hasta entonces, no hay nada que activar.
 
 ---
 

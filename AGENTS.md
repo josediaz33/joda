@@ -50,8 +50,9 @@ Además, `.claude/rules/` contiene reglas con alcance por ruta que se cargan sol
 - **Codex** carga solo `AGENTS.md`. No descubre `.claude/skills/`, `.claude/agents/`, `.claude/rules/` ni los hooks. Todo lo que necesite leer hay que nombrarlo explícitamente en el prompt.
 - **Los guardas mecánicos** —prettier automático, bloqueo de `prisma migrate`, bloqueo de edición de migraciones aplicadas— **no protegen a Codex.** Los hooks de git (`commit-msg`, `pre-push`) sí, porque son de git y no del agente.
 - **No se mantienen espejos de la configuración de `.claude/` para otras herramientas.** Si Codex necesita una instrucción, se le nombra el archivo en el prompt — no se copian `.claude/skills/` ni `.claude/agents/` a un directorio propio de Codex. Que Codex regenere algo como `.codex/` por su cuenta no es problema mientras quede en `.gitignore` y nadie lo trate como fuente de verdad, pero una copia de las skills no puede volver a versionarse: una skill duplicada y desactualizada es peor que ninguna, porque Codex la sigue creyendo vigente.
+- **Next.js 16 también escribe `AGENTS.md`/`CLAUDE.md` por su cuenta, y es el mismo problema que `.codex/`.** Su feature `agentRules` regenera esos dos archivos dentro de `apps/storefront/` en cada `next dev`/`next build` (ver `node_modules/next/dist/server/lib/generate-agent-files.js`), compitiendo con este archivo como fuente única de reglas para agentes. Desactivada con `agentRules: false` en `apps/storefront/next.config.ts` (WP-A02) — si alguien actualiza Next sin saber de esa opción, o la borra al tocar `next.config.ts` por otro motivo, el archivo reaparece en silencio en el próximo `dev`/`build`. Verificar que siga en `false` si ese archivo cambia.
 
-Esa última línea es la importante: quien trabaje con Codex tiene que saber que las reglas que en Claude Code son mecánicas, ahí vuelven a ser de confianza. Por eso Codex no trabaja sobre `packages/db/`.
+Esa penúltima línea es la importante: quien trabaje con Codex tiene que saber que las reglas que en Claude Code son mecánicas, ahí vuelven a ser de confianza. Por eso Codex no trabaja sobre `packages/db/`.
 
 ---
 

@@ -5,18 +5,26 @@
   "type": "module",
   "description": "Storefront público — Next.js App Router, SSR/ISR. Esqueleto (WP-A01); el hola mundo llega en WP-A02.",
   "scripts": {
-    "dev": "node ../../scripts/pending-task.mjs \"dev (storefront)\" WP-A02",
-    "build": "node ../../scripts/pending-task.mjs \"build (storefront)\" WP-A02",
+    "dev": "next dev",
+    "build": "next build",
     "test": "node ../../scripts/pending-task.mjs \"test (storefront)\" WP-G01",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint ."
   },
   "devDependencies": {
-    "typescript": "catalog:",
-    "eslint": "catalog:",
     "@eslint/js": "catalog:",
-    "typescript-eslint": "catalog:",
+    "@types/node": "catalog:",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "eslint": "catalog:",
+    "eslint-config-prettier": "catalog:",
     "eslint-plugin-boundaries": "catalog:",
-    "eslint-config-prettier": "catalog:"
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:"
+  },
+  "dependencies": {
+    "next": "16.3.5",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
   }
 }
