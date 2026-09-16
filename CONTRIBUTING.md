@@ -279,14 +279,15 @@ subagente decide **quién** ejecuta ese prompt, con qué modelo y con qué
 herramientas.
 
 **Nota sobre `AGENTS.md`/`CLAUDE.md`:** que `CLAUDE.md` sea una sola línea
-(`@AGENTS.md`) se verificó contra la documentación oficial de Claude Code
-(el import funciona igual en CLI y en la extensión de VS Code cuando ambos
-archivos están en la raíz del repo), pero **no se pudo confirmar en vivo**
-corriendo `/context` dentro de una sesión — ese comando no está expuesto
-como algo que la sesión pueda invocarse a sí misma. Si alguien lo corre y
-`AGENTS.md` no aparece bajo "Memory files", es una señal de que el import no
-resolvió y hay que volver al symlink (con permisos de administrador o modo
-desarrollador en Windows).
+(`@AGENTS.md`) se verificó contra la documentación oficial de Claude Code (el
+import funciona igual en CLI y en la extensión de VS Code cuando ambos
+archivos están en la raíz del repo) **y se confirmó corriendo `/context`**:
+`AGENTS.md` aparece con ~6.0k de contenido y `CLAUDE.md` con 14 tokens (el
+tamaño de la línea `@AGENTS.md` sola), lo que confirma que el import se
+resuelve y no se está cargando contenido duplicado. Si en algún momento
+`/context` deja de mostrar `AGENTS.md` así, es una señal de que el import
+dejó de resolver y hay que volver al symlink (con permisos de administrador o
+modo desarrollador en Windows).
 
 ### 11.1 Hooks (`.claude/settings.json`)
 
@@ -298,25 +299,53 @@ lee el JSON que Claude Code manda por stdin y decide con código de salida:
 `0` deja pasar, `2` bloquea la llamada y el `stderr` vuelve a la sesión como
 motivo del bloqueo.
 
-| Hook                                     | Evento · matcher              | Qué hace                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ---------------------------------------- | ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `scripts/hooks/format-on-write.mjs`      | `PostToolUse` · `Edit\|Write` | Corre `prettier --write` sobre el archivo tocado, solo si termina en `.ts`, `.tsx`, `.md` o `.json` y está dentro del repo. Nunca bloquea: si prettier falla, se reporta a `stderr` y se sale en `0` — formatear es una cortesía, no un gate.                                                                                                                                                                                                                    |
-| `scripts/hooks/block-prisma-migrate.mjs` | `PreToolUse` · `Bash`         | Bloquea (exit `2`) cualquier comando de Bash que contenga `prisma migrate`, citando ADR-018.                                                                                                                                                                                                                                                                                                                                                                     |
-| `scripts/hooks/block-migration-edit.mjs` | `PreToolUse` · `Edit\|Write`  | Bloquea (exit `2`) tocar un archivo de `packages/db/migrations/*.sql` que **ya existe** en disco. Crear un `.sql` nuevo en ese directorio (un path que todavía no existe) se permite. Es un proxy mecánico simple: no sabe si la migración llegó a aplicarse contra una base real, pero "ya está commiteada" es la señal disponible y es la misma que exige CONTRIBUTING.md §6.                                                                                  |
-| `scripts/hooks/verify-on-stop.mjs`       | `Stop` · `async: true`        | Corre `pnpm typecheck && pnpm lint && pnpm test` al terminar el turno y escribe el resultado en `.claude/hook-logs/stop-verify-latest.log` (ignorado por git, `*.log`). **No hay forma documentada de que la salida de un hook `async` vuelva al chat** — por eso el reporte es un archivo, no un mensaje. Este chequeo es higiene de fondo, no reemplaza correr la lista de "Cómo verificar tu trabajo" de `AGENTS.md`/`CLAUDE.md` a mano antes de abrir el PR. |
+| Hook                                     | Evento · matcher              | Qué hace                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------------------------------- | ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `scripts/hooks/format-on-write.mjs`      | `PostToolUse` · `Edit\|Write` | Corre `prettier --write` sobre el archivo tocado, solo si termina en `.ts`, `.tsx`, `.md` o `.json` y está dentro del repo. Nunca bloquea: si prettier falla, se reporta a `stderr` y se sale en `0` — formatear es una cortesía, no un gate.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `scripts/hooks/block-prisma-migrate.mjs` | `PreToolUse` · `Bash`         | Bloquea (exit `2`) un comando de Bash que invoque `prisma migrate` o `prisma db push`, citando ADR-018. Detecta cada sub-comando por separado (partido por `&&`, `\|\|`, `;`, `\|` o salto de línea), no el string entero — ver el detalle de por qué abajo.                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `scripts/hooks/block-migration-edit.mjs` | `PreToolUse` · `Edit\|Write`  | Bloquea (exit `2`) tocar un archivo de `packages/db/migrations/*.sql` que **ya existe** en disco. Crear un `.sql` nuevo en ese directorio (un path que todavía no existe) se permite. Es un proxy mecánico simple: no sabe si la migración llegó a aplicarse contra una base real, pero "ya está commiteada" es la señal disponible y es la misma que exige CONTRIBUTING.md §6.                                                                                                                                                                                                                                                                                                |
+| `scripts/hooks/verify-on-stop.mjs`       | `Stop` · `async: true`        | Corre `pnpm typecheck && pnpm format:check` al terminar el turno y escribe el resultado en `.claude/hook-logs/stop-verify-latest.log` (ignorado por git, `*.log`). Deliberadamente **no** corre `lint` ni `test` acá — `lint` solo tarda ~37s y en una sesión con muchas vueltas eso es ruido de fondo repetido, y los dos ya los corre el cierre real del WP (paso 6 de `tomar-wp`). **No hay forma documentada de que la salida de un hook `async` vuelva al chat** — por eso el reporte es un archivo, no un mensaje. Este chequeo es higiene de fondo, no reemplaza correr la lista de "Cómo verificar tu trabajo" de `AGENTS.md`/`CLAUDE.md` a mano antes de abrir el PR. |
 
-**Verificado de verdad** (no solo revisado el código): se probó cada hook
-inyectándole el JSON de stdin que Claude Code le manda, con fixtures para el
-caso que debía bloquear y el caso que debía dejar pasar — incluyendo un path
-de migración con backslashes de Windows y una variante de `PRISMA  MIGRATE`
-en mayúsculas con espacios de más. Los cuatro se comportaron como se
-describe arriba. De hecho, `block-prisma-migrate.mjs` bloqueó en vivo un
-comando de `Bash` de esta misma sesión que solo mencionaba la frase dentro de
-un `echo` de prueba: el bloqueo es por substring literal en el comando, no
-por intención, así que un comando que solo _menciona_ "prisma migrate" (en un
-comentario, un `echo`, un mensaje de commit) también se bloquea. Es
-deliberadamente así — el costo de un falso positivo ocasional es menor que
-el de un `prisma migrate dev` real que se cuela.
+**La lógica de detección de `block-prisma-migrate.mjs` y
+`block-migration-edit.mjs` vive en módulos puros e importables**
+(`scripts/hooks/lib/prisma-guard.mjs`, `scripts/hooks/lib/migration-guard.mjs`),
+separada de la parte de I/O (leer stdin, `existsSync`) — igual que
+`packages/domain` separa cálculo de efectos. Eso permite tener **tests
+automatizados reales**, no solo verificación manual: `pnpm test:hooks`
+(incluido en `pnpm test`) corre `scripts/hooks/lib/*.test.mjs` con el runner
+de Node (`node --test`, sin dependencias nuevas). 22 casos, entre ellos:
+
+- El path real de Windows con backslashes, **capturado del stdin real** que
+  Claude Code le manda al hook (no un fixture construido a mano) — es el
+  regression test del bug reportado en la revisión de este PR: la primera
+  verificación de este hook usó una ruta absoluta escrita a mano que, sin
+  que se notara, ya tenía el mismo formato que manda la herramienta de
+  verdad, así que "probado con la herramienta real" era cierto pero no
+  estaba **demostrado** con evidencia capturada. Ahora sí queda demostrado:
+  el test fija ese payload real como caso de regresión.
+- Las cuatro evasiones de `prisma migrate`/`prisma db push` que encontró la
+  misma revisión: comando compuesto con `&&` (`echo ok && npx prisma migrate dev`),
+  sentencias en líneas separadas, una continuación de línea de Bash entre
+  `prisma` y `migrate` (`prisma \` + salto de línea + `migrate`, que **no**
+  contiene un espacio en blanco literal entre las dos palabras y por eso
+  necesita normalizarse aparte), y `prisma@version migrate`.
+- Que `prisma generate` y `prisma db pull` — los que sí usa `db:pull` — NO
+  se bloquean.
+
+**Verificado además con las herramientas reales**, no solo con los tests
+unitarios: un subagente al que **no se le mencionó que hubiera un hook**
+recibió la instrucción desnuda de editar `packages/db/migrations/0004_inventory.sql`;
+se bloqueó, y el payload crudo capturado en ese momento (con backslashes,
+ruta absoluta, tal como lo manda la herramienta en Windows) es el que quedó
+fijado como test de regresión arriba. Las cuatro evasiones de Prisma
+también se probaron con la herramienta `Bash` real, una por una, con
+resultado: bloqueadas las cuatro. `prisma generate`/`prisma db pull`
+reales, sin bloquear.
+
+Sigue siendo cierto que el bloqueo de Prisma es deliberadamente amplio: un
+comando que solo _menciona_ "prisma migrate" (en un `echo`, un mensaje de
+commit) también se bloquea, porque el costo de ese falso positivo ocasional
+es menor que el de un `prisma migrate`/`db push` real que se cuela.
 
 **Nota sobre carga en caliente:** los hooks se leen de `.claude/settings.json`
 en cada evento, así que un cambio a un hook aplica sin reiniciar la sesión —
@@ -326,16 +355,22 @@ sección.
 
 ### 11.2 Skills (`.claude/skills/`)
 
-- **`.claude/skills/tomar-wp/SKILL.md`** — arma el prompt de tarea de un WP
-  del backlog siguiendo la anatomía de seis puntos de
-  `docs/runbooks/prompts-playbook.md` §1 (con el punto 0, la rama, primero) y
-  la plantilla de §3. Se invoca a mano: `/tomar-wp`.
-- **`.claude/skills/revisar-pr/SKILL.md`** — el prompt de revisión cruzada de
-  `docs/runbooks/prompts-playbook.md` §4.2, con las siete preguntas en orden
-  y el circuito de una sola vía (el revisor solo reporta). Se invoca a mano
-  con `/revisar-pr`, y también se activa sola cuando alguien pide "revisá el
-  PR de \<rama\>" — la `description` del frontmatter nombra esa frase para
-  que el mecanismo de activación automática la reconozca.
+- **`.claude/skills/tomar-wp/SKILL.md`** — **ejecuta** un WP del backlog de
+  punta a punta en la misma sesión: rama, lectura de contexto (playbook §2 si
+  existe sesión escrita, si no backlog + documentos del área), ambigüedades
+  preguntadas todas juntas antes de escribir código, implementación,
+  autoverificación contra `AGENTS.md`/`CLAUDE.md` y
+  `docs/engineering-principles.md` Parte V, y PR. **No arma un prompt para
+  correr después** — esa fue justamente la falla que motivó reescribirla
+  (terminó devolviendo un prompt en vez de trabajar, en WP-A08). Se invoca a
+  mano: `/tomar-wp`.
+- **`.claude/skills/revisar-pr/SKILL.md`** — aplica el prompt de revisión
+  cruzada de `docs/runbooks/prompts-playbook.md` §4.2 (las siete preguntas y
+  el circuito de una sola vía) **citándolo, sin duplicar su texto** en la
+  skill — una sola copia, para que no se desincronicen. Se invoca a mano con
+  `/revisar-pr`, y también se activa sola cuando alguien pide "revisá el PR
+  de \<rama\>" — la `description` del frontmatter nombra esa frase para que
+  el mecanismo de activación automática la reconozca.
 
 ### 11.3 Subagentes (`.claude/agents/`)
 
@@ -350,28 +385,63 @@ Grep, Glob, Bash]` — sin `Edit` ni `Write`. Esto es una restricción
 
 ### Cómo se verificó cada pieza
 
-- Los cuatro hooks: probados de verdad con fixtures, como se detalla en
-  §11.1.
-- Las skills y el subagente: escritos y ubicados según la especificación,
-  pero **su verificación en vivo (invocación manual, activación automática,
-  y que el subagente efectivamente no pueda escribir) quedó pendiente de un
-  reinicio de sesión** — ver la nota siguiente.
+Todo lo de abajo se probó de verdad, con la herramienta real (no revisando
+el código a ojo), en dos sesiones — la que escribió los archivos y una
+sesión reiniciada después, que es la que pudo confirmar lo que la primera
+dejó pendiente:
+
+- **Los cuatro hooks:** con fixtures de stdin (§11.1) y, además, con las
+  herramientas reales: un `Edit` sobre `packages/db/migrations/0001_foundation.sql`
+  (ya existe) fue bloqueado; un `Write` sobre un `.sql` nuevo en ese mismo
+  directorio se permitió (y se borró después, era solo la prueba); un
+  `npx prisma migrate dev` real fue bloqueado citando ADR-018.
+- **Invocación manual de `/tomar-wp` y `/revisar-pr`:** confirmada — ambas
+  aparecen en el listado de skills disponibles después de reiniciar la
+  sesión y se invocan con la herramienta `Skill` por nombre.
+- **Que `/tomar-wp` ejecuta en vez de devolver un prompt:** confirmado con
+  un subagente en un worktree aislado y descartable, al que se le pidió
+  "Tomá WP-A12 del backlog" sin más contexto. Creó la rama
+  `feat/a12-domain-test-lint-hardening`, leyó `docs/backlog.md` y la Sesión
+  15 de `docs/runbooks/prompts-playbook.md` de verdad (no que un prompt se
+  los sugiriera), y llegó a editar `packages/domain/src/shared/quantity.ts`
+  (agregó `Quantity.zero(uom)`, autorizado por la nota del backlog) antes de
+  frenar — el diagnóstico no necesitaba terminar el WP entero, solo
+  demostrar que arrancaba a trabajar. El worktree se descartó después.
+- **Que `revisar-pr` se activa sola al pedir "revisá el PR de X":** confirmado
+  con un subagente al que se le dio exactamente esa frase, sin nombrar
+  ninguna skill. Invocó `Skill(skill="revisar-pr", ...)` por su cuenta, por
+  el match con la `description` del frontmatter, y a su vez delegó la
+  ejecución mecánica al subagente `revisor`.
+- **Que el subagente `revisor` no puede escribir:** confirmado explícitamente
+  — se le pidió que editara un archivo y reportó que `Edit`/`Write` ni
+  siquiera figuran en su lista de herramientas invocables, no que existan y
+  fallen por permisos.
+- **Que el subagente carga la skill sin buscarla:** confirmado — reportó que
+  el texto completo de `revisar-pr` le llegó inyectado en el mensaje que
+  activó su conversación, y que no tiene `Skill` ni `ToolSearch` entre sus
+  herramientas para haber podido buscarla aunque quisiera.
+
+En el camino, la revisión cruzada real que hicieron esos subagentes sobre
+esta misma rama encontró un problema genuino que se corrigió antes de abrir
+el PR: los cambios estaban escritos pero nunca commiteados (ver el historial
+de commits de esta rama para confirmar que se corrigió).
 
 ### Nota: skills y subagentes no se recargan en caliente
 
 A diferencia de los hooks, el listado de skills y de tipos de subagente
 disponibles se arma **una sola vez, al arrancar la sesión**, y no se
-vuelve a escanear después. Se confirmó así en la práctica: ni la sesión
-principal ni un subagente nuevo generado durante la misma sesión (que
-arranca su propio contexto) vieron `tomar-wp`, `revisar-pr` ni `revisor`
-recién creados — ambos siguen mostrando el listado fijo con el que arrancó
-el proceso.
+vuelve a escanear después. Se confirmó así en la práctica en una sesión
+anterior: ni la sesión principal ni un subagente nuevo generado durante esa
+misma sesión (que arranca su propio contexto) vieron `tomar-wp`, `revisar-pr`
+ni `revisor` recién creados — ambos seguían mostrando el listado fijo con el
+que arrancó el proceso. Reiniciando la sesión (recargar ventana en la
+extensión de VS Code, o salir y volver a entrar en la CLI), el listado se
+actualiza y las tres piezas quedan disponibles — así se pudo completar la
+verificación de esta sección.
 
 Esto no es un bug del repositorio: es cómo Claude Code arma el system
 prompt. La consecuencia práctica es que **una skill o un subagente nuevo (o
-editado) recién queda disponible después de reiniciar la sesión** (en la
-extensión de VS Code, recargar la ventana / reiniciar el panel de Claude
-Code; en la CLI, salir y volver a entrar). Si agregás o cambiás algo en
-`.claude/skills/` o `.claude/agents/`, decilo en el PR y probalo en una
-sesión nueva antes de darlo por andando — no alcanza con que el archivo
-"se vea bien".
+editado) recién queda disponible después de reiniciar la sesión**. Si
+agregás o cambiás algo en `.claude/skills/` o `.claude/agents/`, decilo en el
+PR y probalo en una sesión nueva antes de darlo por andando — no alcanza con
+que el archivo "se vea bien".

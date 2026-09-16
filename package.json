@@ -11,8 +11,9 @@
   "scripts": {
     "dev": "turbo run dev",
     "build": "turbo run build",
-    "test": "turbo run test",
+    "test": "turbo run test && pnpm test:hooks",
     "test:domain": "turbo run test --filter=@joda/domain",
+    "test:hooks": "node --test scripts/hooks/lib/*.test.mjs",
     "lint": "turbo run lint",
     "typecheck": "turbo run typecheck",
     "format": "prettier --write .",
