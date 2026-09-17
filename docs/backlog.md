@@ -89,13 +89,21 @@ Identificador: `WP-<bloque><nn>`. Referencialo en la rama, el commit y el PR.
 
 | ID       | Paquete                                                                        | Depende de | Criterio de aceptación                                                      |
 | -------- | ------------------------------------------------------------------------------ | ---------- | --------------------------------------------------------------------------- |
-| ☐ WP-B01 | Incorporar las 10 migraciones a `packages/db/migrations/` y los scripts `db:*` | A01        | `pnpm db:reset` desde cero sin errores                                      |
-| ☐ WP-B02 | Seed: permisos, roles, plan de cuentas, reglas de posteo                       | B01        | `pnpm db:seed` idempotente; matriz de roles coincide con `security-spec.md` |
-| ☐ WP-B03 | Suite de invariantes en el pipeline                                            | B01        | `pnpm db:test` → 18/18 en verde en CI                                       |
+| ☑ WP-B01 | Incorporar las 10 migraciones a `packages/db/migrations/` y los scripts `db:*` | A01        | `pnpm db:reset` desde cero sin errores                                      |
+| ☑ WP-B02 | Seed: permisos, roles, plan de cuentas, reglas de posteo                       | B01        | `pnpm db:seed` idempotente; matriz de roles coincide con `security-spec.md` |
+| ☑ WP-B03 | Suite de invariantes en el pipeline                                            | B01        | `pnpm db:test` → 18/18 en verde en CI                                       |
 | ☐ WP-B04 | Prisma por introspección + script `db:pull` + `schema.prisma` commiteado       | B01        | El cliente tipado compila y expone los 61 modelos                           |
 | ☐ WP-B05 | Testcontainers: base efímera por corrida de tests de integración               | B01        | Un test de integración de ejemplo corre en CI en menos de 60 s              |
 | ☐ WP-B06 | Prueba de aislamiento RLS con el rol `joda_api`                                | B01, B05   | Sin tenant → 0 filas; otro tenant → 0 filas; `UPDATE` al libro → denegado   |
 | ☐ WP-B07 | `docker-compose.yml` con Postgres y Redis para desarrollo local                | B01        | Arranque completo desde cero en menos de 15 min                             |
+
+**Resolución (B01/B02/B03, 2026-09-17, PR #29).** `packages/db` no tenía `package.json`: se lo agregó como workspace real (`@joda/db`), con el driver `pg` de Node en vez de `psql` — portable en Windows sin cliente de Postgres instalado y en CI. Los scripts de la raíz (`db:migrate`, `db:seed`, `db:reset`, `db:test`) dejaron de ser el stub de `pending-task.mjs` y delegan a ese paquete; `db:pull` sigue siendo el stub, es WP-B04. Ningún `.sql` de `migrations/`, `seed/` ni `tests/` se modificó.
+
+**Hallazgo de B03 — "no hubo error de SQL" no prueba que un invariante se cumple.** `pg_temp.expect_fail()` (en `tests/invariants.sql`) atrapa toda excepción y la registra en una tabla `results`, nunca relanza — un invariante roto que deja pasar una operación inválida no produce ningún error de SQL, solo una fila `FALLO — fue aceptado`. `db:test` corre una aserción explícita después del archivo: falla si el total registrado no es exactamente 18 (no solo si `fallaron > 0` — un test que no llegó a correr también da `fallaron = 0`) o si alguna fila quedó en `FALLO`. Contra `smoke_business_flow.sql` verifica en código lo que el archivo solo imprimía para leer a mano: `v_balance_drift` da cero filas y el asiento de la venta cuadra.
+
+**Decisión de forma — `db:reset` borra esquemas, no la base.** `DROP SCHEMA app, public CASCADE` en vez de `DROP DATABASE` + `CREATE DATABASE`: no se puede borrar la base a la que uno mismo está conectado con esa misma conexión, y una credencial contra Postgres administrado (Supabase, RDS) rara vez tiene permiso para crear o borrar bases, pero sí para manejar sus propios esquemas — más portable sin perder nada, ya que las migraciones ya recrean `CREATE SCHEMA IF NOT EXISTS app` y los roles (`joda_api`, `joda_readonly`, creados con `IF NOT EXISTS` en `0010_security_rls.sql`) son a nivel de clúster y sobreviven al reset.
+
+**Verificación real, no local.** El sandbox de Windows donde se implementó no tiene Docker ni WSL2 disponibles (`docker version` → "Docker Desktop is unable to start"; `wsl -l` sin distribuciones). `pnpm db:reset && pnpm db:test` no se pudo correr en esa máquina — se verificó de verdad en el job `db` de CI (PR #29, `postgres:16`), con el log confirmando `[db:test] invariants.sql OK — 18/18 invariantes en verde` y `[db:test] smoke_business_flow.sql OK — deriva cero, asiento cuadrado`.
 
 ---
 
