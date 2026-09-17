@@ -1,0 +1,31 @@
+{
+  "id": "03-fifo-dos-capas",
+  "regla": "RN-COS-04",
+  "origen": "ejemplo trabajado de domain-rules.md, NO una operación real",
+  "nota": "Venta de 3 unidades con L-001 (2 disponibles a 1.400.000) y L-002 (5 disponibles a 1.550.000), política fifo — docs/domain-rules.md RN-COS-04.",
+  "input": {
+    "requiredUnits": 3,
+    "policy": "fifo",
+    "lots": [
+      {
+        "id": "L-001",
+        "receivedAtIso": "2026-01-05T00:00:00.000Z",
+        "availableUnits": 2,
+        "unitCostPygMinor": "1400000"
+      },
+      {
+        "id": "L-002",
+        "receivedAtIso": "2026-02-10T00:00:00.000Z",
+        "availableUnits": 5,
+        "unitCostPygMinor": "1550000"
+      }
+    ]
+  },
+  "expected": {
+    "totalCostPygMinor": "4350000",
+    "layers": [
+      { "lotId": "L-001", "qtyUnits": 2, "totalCostPygMinor": "2800000" },
+      { "lotId": "L-002", "qtyUnits": 1, "totalCostPygMinor": "1550000" }
+    ]
+  }
+}

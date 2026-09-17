@@ -1,0 +1,35 @@
+{
+  "id": "05-fraccionamiento-decant-cogs",
+  "regla": "RN-FRA-04",
+  "origen": "ejemplo trabajado de domain-rules.md, NO una operación real",
+  "nota": "Decant de 10 ml de Layton, granel a 11.972 Gs./ml, merma real 0,35 ml (RN-FRA-04); plan de reserva con waste_factor 2% → wasteExpected 0,200 / mlToReserve 10,200 (RN-FRA-02, mismo escenario) — docs/domain-rules.md.",
+  "input": {
+    "plan": {
+      "mlExpectedMl": 10,
+      "wasteExpectedMl": 0.2,
+      "mlToReserveMl": 10.2,
+      "bomToReserve": [
+        { "componentId": "vial", "qtyUnits": 1 },
+        { "componentId": "atomizador", "qtyUnits": 1 },
+        { "componentId": "etiqueta", "qtyUnits": 1 }
+      ]
+    },
+    "wasteActualMl": 0.35,
+    "bulkLot": {
+      "id": "granel-layton",
+      "availableMl": 50,
+      "unitCostPygMinor": "11972"
+    },
+    "bomLots": [
+      { "componentId": "vial", "lotId": "lote-vial", "unitCostPygMinor": "4500" },
+      { "componentId": "atomizador", "lotId": "lote-atomizador", "unitCostPygMinor": "2500" },
+      { "componentId": "etiqueta", "lotId": "lote-etiqueta", "unitCostPygMinor": "300" }
+    ]
+  },
+  "expected": {
+    "liquidPygMinor": "119720",
+    "wastePygMinor": "4190",
+    "suppliesPygMinor": "7300",
+    "cogsPygMinor": "131210"
+  }
+}

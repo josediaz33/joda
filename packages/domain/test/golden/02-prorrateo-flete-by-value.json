@@ -1,0 +1,21 @@
+{
+  "id": "02-prorrateo-flete-by-value",
+  "regla": "RN-COS-02",
+  "origen": "ejemplo trabajado de domain-rules.md, NO una operación real",
+  "nota": "Flete Gs. 300.000 sobre tres líneas de 1.000.000, 500.000 y 200.000, método by_value — docs/domain-rules.md RN-COS-02.",
+  "input": {
+    "freightPygMinor": "300000",
+    "lines": [
+      { "id": "linea-a", "valuePygMinor": "1000000" },
+      { "id": "linea-b", "valuePygMinor": "500000" },
+      { "id": "linea-c", "valuePygMinor": "200000" }
+    ]
+  },
+  "expected": {
+    "freightByLineId": {
+      "linea-a": "176471",
+      "linea-b": "88235",
+      "linea-c": "35294"
+    }
+  }
+}
