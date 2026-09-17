@@ -1,0 +1,19 @@
+{
+  "name": "@joda/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Esquema SQL-first (ADR-018): migraciones, seed y suite de invariantes contra PostgreSQL 16 (WP-B01/B02/B03, ver docs/backlog.md).",
+  "scripts": {
+    "db:migrate": "node scripts/migrate.mjs",
+    "db:seed": "node scripts/seed.mjs",
+    "db:reset": "node scripts/reset.mjs",
+    "db:test": "node scripts/test.mjs"
+  },
+  "dependencies": {
+    "pg": "8.16.3"
+  },
+  "devDependencies": {
+    "@types/pg": "8.15.5"
+  }
+}
