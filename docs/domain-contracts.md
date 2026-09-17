@@ -565,7 +565,9 @@ describe("RN-IVA-03 · diferencia de redondeo", () => {
 
 ### 8.1 Dataset dorado
 
-`packages/domain/test/golden/` contiene ~20 operaciones reales del negocio con resultados calculados a mano y verificados contra la operación histórica: una compra completa con flete, una apertura de frasco, un fraccionamiento, una venta mixta, una devolución.
+`packages/domain/test/golden/` contiene ~20 operaciones del negocio con resultados verificados a mano: una compra completa con flete, una apertura de frasco, un fraccionamiento, una venta mixta, una devolución. Nunca generados corriendo el código bajo prueba — eso mediría contra sí mismo.
+
+Cada caso declara su procedencia en `origen` (`packages/domain/test/golden/case.ts`, WP-A10/WP-A10b): un **ejemplo trabajado de `docs/domain-rules.md`** (el número ya estaba redactado al escribir la regla — detecta que un refactor cambió un cálculo, no confirma la operación real) o una **operación real** (export del ERP v2, WP-D01, o planilla de costos, calculada a mano — la única que confirma el costeo contra cómo opera JODA de verdad).
 
 Corre en cada PR. **Es lo que permite refactorizar el costeo sin miedo.**
 
