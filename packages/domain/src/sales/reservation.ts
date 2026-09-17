@@ -21,22 +21,26 @@
 // como patrón en docs/engineering-principles.md Parte III, "Vencimiento
 // futuro como epoch-ms, nunca como Date" — este archivo es el precedente.
 //
-// `ReservationTrigger` NO es el mismo vocabulario que
-// `reservation_reason` (packages/db/migrations/0001_foundation.sql:
-// `checkout | order_pending_payment | deposit_hold | decant_hold |
-// manual_hold`), a propósito pero sin mapeo 1:1: acá hay un valor por cada
-// FILA con TTL fijo de RN-RES-02 (uno por medio de pago), mientras que la
-// base solo necesita distinguir el MOTIVO de la reserva para
-// `stock_reservations.reason`. `card_pending` y `bank_transfer` — dos TTL
-// distintos acá — colapsan los dos en el mismo `order_pending_payment` de
-// la base; `checkout_start` es `checkout`; `manual_hold` (con su propia
-// función acá) es `manual_hold` allá. `decant_hold` no tiene contraparte
-// en este archivo: es la reserva de granel durante un fraccionamiento
+// Lo que este archivo calcula (ReservationTrigger, 3 valores, más la
+// retención manual aparte — ver el comentario de ReservationTrigger más
+// abajo) NO es el mismo vocabulario que `reservation_reason`
+// (packages/db/migrations/0001_foundation.sql: `checkout |
+// order_pending_payment | deposit_hold | decant_hold | manual_hold`, 5
+// valores), a propósito pero sin mapeo 1:1 — la comparación es contra los
+// CINCO valores de la base, no solo contra `ReservationTrigger`:
+// `checkout_start` es `checkout`; `card_pending` y `bank_transfer` — dos
+// TTL distintos acá — colapsan los dos en el mismo `order_pending_payment`
+// de la base; la retención manual (`computeManualHoldExpiresAt`, no un
+// `ReservationTrigger`) es `manual_hold` allá. `deposit_hold` tampoco pasa
+// por `ReservationTrigger`: corresponde a la fila "seña recibida" de
+// RN-RES-02 de más arriba, cuyo vencimiento es `deposit.expiresAt`, no un
+// TTL calculado acá. `decant_hold` no tiene contraparte en este archivo en
+// absoluto: es la reserva de granel durante un fraccionamiento
 // (decant/planning.ts), un motivo distinto de RN-RES-02. Quien escriba
-// WP-C18 (orquestación de reservas) es quien traduce `ReservationTrigger`
-// al `reason` de la fila — este archivo no necesita saberlo para calcular
-// un TTL, pero vale dejarlo anotado antes de que alguien asuma que son el
-// mismo enum.
+// WP-C18 (orquestación de reservas) es quien traduce cada uno de estos
+// casos al `reason` de la fila — este archivo no necesita saberlo para
+// calcular un TTL, pero vale dejarlo anotado antes de que alguien asuma
+// que `ReservationTrigger` es el mismo enum que `reservation_reason`.
 import { InvalidReservationInputError } from "../shared/errors.js";
 import { err, ok, type Result } from "../shared/result.js";
 
