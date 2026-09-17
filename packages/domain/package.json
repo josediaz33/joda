@@ -11,6 +11,7 @@
     "lint": "eslint ."
   },
   "devDependencies": {
+    "@types/node": "catalog:",
     "typescript": "catalog:",
     "eslint": "catalog:",
     "@eslint/js": "catalog:",
