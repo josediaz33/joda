@@ -24,7 +24,17 @@
 // que lo cubra y el criterio de aceptación del backlog no lo cita —
 // `channel_listings.price_override_pyg` (packages/db/migrations/0006_sales.sql)
 // es hoy un simple override nullable sin lógica de negocio documentada
-// encima. Se deja para el WP que traiga esa regla, en vez de inventarla acá.
+// encima. Sin WP asignado todavía en docs/backlog.md — sí está listado como
+// módulo futuro en docs/domain-contracts.md §2, así que no es un módulo
+// inventado, pero nadie lo tiene tomado.
+//
+// "Descuentos" en el objetivo de WP-A09 (docs/backlog.md) es lo que valida
+// `computeSaleOrderTotals` (que `discountPyg` no deje `total_pyg` negativo),
+// no cómo se CALCULA un descuento: no hay ningún RN-XXX de reglas de
+// descuento (por volumen, por cliente, por cupón) en docs/domain-rules.md,
+// así que `discountPyg` entra como `Money` ya resuelto desde afuera. Es un
+// alcance diferido, no una omisión — igual que "precio por canal" arriba,
+// no lo inventé porque no hay regla que lo respalde.
 import { Money } from "../shared/money.js";
 import { err, ok, type Result } from "../shared/result.js";
 import { defineStateMachine, type TransitionError } from "../shared/stateMachine.js";

@@ -17,7 +17,26 @@
 // `Date`. Quien orquesta arma el timestamp final a partir de ese número.
 // `startedAt.getTime()` sí es válido: es un método sobre un `Date` que YA
 // entró por parámetro, no una construcción nueva (mismo criterio que
-// `inventory/allocation.ts` al comparar `receivedAt`/`expiryAt`).
+// `inventory/allocation.ts` al comparar `receivedAt`/`expiryAt`). Catalogado
+// como patrón en docs/engineering-principles.md Parte III, "Vencimiento
+// futuro como epoch-ms, nunca como Date" — este archivo es el precedente.
+//
+// `ReservationTrigger` NO es el mismo vocabulario que
+// `reservation_reason` (packages/db/migrations/0001_foundation.sql:
+// `checkout | order_pending_payment | deposit_hold | decant_hold |
+// manual_hold`), a propósito pero sin mapeo 1:1: acá hay un valor por cada
+// FILA con TTL fijo de RN-RES-02 (uno por medio de pago), mientras que la
+// base solo necesita distinguir el MOTIVO de la reserva para
+// `stock_reservations.reason`. `card_pending` y `bank_transfer` — dos TTL
+// distintos acá — colapsan los dos en el mismo `order_pending_payment` de
+// la base; `checkout_start` es `checkout`; `manual_hold` (con su propia
+// función acá) es `manual_hold` allá. `decant_hold` no tiene contraparte
+// en este archivo: es la reserva de granel durante un fraccionamiento
+// (decant/planning.ts), un motivo distinto de RN-RES-02. Quien escriba
+// WP-C18 (orquestación de reservas) es quien traduce `ReservationTrigger`
+// al `reason` de la fila — este archivo no necesita saberlo para calcular
+// un TTL, pero vale dejarlo anotado antes de que alguien asuma que son el
+// mismo enum.
 import { InvalidReservationInputError } from "../shared/errors.js";
 import { err, ok, type Result } from "../shared/result.js";
 
