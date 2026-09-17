@@ -13,9 +13,14 @@ Detalle completo: `docs/testing-strategy.md`.
 
 - Cada `describe` referencia la regla que verifica: `RN-XXX-nn`. Sin referencia,
   el test es una afirmación sin fundamento.
-- Excepción: los objetos de valor de `shared/` (Money, Quantity, Percentage,
-  Result, errors) citan la sección de `docs/domain-contracts.md` que los
-  define en vez de un `RN-XXX-nn` — ver `docs/testing-strategy.md` §2.2.
+- Excepción: código que no encarna una regla de negocio, solo una convención
+  mecánica o definicional, cita la sección del documento que la define en vez
+  de inventar un `RN-XXX-nn` que no existe — ver `docs/testing-strategy.md`
+  §2.2. Dos casos concretos, no los únicos posibles: los objetos de valor de
+  `packages/domain/src/shared/` (Money, Quantity, Percentage, Result, errors)
+  citan `docs/domain-contracts.md`; los esquemas de frontera de
+  `packages/contracts` (dinero como string, ids, paginación — WP-A11) citan
+  `docs/api-conventions.md`/`docs/data-model.md`.
 - **Sin lógica en los tests.** Sin `if`, sin bucles calculando el esperado. El
   valor esperado se escribe literal.
 - Nombres que describen comportamiento, no la función.
