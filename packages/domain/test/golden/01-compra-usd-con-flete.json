@@ -1,0 +1,16 @@
+{
+  "id": "01-compra-usd-con-flete",
+  "regla": "RN-COS-01",
+  "origen": "ejemplo trabajado de domain-rules.md, NO una operación real",
+  "nota": "Frasco de Layton 125 ml: USD 190,00 de precio + USD 15,00 de flete y despacho, dólar a 7.300 — docs/domain-rules.md RN-COS-01 y RN-COS-03 (costo unitario del granel).",
+  "input": {
+    "supplierPriceUsdMinor": "19000",
+    "freightUsdMinor": "1500",
+    "fxRateToPyg": 7300,
+    "qtyInitialMl": 125
+  },
+  "expected": {
+    "landedCostPygMinor": "1496500",
+    "unitLandedCostPygMinorPerMl": "11972"
+  }
+}

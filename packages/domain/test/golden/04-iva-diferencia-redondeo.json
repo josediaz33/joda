@@ -1,0 +1,19 @@
+{
+  "id": "04-iva-diferencia-redondeo",
+  "regla": "RN-IVA-03",
+  "origen": "ejemplo trabajado de domain-rules.md, NO una operación real",
+  "nota": "Tres líneas de Gs. 33.333 al 10%: el IVA de línea (3.030 × 3 = 9.090) no cierra contra el IVA del documento (99.999 / 11 = 9.091); la diferencia de +1 va a la tercera línea — docs/domain-rules.md RN-IVA-03.",
+  "input": {
+    "lines": [
+      { "grossPygMinor": "33333", "rate": "iva_10" },
+      { "grossPygMinor": "33333", "rate": "iva_10" },
+      { "grossPygMinor": "33333", "rate": "iva_10" }
+    ]
+  },
+  "expected": {
+    "lineVatsPygMinor": ["3030", "3030", "3031"],
+    "totalGrossPygMinor": "99999",
+    "totalVatPygMinor": "9091",
+    "totalBasePygMinor": "90908"
+  }
+}

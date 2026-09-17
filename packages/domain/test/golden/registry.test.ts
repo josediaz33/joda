@@ -13,9 +13,17 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import type { GoldenCaseFile } from "./case.js";
+import type { GoldenCaseFile, GoldenCaseOrigin } from "./case.js";
 
 const GOLDEN_DIR = dirname(fileURLToPath(import.meta.url));
+
+// Las dos únicas procedencias válidas de un `expected` (case.ts): un
+// ejemplo ya redactado en domain-rules.md, o una operación real
+// confirmada por José. Nada más cuenta como "citar el origen".
+const VALID_ORIGINS: readonly GoldenCaseOrigin[] = [
+  "ejemplo trabajado de domain-rules.md, NO una operación real",
+  "operación real",
+];
 
 // El propio patrón lo impone la convención de nombres de
 // docs/testing-strategy.md §5 ("01-compra-usd-con-flete.json", ...): dos
@@ -77,6 +85,14 @@ describe("Dataset dorado · convención de archivo (docs/domain-contracts.md §8
       const data = readCase(file);
       expect(typeof data.nota).toBe("string");
       expect(data.nota.length).toBeGreaterThanOrEqual(MIN_NOTA_LENGTH);
+    },
+  );
+
+  it.each(files)(
+    "%s declara 'origen' como ejemplo trabajado u operación real, sin término medio",
+    (file: string) => {
+      const data = readCase(file);
+      expect(VALID_ORIGINS as readonly string[]).toContain(data.origen);
     },
   );
 
