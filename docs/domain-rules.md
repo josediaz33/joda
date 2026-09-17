@@ -192,6 +192,8 @@ Abrir un frasco sellado para fraccionar es una **conversión entre dos lotes**, 
 4. transfer_in  +125 ml     sobre el lote de granel
 ```
 
+**Precondición de estado.** Solo se puede abrir un lote sellado en status `available`. Un lote en `quarantine` o `damaged` se rechaza — no se puede fraccionar mercadería que todavía no pasó control de calidad o que ya se descartó. Confirmado como regla de negocio en la revisión cruzada de WP-A13 (no estaba escrito hasta esta aclaración).
+
 ### RN-LOT-03 · Frasco abierto no se vende sellado
 
 Un lote en `open_for_decant` no admite movimientos de tipo `sale` sobre la variante sellada. Impuesto por la base.
