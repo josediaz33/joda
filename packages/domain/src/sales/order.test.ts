@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { canTransitionSaleOrder, transitionSaleOrder, type SaleOrderStatus } from "./order.js";
+import { Money } from "../shared/money.js";
+import {
+  canTransitionSaleOrder,
+  computeSaleOrderTotals,
+  transitionSaleOrder,
+  type SaleOrderStatus,
+} from "./order.js";
 
 // Matriz completa: los 9 estados de sale_order_status (packages/db/
 // migrations/0001_foundation.sql) contra sí mismos, 9×9 = 81 pares. Cada
@@ -132,5 +138,78 @@ describe("RN-EST-02 · transitionSaleOrder — Result, no excepción", () => {
       ok: false,
       error: { code: "INVALID_TRANSITION", from: "preparing", to: "cancelled" },
     });
+  });
+});
+
+describe("RN-VTA-01 · total_pyg = subtotal_pyg − discount_pyg + shipping_pyg", () => {
+  it("resta el descuento y suma el envío al subtotal, literal", () => {
+    const result = computeSaleOrderTotals({
+      subtotalPyg: Money.pyg(100_000n),
+      discountPyg: Money.pyg(20_000n),
+      shippingPyg: Money.pyg(15_000n),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      value: {
+        subtotalPyg: Money.pyg(100_000n),
+        discountPyg: Money.pyg(20_000n),
+        shippingPyg: Money.pyg(15_000n),
+        totalPyg: Money.pyg(95_000n),
+      },
+    });
+  });
+
+  it("sin descuento ni envío, el total es el subtotal", () => {
+    const result = computeSaleOrderTotals({
+      subtotalPyg: Money.pyg(50_000n),
+      discountPyg: Money.pyg(0n),
+      shippingPyg: Money.pyg(0n),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value.totalPyg).toEqual(Money.pyg(50_000n));
+  });
+});
+
+describe("RN-VTA-01 · caso borde #19 — total_pyg negativo se rechaza, nunca se trunca a cero", () => {
+  it("descuento mayor al subtotal sin envío que lo compense: err() con NEGATIVE_TOTAL", () => {
+    const result = computeSaleOrderTotals({
+      subtotalPyg: Money.pyg(50_000n),
+      discountPyg: Money.pyg(80_000n),
+      shippingPyg: Money.pyg(0n),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "NEGATIVE_TOTAL",
+        subtotalPyg: Money.pyg(50_000n),
+        discountPyg: Money.pyg(80_000n),
+        shippingPyg: Money.pyg(0n),
+      },
+    });
+  });
+
+  it("total exactamente cero (descuento = subtotal + envío) se acepta: cero no es negativo", () => {
+    const result = computeSaleOrderTotals({
+      subtotalPyg: Money.pyg(50_000n),
+      discountPyg: Money.pyg(50_000n),
+      shippingPyg: Money.pyg(0n),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value.totalPyg).toEqual(Money.pyg(0n));
+  });
+
+  it("un descuento mayor al subtotal se acepta si el envío compensa lo suficiente: la regla es total_pyg ≥ 0, no descuento ≤ subtotal", () => {
+    const result = computeSaleOrderTotals({
+      subtotalPyg: Money.pyg(50_000n),
+      discountPyg: Money.pyg(80_000n),
+      shippingPyg: Money.pyg(30_000n),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.ok && result.value.totalPyg).toEqual(Money.pyg(0n));
   });
 });
