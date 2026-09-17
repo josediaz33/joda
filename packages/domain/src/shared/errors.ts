@@ -121,3 +121,17 @@ export class InvalidLotOpeningInputError extends DomainError {
     super("INVALID_LOT_OPENING_INPUT", message);
   }
 }
+
+/** computeManualHoldExpiresAt() (sales/reservation.ts, RN-RES-02) con days no positivo o no finito: argumento fuera de rango, no un fallo que el negocio contemple. */
+export class InvalidReservationInputError extends DomainError {
+  constructor(message: string) {
+    super("INVALID_RESERVATION_INPUT", message);
+  }
+}
+
+/** applyDepositToOrder() (sales/deposit.ts, RN-SEN-02) con un monto a aplicar no positivo: argumento fuera de rango, no un fallo que el negocio contemple. */
+export class InvalidDepositInputError extends DomainError {
+  constructor(message: string) {
+    super("INVALID_DEPOSIT_INPUT", message);
+  }
+}

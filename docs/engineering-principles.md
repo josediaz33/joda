@@ -329,6 +329,11 @@ Para el modo offline del admin: mutaciones encoladas localmente con clave de ide
 Compromiso temporal separado del consumo definitivo, con TTL según el nivel de compromiso del cliente.
 **Dónde:** `stock_reservations`.
 
+### Vencimiento futuro como epoch-ms, nunca como `Date`
+
+`packages/domain` no puede construir un `Date` nuevo (`no-restricted-globals` sobre el identificador `Date`, `.claude/rules/domain.md`): una función pura que calcula "esto vence dentro de N minutos/días" no puede devolver ese resultado como `Date`, porque hacerlo requeriría `new Date(...)`. La salida es un `number` (epoch en milisegundos): `startedAt.getTime() + duraciónMs`. Leer con `.getTime()` un `Date` que YA entró por parámetro está permitido (es un método, no una construcción); construir uno nuevo, no. Quien orquesta (con I/O, fuera de `packages/domain`) arma el `Date`/`timestamptz` final a partir de ese número.
+**Dónde:** `sales/reservation.ts` (`computeReservationExpiresAt`, `computeManualHoldExpiresAt`, WP-A09). Usalo como precedente antes de que otro módulo necesite devolver un vencimiento calculado.
+
 ---
 
 ## Parte IV — Antipatrones prohibidos
