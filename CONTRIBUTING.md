@@ -61,6 +61,18 @@ tomar el paquete:
 - **Fastify 5.12.5** — API. Sin tRPC todavía: el router tipado y las capas de
   `docs/api-conventions.md` son WP-C01, no este paquete.
 
+### Decisiones de versión (WP-A11)
+
+- **Zod 4.6.5** — sin fijar un major a mano, la versión que resolvió el
+  registro al tomar el paquete. `.strict()` y `.uuid()` se comportan igual
+  que en la v3 para lo que usa `packages/contracts` hoy.
+- **@trpc/server 11.19.0** — solo el paquete de tipos/servidor, sin cliente
+  todavía: el cliente tipado (`packages/sdk`) llega junto con WP-C01, que es
+  también cuando `apps/api` arma su propia instancia de tRPC con contexto de
+  petición real. El procedimiento de ejemplo de `packages/contracts` usa una
+  instancia mínima (`initTRPC.create()`) solo para probar que el patrón
+  compila extremo a extremo — no es el router de producción.
+
 ---
 
 ## 2. Ramas
