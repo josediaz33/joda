@@ -309,6 +309,12 @@ por_insumos = mín(99, 99, 199)    = 99
 disponible  = 11
 ```
 
+### RN-FRA-07 · Origen del granel
+
+El lote de origen de un decant debe ser granel real (`variantType = 'bulk'`, `uom = 'ml'`) en estado `open_for_decant`. No alcanza con el `status`: tras la apertura de un frasco (RN-LOT-02, ADR-009), el lote sellado padre comparte ese mismo `open_for_decant` con el granel hijo que recién nace — un `LotSnapshot` del sellado padre se rechaza igual, aunque su `status` sea idéntico al del granel válido.
+
+**Ejemplo.** Sellado padre en `open_for_decant` (`variantType: 'sealed'`, `uom: 'unit'`) → rechazado con `SOURCE_LOT_NOT_DECANTABLE`. Granel hijo en `open_for_decant` (`variantType: 'bulk'`, `uom: 'ml'`) → aceptado.
+
 ---
 
 ## RN-RES — Reservas

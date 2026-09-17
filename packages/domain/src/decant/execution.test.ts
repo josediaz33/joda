@@ -14,6 +14,8 @@ function bulkLot(overrides: Partial<LotSnapshot> = {}): LotSnapshot {
     available: Quantity.ml(125),
     unitCost: Money.pyg(11_972n),
     status: "open_for_decant",
+    variantType: "bulk",
+    uom: "ml",
     ...overrides,
   };
 }
@@ -251,6 +253,17 @@ describe("executeDecant · el lote de origen debe ser granel abierto para decant
     expect(result).toEqual({
       ok: false,
       error: { code: "SOURCE_LOT_NOT_DECANTABLE", status: "quarantine" },
+    });
+  });
+
+  it("WP-A15 · un sellado en open_for_decant (el padre recién abierto, ADR-009) también se rechaza, aunque comparta status con el granel", () => {
+    const result = executeDecant(
+      executeInput({ bulkLot: bulkLot({ variantType: "sealed", uom: "unit" }) }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "SOURCE_LOT_NOT_DECANTABLE", status: "open_for_decant" },
     });
   });
 });

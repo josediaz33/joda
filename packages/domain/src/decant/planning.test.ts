@@ -15,6 +15,8 @@ function bulkLot(overrides: Partial<LotSnapshot> = {}): LotSnapshot {
     available: Quantity.ml(125),
     unitCost: Money.pyg(11_972n),
     status: "open_for_decant",
+    variantType: "bulk",
+    uom: "ml",
     ...overrides,
   };
 }
@@ -142,6 +144,34 @@ describe("planDecant · el lote de origen debe ser granel abierto para decantar"
       ok: false,
       error: { code: "SOURCE_LOT_NOT_DECANTABLE", status: "depleted" },
     });
+  });
+});
+
+describe("RN-FRA-07 · el sellado padre recién abierto no pasa como fuente de decant, aunque comparta status con el granel", () => {
+  it("un sellado en open_for_decant (el padre recién abierto, ADR-009) se rechaza aunque su status sea el mismo que el del granel", () => {
+    const result = planDecant(
+      planInput({ bulkLot: bulkLot({ variantType: "sealed", uom: "unit" }) }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "SOURCE_LOT_NOT_DECANTABLE", status: "open_for_decant" },
+    });
+  });
+
+  it("variantType 'bulk' con uom 'unit' (dato inconsistente) también se rechaza — un decant siempre se sirve de ml", () => {
+    const result = planDecant(planInput({ bulkLot: bulkLot({ uom: "unit" }) }));
+
+    expect(result).toEqual({
+      ok: false,
+      error: { code: "SOURCE_LOT_NOT_DECANTABLE", status: "open_for_decant" },
+    });
+  });
+
+  it("un granel en open_for_decant se acepta — es el caso que ya validaba antes de A15", () => {
+    const result = planDecant(planInput({ bulkLot: bulkLot() }));
+
+    expect(result.ok).toBe(true);
   });
 });
 
