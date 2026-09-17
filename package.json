@@ -18,11 +18,11 @@
     "typecheck": "turbo run typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "db:migrate": "node scripts/pending-task.mjs \"db:migrate\" WP-B01",
-    "db:seed": "node scripts/pending-task.mjs \"db:seed\" WP-B02",
+    "db:migrate": "pnpm --filter @joda/db run db:migrate",
+    "db:seed": "pnpm --filter @joda/db run db:seed",
     "db:pull": "node scripts/pending-task.mjs \"db:pull\" WP-B04",
-    "db:test": "node scripts/pending-task.mjs \"db:test\" WP-B03",
-    "db:reset": "node scripts/pending-task.mjs \"db:reset\" WP-B01"
+    "db:test": "pnpm --filter @joda/db run db:test",
+    "db:reset": "pnpm --filter @joda/db run db:reset"
   },
   "devDependencies": {
     "turbo": "2.10.12",

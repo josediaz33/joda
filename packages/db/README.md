@@ -32,13 +32,53 @@ El flujo de negocio de `tests/smoke_business_flow.sql` corre de punta a punta: c
 
 ## Cómo correrlo
 
+Con `DATABASE_URL` apuntando a una base Postgres 16 vacía (ver `.env.example`):
+
+```bash
+export DATABASE_URL="postgresql://usuario:clave@localhost:5432/joda"
+
+pnpm db:migrate   # aplica migrations/*.sql en orden
+pnpm db:seed      # aplica seed/*.sql (idempotente)
+pnpm db:reset     # DROP SCHEMA app, public + db:migrate + db:seed, desde cero
+pnpm db:test      # smoke_business_flow.sql + invariants.sql, con aserciones
+```
+
+Estos scripts (`packages/db/scripts/`) corren el SQL con el driver `pg` de
+Node, sin depender de que `psql` esté instalado — pensado para que ande
+igual en Windows sin cliente de Postgres y en CI (`.github/workflows/ci.yml`,
+job `db`, con un servicio `postgres:16`). `db:test` no se conforma con que no
+haya un error de SQL: `invariants.sql` atrapa sus propias excepciones y las
+registra en una tabla en vez de relanzarlas, así que el runner falla si el
+conteo de invariantes en verde no es exactamente 18, y en
+`smoke_business_flow.sql` verifica en código que `v_balance_drift` da cero
+filas y que el asiento de la venta cuadra.
+
+**`pnpm db:seed` por sí solo no crea filas en `roles` ni en
+`chart_of_accounts` para ningún tenant.** `seed/0001_seed_base.sql` carga el
+catálogo global de `permissions` (no es por tenant) y define tres funciones
+reutilizables — `app.seed_chart_of_accounts(tenant)`,
+`app.seed_roles(tenant)`, `app.seed_posting_rules(tenant)` — pero no las
+invoca: no hay un tenant todavía. Instanciarlas para un tenant es parte del
+onboarding (Bloque C), y hoy la única llamada existente vive en
+`tests/smoke_business_flow.sql`, con el tenant fijo
+`11111111-1111-1111-1111-111111111111`. Por eso la matriz de roles
+(`owner`/`manager`/`vendedor`/`deposito`) de `docs/security-spec.md` §2.1 se
+verifica corriendo `pnpm db:test` (que ejecuta ese smoke test), no apareciendo
+sola después de `pnpm db:reset && pnpm db:seed`.
+
+`db:pull` (Prisma por introspección) todavía no está implementado —
+WP-B04, ver `docs/backlog.md`.
+
+Equivalente manual con `psql`, sin pasar por Node (mismo orden, mismos
+archivos):
+
 ```bash
 createdb joda
 for f in migrations/0*.sql seed/0001_seed_base.sql; do
   psql -d joda -v ON_ERROR_STOP=1 -f "$f"
 done
 
-# opcional: verificar
+# opcional: verificar a mano, leyendo la salida
 psql -d joda -f tests/smoke_business_flow.sql
 psql -d joda -f tests/invariants.sql
 ```
