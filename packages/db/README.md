@@ -53,6 +53,19 @@ conteo de invariantes en verde no es exactamente 18, y en
 `smoke_business_flow.sql` verifica en código que `v_balance_drift` da cero
 filas y que el asiento de la venta cuadra.
 
+**`pnpm db:seed` por sí solo no crea filas en `roles` ni en
+`chart_of_accounts` para ningún tenant.** `seed/0001_seed_base.sql` carga el
+catálogo global de `permissions` (no es por tenant) y define tres funciones
+reutilizables — `app.seed_chart_of_accounts(tenant)`,
+`app.seed_roles(tenant)`, `app.seed_posting_rules(tenant)` — pero no las
+invoca: no hay un tenant todavía. Instanciarlas para un tenant es parte del
+onboarding (Bloque C), y hoy la única llamada existente vive en
+`tests/smoke_business_flow.sql`, con el tenant fijo
+`11111111-1111-1111-1111-111111111111`. Por eso la matriz de roles
+(`owner`/`manager`/`vendedor`/`deposito`) de `docs/security-spec.md` §2.1 se
+verifica corriendo `pnpm db:test` (que ejecuta ese smoke test), no apareciendo
+sola después de `pnpm db:reset && pnpm db:seed`.
+
 `db:pull` (Prisma por introspección) todavía no está implementado —
 WP-B04, ver `docs/backlog.md`.
 
