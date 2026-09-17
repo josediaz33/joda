@@ -29,6 +29,87 @@ const DOMAIN_PURITY_MESSAGE =
   "packages/domain no puede depender de I/O ni de frameworks: es lógica pura " +
   "(CLAUDE.md § Código, .claude/rules/domain.md). Módulo prohibido: {{dependency.source}}";
 
+// Registro de excepciones de pureza. Toda ampliación debe agregar acá fecha,
+// motivo, WP y alcance exacto, junto con una regresión en test/boundaries.test.ts.
+// - 2026-09-10 · WP-A03 · 30b7897: checkInternals:true cerró el bypass de
+//   dependencias instaladas por pnpm; para habilitar vitest/fast-check se
+//   apagó boundaries/dependencies en *.test.ts y vitest.config.ts.
+// - 2026-09-13 · WP-A06 · 7141aa2: se permitió Date en esos mismos archivos
+//   para fixtures de LotSnapshot.receivedAt/expiryAt (domain-contracts.md §6.1).
+// - 2026-09-17 · WP-A10 · f3861d2: registry.test.ts empezó a leer y enumerar
+//   los JSON del dataset dorado con node:fs, node:path y node:url, amparado
+//   por la excepción general. WP-A12 registra retrospectivamente ese uso.
+// - 2026-09-17 · WP-A12: se reemplaza el apagado por listas exactas:
+//   tests → vitest/fast-check; vitest.config.ts → vitest/config;
+//   test/golden/registry.test.ts → vitest/fast-check + node:fs/path/url.
+//   Date solo en tests, con lecturas directas del reloj real prohibidas.
+//
+// Decisión WP-A12: vías 2 + 3 del backlog (mínimos permisos + registro).
+// No se adopta la vía 1: mover todos los tests a test/ contradice la ubicación
+// junto al código de testing-strategy.md §8 y amplía este WP sin reducir los
+// permisos por sí solo. El sufijo sigue clasificando tests, pero ya no apaga
+// una regla completa. Los helpers .ts conservan las restricciones de producción.
+const DOMAIN_TEST_IMPORTS = ["vitest", "fast-check"];
+
+function domainDependencies(allowedImports = []) {
+  return [
+    "error",
+    {
+      default: "allow",
+      checkAllOrigins: true,
+      // pnpm resuelve dependencias dentro de packages/domain/node_modules:
+      // boundaries las clasifica como internas. Sin esto quedan exentas,
+      // incluso si se instala Prisma. Ver la regresión con vitest instalado.
+      checkInternals: true,
+      policies: [
+        {
+          from: { element: { type: "domain" } },
+          disallow: { to: { module: { origin: ["core", "external"] } } },
+          message: DOMAIN_PURITY_MESSAGE,
+        },
+        // La última política coincidente gana. dependency.source conserva
+        // la subruta literal; module.source agruparía vitest/config como
+        // vitest, ensanchando el permiso. Sin comodines ni todo Node.
+        ...allowedImports.map((source) => ({
+          from: { element: { type: "domain" } },
+          allow: { dependency: { source } },
+        })),
+      ],
+    },
+  ];
+}
+
+const DOMAIN_RESTRICTED_GLOBALS = [
+  {
+    name: "fetch",
+    message:
+      "packages/domain no hace I/O de red: el acceso HTTP entra por puerto (docs/engineering-principles.md Parte I·D).",
+  },
+  {
+    name: "Date",
+    message:
+      "packages/domain no puede leer el reloj real: el tiempo entra por el puerto Clock (docs/engineering-principles.md Parte I·D).",
+  },
+  {
+    name: "crypto",
+    message:
+      "packages/domain no puede generar aleatoriedad: entra por el puerto IdGenerator (docs/engineering-principles.md Parte I·D).",
+  },
+];
+
+const DOMAIN_RESTRICTED_SYNTAX = [
+  {
+    selector: "MemberExpression[object.name='process'][property.name='env']",
+    message:
+      "packages/domain no lee variables de entorno: la configuración entra por parámetro (.claude/rules/domain.md).",
+  },
+  {
+    selector: "MemberExpression[object.name='Math'][property.name='random']",
+    message:
+      "packages/domain no puede usar Math.random: la aleatoriedad entra por el puerto IdGenerator (.claude/rules/domain.md).",
+  },
+];
+
 export default [
   {
     ignores: [
@@ -38,8 +119,8 @@ export default [
       "**/coverage/**",
       "**/node_modules/**",
       // Fixture con violaciones a propósito (ver test/boundaries.test.ts):
-      // se lintea por la API de Node con una ruta virtual, nunca como
-      // archivo real de este paquete.
+      // se copia a domain y se lintea por el CLI, nunca como archivo real
+      // de este paquete.
       "packages/config/test/fixtures/**",
     ],
   },
@@ -57,98 +138,54 @@ export default [
       "boundaries/elements": [{ type: "domain", pattern: "packages/domain/**" }],
     },
     rules: {
-      "boundaries/dependencies": [
-        "error",
-        {
-          default: "allow",
-          checkAllOrigins: true,
-          // pnpm crea packages/domain/node_modules/<paquete> por cada
-          // dependencia declarada en su package.json — esa ruta resuelta cae
-          // DENTRO de "packages/domain/**", así que el plugin clasifica esa
-          // dependencia como "interna" (relationship.to: "internal"), no
-          // como una dependencia externa cualquiera. Sin checkInternals:true
-          // esas dependencias "internas" nunca se evalúan contra las
-          // políticas de abajo — cualquier paquete que se instale acá (sea
-          // Prisma, sea lo que sea) queda exento del chequeo en silencio.
-          // Solo se atrapan los imports de paquetes NO instalados. Verificado
-          // con ESLINT_PLUGIN_BOUNDARIES_DEBUG=1; test de regresión en
-          // packages/config/test/boundaries.test.ts.
-          checkInternals: true,
-          policies: [
-            {
-              from: { element: { type: "domain" } },
-              disallow: { to: { module: { origin: ["core", "external"] } } },
-              message: DOMAIN_PURITY_MESSAGE,
-            },
-          ],
-        },
-      ],
+      "boundaries/dependencies": domainDependencies(),
+      "no-restricted-globals": ["error", ...DOMAIN_RESTRICTED_GLOBALS],
+      "no-restricted-syntax": ["error", ...DOMAIN_RESTRICTED_SYNTAX],
+    },
+  },
+
+  // Flat config reemplaza reglas enteras: derivar las restricciones de las
+  // mismas listas evita que una prohibición futura desaparezca de los tests.
+  {
+    files: ["packages/domain/**/*.test.ts"],
+    rules: {
+      "boundaries/dependencies": domainDependencies(DOMAIN_TEST_IMPORTS),
       "no-restricted-globals": [
         "error",
-        {
-          name: "fetch",
-          message:
-            "packages/domain no hace I/O de red: el acceso HTTP entra por puerto (docs/engineering-principles.md Parte I·D).",
-        },
-        {
-          name: "Date",
-          message:
-            "packages/domain no puede leer el reloj real: el tiempo entra por el puerto Clock (docs/engineering-principles.md Parte I·D).",
-        },
-        {
-          name: "crypto",
-          message:
-            "packages/domain no puede generar aleatoriedad: entra por el puerto IdGenerator (docs/engineering-principles.md Parte I·D).",
-        },
+        ...DOMAIN_RESTRICTED_GLOBALS.filter(({ name }) => name !== "Date"),
       ],
       "no-restricted-syntax": [
         "error",
+        ...DOMAIN_RESTRICTED_SYNTAX,
         {
-          selector: "MemberExpression[object.name='process'][property.name='env']",
+          selector:
+            "NewExpression[callee.name='Date'][arguments.length=0], " +
+            "CallExpression[callee.name='Date'], " +
+            "MemberExpression[object.name='Date'][property.name='now'], " +
+            "MemberExpression[object.name='Date'][computed=true][property.value='now']",
           message:
-            "packages/domain no lee variables de entorno: la configuración entra por parámetro (.claude/rules/domain.md).",
-        },
-        {
-          selector: "MemberExpression[object.name='Math'][property.name='random']",
-          message:
-            "packages/domain no puede usar Math.random: la aleatoriedad entra por el puerto IdGenerator (.claude/rules/domain.md).",
+            "Los tests usan fechas fijas, no el reloj real (docs/testing-strategy.md §8, WP-A12).",
         },
       ],
     },
   },
 
-  // Los tests de packages/domain sí pueden traer su propio tooling (vitest,
-  // fast-check, ...): la pureza aplica al código que se shippea, no a los
-  // tests que lo verifican (mismo criterio que .claude/rules/testing.md,
-  // que trata **/*.test.ts como un dominio de reglas aparte). Este bloque
-  // va DESPUÉS del de arriba a propósito: en flat config, cuando dos
-  // bloques matchean el mismo archivo, el de más abajo gana regla por
-  // regla — acá solo se pisa "boundaries/dependencies" entero.
   {
-    files: ["packages/domain/**/*.test.ts", "packages/domain/vitest.config.ts"],
+    files: ["packages/domain/vitest.config.ts"],
     rules: {
-      "boundaries/dependencies": "off",
-      // "Date" (no fetch/crypto) se exceptúa acá, y solo acá: un fixture
-      // como `new Date("2026-01-01")` es un literal fijo pasado por
-      // parámetro al código bajo prueba, no una lectura del reloj real —
-      // es justo la distinción que traza .claude/rules/testing.md
-      // ("Nada de `new Date()` ... en el código bajo prueba", no en el
-      // fixture que lo alimenta). LotSnapshot.receivedAt/expiryAt
-      // (docs/domain-contracts.md §6.1) son `Date`, así que
-      // inventory/*.test.ts (WP-A06) necesita poder construirlos.
-      "no-restricted-globals": [
-        "error",
-        {
-          name: "fetch",
-          message:
-            "packages/domain no hace I/O de red: el acceso HTTP entra por puerto (docs/engineering-principles.md Parte I·D).",
-        },
-        {
-          name: "crypto",
-          message:
-            "packages/domain no puede generar aleatoriedad: entra por el puerto IdGenerator (docs/engineering-principles.md Parte I·D).",
-        },
-      ],
+      "boundaries/dependencies": domainDependencies(["vitest/config"]),
+    },
+  },
+
+  {
+    files: ["packages/domain/test/golden/registry.test.ts"],
+    rules: {
+      "boundaries/dependencies": domainDependencies([
+        ...DOMAIN_TEST_IMPORTS,
+        "node:fs",
+        "node:path",
+        "node:url",
+      ]),
     },
   },
 ];

@@ -2,6 +2,28 @@ import { describe, expect, it } from "vitest";
 import { InvalidQuantityError, UomMismatchError } from "./errors.js";
 import { Quantity } from "./quantity.js";
 
+describe("Quantity.zero — docs/domain-contracts.md §3.2, WP-A12", () => {
+  it("crea el neutro aditivo en unidades", () => {
+    const zero = Quantity.zero("unit");
+
+    expect(zero.value).toBe(0);
+    expect(zero.uom).toBe("unit");
+    expect(zero.plus(Quantity.units(3))).toEqual(Quantity.units(3));
+  });
+
+  it("crea el neutro aditivo en mililitros sin convertirlo a unidades", () => {
+    const zero = Quantity.zero("ml");
+
+    expect(zero.value).toBe(0);
+    expect(zero.uom).toBe("ml");
+    expect(zero.plus(Quantity.ml(0.125))).toEqual(Quantity.ml(0.125));
+  });
+
+  it("cero no permite mezclar unidades incompatibles", () => {
+    expect(() => Quantity.zero("unit").compare(Quantity.zero("ml"))).toThrow(UomMismatchError);
+  });
+});
+
 describe("Quantity.units — docs/domain-contracts.md §3.2", () => {
   it("acepta un entero", () => {
     const q = Quantity.units(3);

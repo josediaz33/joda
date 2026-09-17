@@ -157,7 +157,29 @@ describe("Caso borde #2 del catálogo · la merma real supera lo reservado", () 
   });
 });
 
-describe("Caso borde #3 del catálogo · falta un insumo obligatorio del BOM", () => {
+describe("RN-FRA-03 · caso borde #3 del catálogo · falta un insumo obligatorio del BOM", () => {
+  it("informa disponibilidad cero en ml cuando falta un componente medido en ml", () => {
+    const result = executeDecant(
+      executeInput({
+        plan: {
+          ...laytonPlan(),
+          bomToReserve: [{ componentId: "componente-ml", qty: Quantity.ml(0.125) }],
+        },
+        bomLots: [],
+      }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "MISSING_BOM_COMPONENT",
+        componentId: "componente-ml",
+        required: Quantity.ml(0.125),
+        available: Quantity.ml(0),
+      },
+    });
+  });
+
   it("rechaza la ejecución entera cuando el lote del insumo no existe en absoluto", () => {
     const result = executeDecant(
       executeInput({

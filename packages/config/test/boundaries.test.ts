@@ -52,14 +52,21 @@ function lintGeneratedFile(
 ): EslintJsonMessage[] {
   mkdirSync(path.dirname(absolutePath), { recursive: true });
   writeFileSync(absolutePath, code);
+  return lintWithCli(relativePath);
+}
 
+// stdin permite comprobar las dos rutas excepcionales sin sobrescribir sus
+// archivos reales. Sigue siendo el CLI desde la cwd de Turbo, no la API de Node.
+function lintWithCli(relativePath: string, input?: string): EslintJsonMessage[] {
+  const args = input === undefined ? [relativePath] : ["--stdin", "--stdin-filename", relativePath];
   try {
     // eslint sale con código 1 cuando encuentra errores — no es un fallo del
     // subproceso, es el resultado que estamos evaluando. execFileSync lanza
     // en ese caso; el stdout con el JSON sigue viniendo en el error.
-    const stdout = execFileSync(process.execPath, [ESLINT_BIN, "--format", "json", relativePath], {
+    const stdout = execFileSync(process.execPath, [ESLINT_BIN, "--format", "json", ...args], {
       cwd: DOMAIN_PACKAGE_DIR,
       encoding: "utf8",
+      input,
     });
     return JSON.parse(stdout)[0].messages;
   } catch (error) {
@@ -81,7 +88,7 @@ function lintAsDomainTestFile(code: string): EslintJsonMessage[] {
 // tarda bastante más que el timeout por defecto de vitest (5 s).
 const ESLINT_COLD_START_TIMEOUT = 30_000;
 
-describe("pureza de packages/domain (restricción mecánica, no convención)", () => {
+describe("pureza de packages/domain — docs/engineering-principles.md Parte I·D", () => {
   it(
     "rechaza los ocho imports/globals prohibidos con exactamente 8 errores",
     () => {
@@ -144,6 +151,106 @@ describe("pureza de packages/domain (restricción mecánica, no convención)", (
       const messages = lintAsDomainTestFile('import { describe } from "vitest";\nvoid describe;\n');
 
       expect(messages).toHaveLength(0);
+    },
+    ESLINT_COLD_START_TIMEOUT,
+  );
+
+  it(
+    "el sufijo de test no habilita frameworks, otros paquetes instalados ni módulos de Node",
+    () => {
+      const messages = lintAsDomainTestFile(
+        'import "@prisma/client";\nimport "react";\nimport "typescript";\nimport "node:fs";\nimport "node:path";\nimport "node:url";\nimport "vitest/config";\n',
+      );
+
+      expect(messages.map((message) => message.ruleId)).toEqual([
+        "boundaries/dependencies",
+        "boundaries/dependencies",
+        "boundaries/dependencies",
+        "boundaries/dependencies",
+        "boundaries/dependencies",
+        "boundaries/dependencies",
+        "boundaries/dependencies",
+      ]);
+    },
+    ESLINT_COLD_START_TIMEOUT,
+  );
+
+  it(
+    "permite fast-check en tests y conserva los imports locales del dominio",
+    () => {
+      const messages = lintAsDomainTestFile(
+        'import fc from "fast-check";\nimport { Quantity } from "./shared/quantity.js";\nvoid fc;\nvoid Quantity;\n',
+      );
+
+      expect(messages).toEqual([]);
+    },
+    ESLINT_COLD_START_TIMEOUT,
+  );
+
+  it(
+    "mantiene prohibidos red, aleatoriedad y entorno también en tests",
+    () => {
+      const messages = lintAsDomainTestFile(
+        'void fetch("https://example.com");\nvoid crypto.randomUUID();\nvoid Math.random();\nvoid process.env;\n',
+      );
+
+      expect(messages.map((message) => message.ruleId)).toEqual([
+        "no-restricted-globals",
+        "no-restricted-globals",
+        "no-restricted-syntax",
+        "no-restricted-syntax",
+      ]);
+    },
+    ESLINT_COLD_START_TIMEOUT,
+  );
+
+  it(
+    "los fixtures de fecha no habilitan lecturas directas del reloj real",
+    () => {
+      const messages = lintAsDomainTestFile(
+        'void new Date();\nvoid Date();\nvoid Date.now();\nvoid Date["now"]();\n',
+      );
+
+      expect(messages.map((message) => message.ruleId)).toEqual([
+        "no-restricted-syntax",
+        "no-restricted-syntax",
+        "no-restricted-syntax",
+        "no-restricted-syntax",
+      ]);
+    },
+    ESLINT_COLD_START_TIMEOUT,
+  );
+
+  it(
+    "vitest.config.ts solo habilita vitest/config y conserva la prohibición de Date",
+    () => {
+      const messages = lintWithCli(
+        "vitest.config.ts",
+        'import "vitest/config";\nimport "fast-check";\nimport "node:fs";\nvoid new Date("2026-01-01T00:00:00Z");\n',
+      );
+
+      expect(messages.map((message) => message.ruleId)).toEqual([
+        "boundaries/dependencies",
+        "boundaries/dependencies",
+        "no-restricted-globals",
+      ]);
+    },
+    ESLINT_COLD_START_TIMEOUT,
+  );
+
+  it(
+    "el registro dorado habilita solo los tres módulos de Node documentados",
+    () => {
+      const messages = lintWithCli(
+        "test/golden/registry.test.ts",
+        'import "vitest";\nimport "node:fs";\nimport "node:path";\nimport "node:url";\nimport "node:os";\nvoid crypto.randomUUID();\nvoid Date.now();\n',
+      );
+
+      expect(messages.map((message) => message.ruleId)).toEqual([
+        "boundaries/dependencies",
+        "no-restricted-globals",
+        "no-restricted-syntax",
+      ]);
     },
     ESLINT_COLD_START_TIMEOUT,
   );
