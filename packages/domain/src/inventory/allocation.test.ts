@@ -11,6 +11,8 @@ function lot(overrides: Partial<LotSnapshot> & { id: string }): LotSnapshot {
     available: Quantity.units(1),
     unitCost: Money.pyg(1_000n),
     status: "available",
+    variantType: "unit",
+    uom: "unit",
     ...overrides,
   };
 }

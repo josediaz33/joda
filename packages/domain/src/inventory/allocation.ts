@@ -5,11 +5,14 @@
 // decidir cuánto sale de cada lote, pero devuelve el resultado ordenado
 // por id ascendente (RN-LOT-05, orden de bloqueo), no en este orden.
 import type { Money } from "../shared/money.js";
-import type { Quantity } from "../shared/quantity.js";
+import type { Quantity, Uom } from "../shared/quantity.js";
 
 export type AllocationPolicy = "fifo" | "fefo" | "serial" | "manual";
 
 export type LotStatus = "available" | "open_for_decant" | "quarantine" | "damaged" | "depleted";
+
+/** `product_variants.variant_type` (packages/db/migrations/0001_foundation.sql). */
+export type VariantType = "sealed" | "decant" | "tester" | "unit" | "supply" | "bulk";
 
 export interface LotSnapshot {
   readonly id: string;
@@ -18,6 +21,16 @@ export interface LotSnapshot {
   readonly available: Quantity;
   readonly unitCost: Money;
   readonly status: LotStatus;
+  /**
+   * Variante del lote (WP-A15). `selectLotsByPolicy`/`allocateFromLots` no
+   * lo usan — solo `status` decide elegibilidad acá — pero
+   * `decant/planning.ts::assertBulkLotIsDecantable` sí lo necesita para
+   * distinguir un granel `open_for_decant` del sellado padre que queda en
+   * ese mismo status al abrirse (ver la nota de A07 en docs/backlog.md).
+   */
+  readonly variantType: VariantType;
+  /** `product_variants.uom`. Ver la misma nota que `variantType`. */
+  readonly uom: Uom;
 }
 
 /**

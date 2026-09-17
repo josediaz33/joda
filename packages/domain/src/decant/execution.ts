@@ -142,7 +142,7 @@ function resolveBomComponent(
  * COGS 131.210 (119.720 líquido + 4.190 merma + 7.300 insumos).
  */
 export function executeDecant(input: ExecuteDecantInput): Result<DecantExecution, DecantError> {
-  const notDecantable = assertBulkLotIsDecantable(input.bulkLot.status);
+  const notDecantable = assertBulkLotIsDecantable(input.bulkLot);
   if (notDecantable) return err(notDecantable);
 
   const requiredFromBulk = input.plan.mlExpected.plus(input.wasteActual);
