@@ -114,3 +114,10 @@ export class InvalidDecantInputError extends DomainError {
     super("INVALID_DECANT_INPUT", message);
   }
 }
+
+/** openLot() (inventory/lotOpening.ts, ADR-009) con nominalVolumeMl no positivo o no finito: argumento fuera de rango, no un fallo que el negocio contemple. */
+export class InvalidLotOpeningInputError extends DomainError {
+  constructor(message: string) {
+    super("INVALID_LOT_OPENING_INPUT", message);
+  }
+}

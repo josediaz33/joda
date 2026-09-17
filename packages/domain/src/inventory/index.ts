@@ -3,3 +3,4 @@
 // docs/domain-rules.md RN-COS-04/05 y RN-LOT-05.
 export * from "./allocation.js";
 export * from "./costing.js";
+export * from "./lotOpening.js";
