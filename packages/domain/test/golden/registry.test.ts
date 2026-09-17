@@ -5,10 +5,9 @@
 // shared/ y para packages/contracts — acá el "documento que la define" es
 // domain-contracts.md §8.1.
 //
-// `node:fs`/`node:path` están permitidos acá porque este archivo es un
-// `.test.ts`: packages/config/eslint/index.js apaga `boundaries/dependencies`
-// solo para tests (la pureza aplica al código que se shippea, no al que lo
-// verifica).
+// `node:fs`/`node:path`/`node:url` tienen una excepción para este archivo
+// exacto en packages/config/eslint/index.js (registro WP-A10/WP-A12).
+// El sufijo `.test.ts` por sí solo no habilita módulos de Node.
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";

@@ -19,6 +19,11 @@ export class Quantity {
     readonly uom: Uom,
   ) {}
 
+  /** Cero en la unidad del llamador, sin conversión implícita entre unit y ml. */
+  static zero(uom: Uom): Quantity {
+    return new Quantity(0, uom);
+  }
+
   /** Entero, siempre — media unidad de reloj no existe. */
   static units(n: number): Quantity {
     if (!Number.isInteger(n)) {
