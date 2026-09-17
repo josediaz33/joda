@@ -67,6 +67,8 @@ Sin referencia a la regla, el test es una afirmación sin fundamento: nadie sabe
 
 Esto deja de aplicar en cuanto un módulo de `shared/` encarna una regla real. Por ejemplo: si `Money.allocate` alguna vez adoptara el criterio de reparto de RN-COS-02 (la diferencia de redondeo va a la línea de mayor valor) en vez de quedarse con el método genérico del mayor resto, ese test pasa a citar `RN-COS-02`, porque en ese momento sí habría un número de negocio que proteger.
 
+**Esto no es exclusivo del dominio.** `.claude/rules/testing.md` exige la misma cita en cualquier `*.test.ts` del repositorio, no solo en `packages/domain` — esta sección la explica acá porque el dominio fue el primer paquete con tests. `packages/contracts/src/shared/` (WP-A11) es el segundo caso real: sus tests protegen convenciones de frontera (dinero como string, forma de un id, forma de una página) definidas en `docs/api-conventions.md` y `docs/data-model.md`, no una regla de negocio — ahí cada `describe` cita la sección de esos documentos en vez de un `RN-XXX-nn`, por el mismo motivo que la excepción de arriba: no hay un número que el negocio pueda mover en silencio.
+
 ### 2.3 Casos borde obligatorios
 
 Los 20 casos de `domain-rules.md` §"Catálogo de casos borde" tienen un test cada uno. Un PR que agregue una regla agrega sus casos borde al documento **y** sus tests.
