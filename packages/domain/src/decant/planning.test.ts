@@ -147,7 +147,7 @@ describe("planDecant · el lote de origen debe ser granel abierto para decantar"
   });
 });
 
-describe("WP-A15 · el sellado padre recién abierto no pasa como fuente de decant, aunque comparta status con el granel", () => {
+describe("RN-FRA-07 · el sellado padre recién abierto no pasa como fuente de decant, aunque comparta status con el granel", () => {
   it("un sellado en open_for_decant (el padre recién abierto, ADR-009) se rechaza aunque su status sea el mismo que el del granel", () => {
     const result = planDecant(
       planInput({ bulkLot: bulkLot({ variantType: "sealed", uom: "unit" }) }),
