@@ -6,7 +6,7 @@
 // domain-rules.md no fecha los lotes, solo dice "L-001 (más antiguo)":
 // alcanza con que L-001 sea anterior a L-002.
 import { describe, expect, it } from "vitest";
-import { allocateFromLots } from "../../src/inventory/costing.js";
+import { allocateFromLots, totalCost } from "../../src/inventory/costing.js";
 import type { AllocationPolicy, LotSnapshot } from "../../src/inventory/allocation.js";
 import { Money } from "../../src/shared/money.js";
 import { Quantity } from "../../src/shared/quantity.js";
@@ -31,17 +31,17 @@ describe(`${caseData.regla} · dataset dorado (${caseData.origen}) · ${caseData
       policy: caseData.input.policy as AllocationPolicy,
     });
 
-    if (!result.ok) throw new Error(`allocateFromLots falló: ${JSON.stringify(result.error)}`);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
 
-    expect(result.value).toHaveLength(caseData.expected.layers.length);
-    caseData.expected.layers.forEach((expectedLayer, index) => {
-      const layer = result.value[index]!;
-      expect(layer.lotId).toBe(expectedLayer.lotId);
-      expect(layer.qty.value).toBe(expectedLayer.qtyUnits);
-      expect(layer.totalCost.minor).toBe(BigInt(expectedLayer.totalCostPygMinor));
-    });
+    expect(
+      result.value.map((layer) => ({
+        lotId: layer.lotId,
+        qtyUnits: layer.qty.value,
+        totalCostPygMinor: layer.totalCost.minor.toString(),
+      })),
+    ).toEqual(caseData.expected.layers);
 
-    const total = result.value.reduce((sum, layer) => sum.plus(layer.totalCost), Money.zero("PYG"));
-    expect(total.minor).toBe(BigInt(caseData.expected.totalCostPygMinor));
+    expect(totalCost(result.value).minor.toString()).toBe(caseData.expected.totalCostPygMinor);
   });
 });

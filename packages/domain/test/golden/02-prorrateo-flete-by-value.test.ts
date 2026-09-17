@@ -10,6 +10,11 @@ import { Money } from "../../src/shared/money.js";
 import { Quantity } from "../../src/shared/quantity.js";
 import caseData from "./02-prorrateo-flete-by-value.json" with { type: "json" };
 
+/** Proyecta el mapa id → Money del resultado a id → minor, para comparar contra literales (mismo helper que procurement/freight.test.ts). */
+function minorsOf(map: ReadonlyMap<string, Money>): Record<string, bigint> {
+  return Object.fromEntries([...map].map(([id, money]) => [id, money.minor]));
+}
+
 describe(`${caseData.regla} · dataset dorado (${caseData.origen}) · ${caseData.id}`, () => {
   it(caseData.nota, () => {
     const lines: FreightLine[] = caseData.input.lines.map((line) => ({
@@ -24,10 +29,13 @@ describe(`${caseData.regla} · dataset dorado (${caseData.origen}) · ${caseData
       lines,
     });
 
-    if (!result.ok) throw new Error(`allocateFreight falló: ${JSON.stringify(result.error)}`);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
 
-    for (const [lineId, expectedMinor] of Object.entries(caseData.expected.freightByLineId)) {
-      expect(result.value.get(lineId)?.minor).toBe(BigInt(expectedMinor));
-    }
+    expect(minorsOf(result.value)).toEqual({
+      "linea-a": BigInt(caseData.expected.freightByLineId["linea-a"]),
+      "linea-b": BigInt(caseData.expected.freightByLineId["linea-b"]),
+      "linea-c": BigInt(caseData.expected.freightByLineId["linea-c"]),
+    });
   });
 });

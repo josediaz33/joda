@@ -51,13 +51,14 @@ describe(`${caseData.regla} · dataset dorado (${caseData.origen}) · ${caseData
       bomLots,
     });
 
-    if (!result.ok) throw new Error(`executeDecant falló: ${JSON.stringify(result.error)}`);
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
 
-    expect(result.value.costBreakdown.liquid.minor).toBe(BigInt(caseData.expected.liquidPygMinor));
-    expect(result.value.costBreakdown.waste.minor).toBe(BigInt(caseData.expected.wastePygMinor));
-    expect(result.value.costBreakdown.supplies.minor).toBe(
-      BigInt(caseData.expected.suppliesPygMinor),
-    );
-    expect(result.value.cogs.minor).toBe(BigInt(caseData.expected.cogsPygMinor));
+    expect({
+      liquidPygMinor: result.value.costBreakdown.liquid.minor.toString(),
+      wastePygMinor: result.value.costBreakdown.waste.minor.toString(),
+      suppliesPygMinor: result.value.costBreakdown.supplies.minor.toString(),
+      cogsPygMinor: result.value.cogs.minor.toString(),
+    }).toEqual(caseData.expected);
   });
 });
