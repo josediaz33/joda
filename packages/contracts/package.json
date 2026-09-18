@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "description": "Zod + tipos tRPC — fuente de verdad de tipos entre apps (WP-A11): esquemas base (dinero como string, ids, paginación) y un procedimiento de ejemplo tipado extremo a extremo. Los DTO de cada módulo llegan junto con el WP de ese módulo en el bloque C.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",

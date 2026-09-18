@@ -1,8 +1,11 @@
-// Esqueleto de WP-A02: servidor Fastify mínimo para que el pipeline de CI
-// tenga algo que tipar, lintear, testear y construir. El contexto de
-// petición, el router tRPC y las capas de docs/api-conventions.md llegan en
-// WP-C01 — acá no hay lógica de negocio ni acceso a datos.
+// Esqueleto de WP-A02, con tRPC montado desde WP-C01 (docs/api-conventions.md
+// §1). Las capas modules/router-service-repository-domain llegan junto con
+// el primer módulo de negocio real (WP-C08 en adelante) — acá todavía no hay
+// lógica de negocio ni acceso a datos.
+import { fastifyTRPCPlugin } from "@trpc/server/adapters/fastify";
 import Fastify from "fastify";
+import { createContext } from "./trpc/context.js";
+import { appRouter, type AppRouter } from "./trpc/router.js";
 
 export function buildServer() {
   const app = Fastify({ logger: true });
@@ -11,6 +14,14 @@ export function buildServer() {
     app: "@joda/api",
     mensaje: "hola mundo",
   }));
+
+  app.register(fastifyTRPCPlugin<AppRouter>, {
+    prefix: "/trpc",
+    trpcOptions: {
+      router: appRouter,
+      createContext,
+    },
+  });
 
   return app;
 }
