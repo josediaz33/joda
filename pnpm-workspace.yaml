@@ -19,3 +19,4 @@ catalog:
   vite: 8.3.0
   "@types/node": 22.20.2
   fast-check: 4.9.0
+  "@testcontainers/postgresql": 12.1.0
