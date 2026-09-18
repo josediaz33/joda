@@ -37,7 +37,8 @@ Con `DATABASE_URL` apuntando a una base Postgres 16 vacía (ver `.env.example`):
 ```bash
 export DATABASE_URL="postgresql://usuario:clave@localhost:5432/joda"
 
-pnpm db:migrate   # aplica migrations/*.sql en orden
+pnpm db:migrate   # aplica migrations/*.sql en orden, y encadena pnpm db:pull
+pnpm db:pull      # prisma db pull + parche de schema + prisma generate
 pnpm db:seed      # aplica seed/*.sql (idempotente)
 pnpm db:reset     # DROP SCHEMA app, public + db:migrate + db:seed, desde cero
 pnpm db:test      # smoke_business_flow.sql + invariants.sql, con aserciones
@@ -66,8 +67,13 @@ onboarding (Bloque C), y hoy la única llamada existente vive en
 verifica corriendo `pnpm db:test` (que ejecuta ese smoke test), no apareciendo
 sola después de `pnpm db:reset && pnpm db:seed`.
 
-`db:pull` (Prisma por introspección) todavía no está implementado —
-WP-B04, ver `docs/backlog.md`.
+**`pnpm db:reset` no regenera `schema.prisma`.** Aplica las migraciones
+llamando directamente a la función de Node (`tasks.mjs`), no al script de
+pnpm `db:migrate`, así que el encadenamiento con `db:pull` no se dispara.
+Después de un `db:reset` en un entorno donde vayas a tocar el cliente
+generado, corré `pnpm db:pull` aparte. En la práctica no suele hacer
+falta: `db:reset` vuelve a aplicar las mismas migraciones ya introspeccionadas,
+así que el `schema.prisma` commiteado ya coincide.
 
 Equivalente manual con `psql`, sin pasar por Node (mismo orden, mismos
 archivos):
@@ -91,11 +97,10 @@ El flujo correcto es el inverso: **el SQL es la fuente de verdad, Prisma es el c
 
 ```bash
 export DATABASE_URL="postgresql://.../joda?schema=app"
-npx prisma db pull      # introspecciona y regenera schema.prisma
-npx prisma generate     # cliente tipado para apps/api
+pnpm db:pull   # prisma db pull + parche de schema (ver hallazgo 4) + prisma generate
 ```
 
-`prisma db pull` se corre después de cada migración y el `schema.prisma` resultante se commitea. Prisma no gestiona el ciclo de migraciones, lo refleja.
+`pnpm db:pull` se corre después de cada migración — encadenado automáticamente desde `pnpm db:migrate`, para que nadie tenga que acordarse — y el `schema.prisma` resultante (más `prisma/views/**/*.sql`, que introspección escribe para las vistas) se commitea. Prisma no gestiona el ciclo de migraciones, lo refleja.
 
 ---
 
@@ -136,6 +141,12 @@ La corrección: la fila de saldo nace en cero junto con el lote (trigger sobre `
 En el flujo de prueba, con `waste_factor = 2%` sobre 10 ml la merma esperada es 0,200 ml. La merma real registrada fue 0,350 ml. La vista `v_decant_yield` lo expone como `actual_over_expected = 1.75`.
 
 Con números reales de un frasco de nicho, esa diferencia son unos 1.800 Gs. por decant. Sobre cientos de decants al año es plata que hoy no aparece en ningún reporte. Por eso la orden de fraccionamiento separa merma esperada de merma real: el porcentaje sirve para reservar stock, el registro real sirve para saber cuánto cuesta de verdad.
+
+### 4. La FK compuesta de las verticales rompe `prisma generate`, no `prisma db pull`
+
+La introspección (`prisma db pull`) sale bien y produce los 61 modelos exactos. `prisma generate` sí falla, con `P1012`, sobre `accessory_details`, `perfume_details` y `watch_details`: cada una tiene `product_id` como `PRIMARY KEY` y además una FK compuesta `(product_id, kind) → products(id, kind)` (la que impide mezclar verticales, `docs/data-model.md` §8). Como `product_id` ya es único, `(product_id, kind)` también lo es por transitividad — pero Prisma introspecciona unicidad de forma literal, no transitiva, y sin una anotación `@@unique` explícita en el modelo trata la segunda relación como uno-a-uno inválido.
+
+La solución **no** es un índice `UNIQUE(product_id, kind)` real en Postgres — sería puramente redundante y un cambio de esquema fuera del alcance de este WP para resolver una limitación de la herramienta, no del modelo de datos. En cambio, `pnpm db:pull` corre `scripts/patch-prisma-schema.mjs` entre la introspección y `prisma generate`: detecta cualquier modelo con una relación `fields: [product_id, kind], references: [id, kind]` y le agrega `@@unique([product_id, kind])` antes de generar. Es determinístico y corre en cada `db:pull`, así que no depende de que alguien lo re-edite a mano después de que la introspección reescriba `schema.prisma` (que es exactamente lo que ADR-018 prohíbe). La próxima vertical que se agregue con el mismo patrón (`docs/data-model.md` §8) queda cubierta sin tocar el script.
 
 ---
 
