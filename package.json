@@ -20,7 +20,7 @@
     "format:check": "prettier --check .",
     "db:migrate": "pnpm --filter @joda/db run db:migrate",
     "db:seed": "pnpm --filter @joda/db run db:seed",
-    "db:pull": "node scripts/pending-task.mjs \"db:pull\" WP-B04",
+    "db:pull": "pnpm --filter @joda/db run db:pull",
     "db:test": "pnpm --filter @joda/db run db:test",
     "db:reset": "pnpm --filter @joda/db run db:reset"
   },

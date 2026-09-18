@@ -15,10 +15,11 @@ El flujo habitual con Prisma es definir `schema.prisma` y generar migraciones co
 **El SQL es la fuente de verdad.** Las migraciones se escriben a mano en `packages/db/migrations/`. `schema.prisma` se regenera con `prisma db pull` después de cada migración y se commitea. Prisma es el cliente tipado, no el dueño del esquema.
 
 ```bash
-pnpm db:migrate   # aplica migrations/*.sql en orden
-pnpm db:pull      # regenera schema.prisma
-pnpm db:generate  # cliente tipado
+pnpm db:migrate   # aplica migrations/*.sql en orden, y encadena pnpm db:pull
+pnpm db:pull      # prisma db pull + parche de schema + prisma generate + verificación
 ```
+
+**Nota de implementación (WP-B04).** No hay un `db:generate` separado: `db:pull` hace introspección, parche y generación en un solo script, así nadie tiene que acordarse de encadenar tres pasos a mano. El "parche de schema" existe porque Prisma no introspecciona la unicidad transitiva de la FK compuesta `(product_id, kind)` de las verticales (ver `packages/db/README.md`, hallazgo 4) — no es una regla de negocio nueva, es un ajuste de la herramienta para que refleje lo que la FK compuesta ya hace cumplir en Postgres.
 
 ## Consecuencias
 
