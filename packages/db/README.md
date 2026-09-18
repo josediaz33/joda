@@ -198,6 +198,16 @@ este repositorio. `DATABASE_URL` de `.env.example` ya apunta a `55432`.
 
 **`packages/db/package.json` tiene `"lint": "eslint test"`, no `"eslint ."`.** Lintear todo el paquete saca a la luz ~20 errores preexistentes en `scripts/*.mjs` (`console`/`process` sin `languageOptions.globals` de Node en `packages/config/eslint/index.js`, que hasta este WP nunca linteaba estos scripts porque `packages/db` no tenía script `lint`). No es una regla de negocio ni algo que WP-B05 causó: es deuda preexistente, fuera de alcance de este WP, y se anota acá en vez de arreglarse de paso.
 
+### 8. Cómo conectarse como `joda_api` de verdad en un test (WP-B06), sin tocar migraciones
+
+`joda_api` se crea en `migrations/0010_security_rls.sql` con `LOGIN NOBYPASSRLS` pero **sin password** — provisionar esa credencial para el runtime real es una decisión del Bloque C (API), todavía pendiente, y no le corresponde a este WP inventarla dentro de una migración ya aplicada.
+
+`test/integration/rls_isolation.test.ts` la resuelve así: después de `startTestDb()` (que conecta como el superusuario `test` del contenedor de Testcontainers) corre `ALTER ROLE joda_api PASSWORD '...'` con una password de un solo uso, y recién ahí abre una **segunda conexión** (`pg.Client` propio) autenticada como `joda_api` contra el mismo contenedor. Esa segunda conexión, no la del superusuario, es la que ejecuta las cuatro aserciones del test.
+
+La alternativa obvia — reusar la conexión superusuario y hacer `SET LOCAL ROLE joda_api` dentro de cada transacción — habría sido más simple y en la práctica evalúa RLS/grants igual de bien (Postgres decide permisos por `current_user`, no por `session_user`, así que `SET ROLE` cambia esa identidad tan efectivamente como una reautenticación). Se descartó de todas formas: la trampa explícita de este WP (`docs/testing-strategy.md` §3.2) es que el test tiene que conectarse como `joda_api`, no como el superusuario — y una conexión que en su session log sigue siendo la del superusuario, aunque técnicamente evalúe permisos como si no lo fuera, es más frágil ante una futura refactorización del test que la cambie de lugar sin darse cuenta de por qué importaba. Una segunda conexión autenticada de verdad no deja ese ambigüedad, y es además el mismo patrón que va a usar el pool de `apps/api` en producción.
+
+La password vive solo en el contenedor efímero de esa corrida de test — nunca en un archivo versionado, nunca en `migrations/` ni `seed/` — y se pierde con el contenedor al terminar.
+
 ---
 
 ## Decisiones no obvias del esquema
