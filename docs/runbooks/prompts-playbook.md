@@ -712,6 +712,1045 @@ Alcance: solo este test.
 
 ---
 
+## Bloque C — API (25 sesiones, dos fases)
+
+**Fase 1, secuencial (Sesiones 21 a 27): C01 → C02 → C03 → C04 → C05 → C06 → C07.** Cada sesión se apoya en la anterior: C02 (`withTenantTx`) necesita el esqueleto tRPC de C01; C04 (segundo factor) necesita la sesión de personal de C03; C05 (permisos) necesita esa misma sesión para saber a quién autorizar; C06 (idempotencia) y C07 (auditoría) necesitan la transacción con contexto de C02 para escribir dentro de ella. No arranques dos sesiones de esta fase en paralelo — el resultado más común es dos versiones distintas de `withTenantTx` en el mismo repo, una de las cuales termina perdiendo.
+
+**Fase 2, paralelizable (Sesiones 28 a 45): el resto.** Una vez cerrada la Fase 1, los módulos de catálogo, inventario, fraccionamiento, compras, sourcing, ventas, contabilidad, fiscal, seguridad y observabilidad dependen todos de la cimentación, pero no todos entre sí. La columna "Depende de" del backlog marca el orden real dentro de cada módulo (C11 antes que C13, C18 antes que C19); entre módulos, varias sesiones pueden abrirse a la vez en ramas separadas. Ver "Reparto entre agentes" al final de esta sección para el criterio de quién toma cada una.
+
+---
+
+### Sesión 21 — WP-C01 · Esqueleto Fastify + tRPC
+
+```
+Antes de tocar nada: git checkout -b feat/c01-api-skeleton
+
+Tomá WP-C01 del backlog.
+
+Leé primero: .claude/rules/api.md, docs/api-conventions.md (secciones 1 y
+4 completas), apps/api/src/index.ts (el "hola mundo" de WP-A02, es lo que
+esta sesión reemplaza), packages/contracts/src/example/ping.ts (el patrón
+de tRPC que WP-A11 dejó armado, todavía sin montar en ningún servidor real).
+
+Objetivo: montar tRPC sobre el Fastify de apps/api, el contexto de
+petición (userId, tenantId, audience, requestId) y el mapeador de errores
+de PostgreSQL a errores en español con código estable.
+
+Criterio de aceptación: un procedimiento de ejemplo responde tipado de
+punta a punta. Un CHECK de PostgreSQL violado (ERRCODE 23514) le llega al
+cliente como { code, message en español, httpStatus, requestId } — nunca
+el texto crudo de Postgres.
+
+TRAMPAS DE ESTA TAREA:
+· apps/api existe desde WP-A02, pero como Fastify puro sin tRPC. Esta
+  sesión AGREGA tRPC, el contexto de petición y el mapeador — no reescribe
+  el esqueleto de A02 desde cero.
+· Ningún mensaje de PostgreSQL llega al usuario, ni siquiera "traducido a
+  medias". El mapeador traduce por ERRCODE (docs/api-conventions.md §4.4):
+  23514 → CHECK, 23505 → UNIQUE, 23503 → FOREIGN KEY, 2F004 → ledger
+  inmutable. Un ERRCODE sin mapeo explícito es INTERNAL, 500 — no un
+  intento de adivinar el mensaje.
+· El DATABASE_URL local apunta a localhost:55432, no al 5432 por defecto
+  (WP-B07): un Postgres nativo de Windows puede estar escuchando ahí y el
+  error de conexión no va a mencionar Docker para nada.
+· Sin contexto de petición todavía no hay `set_config` real — eso es
+  WP-C02. Esta sesión arma el contexto (de dónde salen userId/tenantId),
+  no todavía cómo se lo pasa a la transacción de Postgres.
+
+Alcance: solo el esqueleto — tRPC montado, contexto, mapeador de errores.
+Sin autenticación real (C03) ni transacciones con set_config (C02).
+```
+
+---
+
+### Sesión 22 — WP-C02 · withTenantTx
+
+```
+Antes de tocar nada: git checkout -b feat/c02-tenant-tx
+
+Tomá WP-C02 del backlog.
+
+Leé primero: .claude/rules/api.md, docs/api-conventions.md (sección 8
+completa: 8.1, 8.2, 8.3), docs/security-spec.md (sección 3.1, la tabla de
+roles — joda_api es NOBYPASSRLS), packages/db/test/integration/
+rls_isolation.test.ts (WP-B06, el mismo mecanismo de conexión con
+joda_api que esta sesión usa en runtime, no solo en tests).
+
+Objetivo: withTenantTx — toda transacción abre con set_config('app.user_id'
+| 'app.tenant_id' | 'app.audience', ..., true), antes de cualquier consulta.
+
+Criterio de aceptación: test que demuestre que el contexto NO se filtra
+entre dos peticiones que reutilizan la misma conexión del pool — abrí una
+transacción con un tenant, cerrala, abrí otra con un tenant distinto sobre
+la conexión que el pool recicló, y verificá que la segunda no ve nada del
+primero.
+
+TRAMPAS DE ESTA TAREA:
+· El tercer parámetro de set_config va en `true`, SIEMPRE. Es la regla que
+  ya corregimos una vez en un ejemplo de documentación (PR #34, docs/
+  testing-strategy.md) — acá no es un ejemplo, es el código real que corre
+  en cada petición. Sin ese `true`, el valor se filtra a la siguiente
+  petición que reutilice la conexión: un error de aislamiento entre
+  usuarios, silencioso y grave (docs/api-conventions.md §8.1).
+· La conexión de runtime usa el rol joda_api, NOBYPASSRLS. Nunca
+  service_role ni el dueño de las tablas — con una credencial privilegiada
+  RLS no se evalúa y la Capa 1 de docs/security-spec.md queda decorativa.
+· El bloqueo de lotes (§8.2, para cuando llegue C19) va en orden
+  ascendente de lot_id, en una sola sentencia FOR UPDATE — no es de esta
+  sesión implementarlo, pero withTenantTx tiene que dejar el patrón listo
+  para que C19 lo use sin reinventar la transacción.
+· Una operación de negocio, una transacción (§8.3): no abras una
+  transacción solo para leer, y no llames a un proveedor externo dentro de
+  una — una transacción no debe esperar por la red.
+
+Alcance: solo withTenantTx y su test de no-filtración. Sin auditoría (C07)
+ni idempotencia (C06) todavía, aunque ambas van a usar esta misma función.
+```
+
+---
+
+### Sesión 23 — WP-C03 · Autenticación de personal
+
+```
+Antes de tocar nada: git checkout -b feat/c03-staff-auth
+
+Tomá WP-C03 del backlog.
+
+Leé primero: .claude/rules/api.md, docs/security-spec.md (sección 1
+completa y sección 4 completa: 4.1, 4.2, 4.3), ADR-015.
+
+Objetivo: sesión de personal — cookie __Host-joda_a, token de acceso de
+15 min en memoria del servidor, token de refresco de 8 h rotativo con
+detección de reúso.
+
+Criterio de aceptación: reusar un token de refresco ya consumido invalida
+TODA la familia de tokens de esa sesión y fuerza reautenticación — no solo
+el token reusado.
+
+TRAMPAS DE ESTA TAREA:
+· "Rotativo" no alcanza solo, hace falta la DETECCIÓN DE REÚSO: cada uso
+  del refresco emite uno nuevo e invalida el anterior; si el anterior
+  reaparece (alguien lo copió), se invalida la familia entera, no un token
+  suelto.
+· La cookie de personal (__Host-joda_a) es una identidad completamente
+  separada de la de cliente (__Host-joda_c, ADR-015) — dos tablas
+  (staff_users / customers), dos dominios, dos audiencias. No hay fila
+  donde ponerle un rol de personal a un cliente: es un invariante de
+  esquema, no una validación a mantener en código.
+· Sin `localStorage` para ningún token (CLAUDE.md, no negociable). El
+  token de acceso vive en memoria del servidor de sesión, nunca en el
+  cliente más allá de la cookie httpOnly.
+· El segundo factor es la sesión SIGUIENTE (C04): esta sesión deja al
+  usuario autenticado con contraseña, no inscribe TOTP todavía.
+
+Alcance: solo la autenticación de personal (sesión, cookies, refresco).
+Clientes (audiencia customer) y segundo factor quedan para después.
+```
+
+---
+
+### Sesión 24 — WP-C04 · Segundo factor obligatorio
+
+```
+Antes de tocar nada: git checkout -b feat/c04-staff-mfa
+
+Tomá WP-C04 del backlog.
+
+Leé primero: .claude/rules/api.md, docs/security-spec.md (sección 4.3 y
+la fila "Segundo factor" de la tabla en sección 1), ADR-015.
+
+Objetivo: segundo factor TOTP obligatorio para personal, sobre la sesión
+de WP-C03.
+
+Criterio de aceptación: un usuario de personal sin segundo factor
+inscripto puede autenticarse con contraseña, pero solo puede acceder a la
+pantalla de inscripción de TOTP — ninguna otra ruta del backoffice.
+
+TRAMPAS DE ESTA TAREA:
+· Es obligatorio para PERSONAL, opcional para clientes (docs/
+  security-spec.md §1) — no generalices la obligatoriedad a audiencia
+  customer, que todavía ni siquiera está en alcance de este bloque.
+· "Solo accede a la pantalla de inscripción" es un estado de sesión
+  intermedio, no un error 401: el usuario está autenticado (tiene sesión
+  válida), pero esa sesión no autoriza nada hasta que complete la
+  inscripción. Modelalo como un estado explícito, no como una excepción
+  atrapada en cada ruta.
+· El secreto TOTP no es un dato más: tratalo con el mismo cuidado que un
+  password (lista negra del registrador de bitácoras, docs/security-spec.md
+  §6) — nunca en un log, nunca en audit_log en texto plano.
+
+Alcance: inscripción y verificación TOTP sobre la sesión existente. Sin
+recuperación de segundo factor perdido (si hace falta, es un WP nuevo — no
+lo inventes acá).
+```
+
+---
+
+### Sesión 25 — WP-C05 · Middleware de permisos
+
+```
+Antes de tocar nada: git checkout -b feat/c05-permissions
+
+Tomá WP-C05 del backlog.
+
+Leé primero: .claude/rules/api.md, docs/security-spec.md (sección 2
+completa —catálogo y matriz 2.1—, sección 3.2), docs/api-conventions.md
+(sección 4.3 "La regla del 404", sección 9), ADR-016.
+
+Objetivo: requirePermission() como middleware de tRPC, con caché de
+permisos en Redis (TTL 60 s), sobre la sesión de personal de WP-C03.
+
+Criterio de aceptación: test que recorre TODO el router de la API y falla
+si algún procedimiento no declara meta.permission — un procedimiento sin
+permiso declarado tiene que fallar en el ARRANQUE, no en producción.
+
+TRAMPAS DE ESTA TAREA:
+· 404, no 403, en rutas administrativas sin permiso. Un 403 confirma que
+  el endpoint existe y que hay algo que proteger; un 404 no distingue
+  "no existe" de "no es tuyo". La excepción (docs/api-conventions.md §4.3):
+  dentro de una sesión de staff válida, si el usuario tiene acceso al
+  MÓDULO pero no a la ACCIÓN concreta, ahí sí corresponde 403 — ya sabe que
+  el módulo existe.
+· Los permisos NO van en el JWT/token. El token lleva userId, tenantId,
+  sessionId, audience — nada más. Los permisos se resuelven server-side
+  con caché en Redis, TTL 60 s: revocar un rol tiene efecto en un minuto,
+  no cuando expire el token (que podría durar horas).
+· Esta es la Capa 2 de las tres de docs/security-spec.md §3 —"defensa
+  principal"—, pero no la única: RLS (Capa 1) ya existe desde WP-B06 y
+  sigue activa debajo. No la trates como si fuera la única barrera.
+· El middleware necesita el catálogo de permisos y la matriz de roles de
+  docs/security-spec.md §2.1 EXACTOS — no inventes un permiso nuevo que
+  "parece que falta" sin confirmarlo primero.
+
+Alcance: el middleware y su test exhaustivo del router. Los permisos
+concretos de cada módulo (sales.order:read, etc.) se declaran junto con
+el WP de ese módulo, no todos acá.
+```
+
+---
+
+### Sesión 26 — WP-C06 · Middleware de idempotencia
+
+```
+Antes de tocar nada: git checkout -b feat/c06-idempotency
+
+Tomá WP-C06 del backlog.
+
+Leé primero: .claude/rules/api.md, docs/api-conventions.md (sección 5
+completa: 5 y 5.1).
+
+Objetivo: middleware de idempotencia con idempotency_keys, sobre
+withTenantTx de WP-C02.
+
+Criterio de aceptación: reintentar una mutación con el mismo
+Idempotency-Key y el mismo cuerpo devuelve la respuesta guardada, sin
+reprocesar. Con el mismo key y un cuerpo distinto: 409
+CONFLICT_IDEMPOTENCY_KEY_REUSE.
+
+TRAMPAS DE ESTA TAREA:
+· El registro en idempotency_keys se inserta DENTRO de la misma
+  transacción que el efecto (withTenantTx de C02) — si la transacción
+  falla, la clave no queda quemada. Si lo hacés en dos transacciones
+  separadas, una falla a mitad de camino deja el sistema en un estado que
+  ni reintenta ni avanza.
+· Es distinto del mecanismo de webhooks (idempotency_keys por
+  (tenant_id, scope, key) vs. payment_events por
+  (provider, external_event_id), docs/api-conventions.md §5.1) — no
+  reuses una tabla para la otra, tienen forma y ciclo de vida distintos y
+  webhooks es bloque G, no de esta sesión.
+· Solo mutaciones con efecto irreversible necesitan esto (confirmar venta,
+  contabilizar recepción, ejecutar fraccionamiento, aplicar seña) — no es
+  un middleware global sobre toda mutación.
+
+Alcance: el middleware y la tabla idempotency_keys. Los webhooks de pago
+son otro mecanismo, bloque G.
+```
+
+---
+
+### Sesión 27 — WP-C07 · Auditoría
+
+```
+Antes de tocar nada: git checkout -b feat/c07-audit-log
+
+Tomá WP-C07 del backlog.
+
+Leé primero: .claude/rules/api.md, docs/api-conventions.md (sección 10),
+docs/security-spec.md (sección 7).
+
+Objetivo: escritura en audit_log dentro de la misma transacción de
+withTenantTx (WP-C02), para toda mutación de inventario, contabilidad,
+compras, precios, permisos y configuración fiscal.
+
+Criterio de aceptación: toda mutación de inventario y contabilidad queda
+registrada en audit_log, en la misma transacción que el efecto — no en un
+paso aparte que pueda quedar desincronizado.
+
+TRAMPAS DE ESTA TAREA:
+· audit_log es append-only e inmutable — ni siquiera la API puede
+  borrarla ni editarla (docs/security-spec.md §7, y joda_api ya no tiene
+  UPDATE ni DELETE sobre ella desde el esquema de WP-B01).
+· `action` usa el MISMO nombre que el procedimiento tRPC
+  ("sales.order.confirm", no una descripción libre) — es lo que permite
+  cruzar bitácora con métricas de uso más adelante.
+· Los campos son fijos: actor_id, audience, action, entity, entity_id,
+  before, after, ip, user_agent, request_id, occurred_at. No agregues ni
+  quites campos por conveniencia de un módulo puntual.
+· No es solo inventario y contabilidad: precios, permisos y configuración
+  fiscal también auditan, aunque el criterio de aceptación de este WP solo
+  pida verificar los dos primeros con test.
+
+Alcance: el mecanismo de auditoría (la función que escribe, invocada desde
+withTenantTx o desde cada servicio). Cada módulo llama a esta función
+cuando llegue su turno, no hace falta instrumentar módulos que todavía no
+existen.
+```
+
+---
+
+### Sesión 28 — WP-C08 · Catálogo: productos y BOM
+
+```
+Antes de tocar nada: git checkout -b feat/c08-catalog-core
+
+Tomá WP-C08 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/contracts.md,
+docs/api-conventions.md (sección 7, DTOs por audiencia),
+docs/data-model.md (secciones 3.1 y 3.2), docs/especificacion-software.md
+(sección 2.1, RF-CAT completo).
+
+Objetivo: módulo catálogo — productos de las tres verticales (perfume,
+reloj, accesorio), categorías, tags, variantes y BOM.
+
+Criterio de aceptación: RF-CAT-01 a RF-CAT-07. El DTO público NO expone
+costos — test que verifica que la respuesta no contiene ninguna de las
+claves prohibidas (cost, landed, supplier, margin, fx_rate).
+
+TRAMPAS DE ESTA TAREA:
+· DTO público y administrativo son esquemas Zod DISTINTOS
+  (packages/contracts, .strict() en ambos), no el mismo con campos
+  opcionales — docs/api-conventions.md §7 lo muestra con costSummary y
+  supplierRefs como ejemplo de lo que JAMÁS sale en el público.
+· `publicVariant` expone `inStock: boolean`, nunca la cantidad — esto no
+  es una decisión de frontend (WP-E05/G05), es del contrato mismo: si el
+  DTO ya trae la cantidad, cualquier consumidor puede mostrarla.
+· Las verticales son CTI + facetas JSONB (ADR-005): no le agregues una
+  tabla nueva a cada vertical por reflejo, el patrón ya está resuelto en
+  el esquema.
+· El BOM (RF-CAT-07) es de una variante FRACCIONADA — no confundir con
+  las variantes `sellado`/`granel` sin BOM.
+
+Alcance: productos, categorías, tags, variantes, BOM. Medios (imágenes)
+es WP-C09, la siguiente sesión.
+```
+
+---
+
+### Sesión 29 — WP-C09 · Catálogo: medios
+
+```
+Antes de tocar nada: git checkout -b feat/c09-catalog-media
+
+Tomá WP-C09 del backlog.
+
+Leé primero: .claude/rules/api.md, docs/security-spec.md (fila "Carga de
+archivos" en la tabla de sección 5), docs/especificacion-software.md
+(RF-CAT-08).
+
+Objetivo: subida de imágenes de producto con validación por bytes mágicos
+y generación de derivados AVIF/WebP en múltiples anchos.
+
+Criterio de aceptación: RF-CAT-08. Un archivo con extensión falsa (un
+.exe renombrado a .jpg) se rechaza — la validación es por los bytes
+reales del archivo, no por el Content-Type ni la extensión declarada.
+
+TRAMPAS DE ESTA TAREA:
+· Validación por BYTES MÁGICOS, nunca por Content-Type ni extensión —
+  ambos los controla quien sube el archivo.
+· Reprocesamiento con sharp: elimina metadatos y cualquier carga útil
+  embebida, no solo redimensiona. Nombre por hash, no por el nombre
+  original del archivo subido.
+· Los archivos se sirven desde un dominio DISTINTO al del admin (docs/
+  security-spec.md §5) — no los sirvas desde el mismo origen que la
+  sesión de personal.
+· Límite de tamaño y dimensiones ANTES de procesar, no después: un
+  archivo de 800 MB no debería llegar a sharp para enterarse recién ahí
+  de que es demasiado grande.
+
+Alcance: subida, validación y derivados. Sin CDN ni políticas de caché
+avanzadas — eso es infraestructura, no de este WP.
+```
+
+---
+
+### Sesión 30 — WP-C10 · Inventario: saldos, ajustes, historial
+
+```
+Antes de tocar nada: git checkout -b feat/c10-inventory-balances
+
+Tomá WP-C10 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
+docs/data-model.md (sección 3.3), docs/domain-rules.md (RN-LOT-01),
+ADR-007, docs/especificacion-software.md (RF-INV-01 a RF-INV-05).
+
+Objetivo: módulo inventario — consulta de saldos por variante, ajustes
+con motivo obligatorio, historial de movimientos de un lote.
+
+Criterio de aceptación: RF-INV-03 a RF-INV-05. Un ajuste que dejaría el
+saldo negativo se rechaza.
+
+TRAMPAS DE ESTA TAREA:
+· El ledger (inventory_movements) es append-only. La API NO tiene UPDATE
+  ni DELETE sobre él (ya lo impone el esquema desde WP-B01, pero no lo
+  intentes rodear desde el código de aplicación tampoco). Corregir un
+  error es INSERTAR un movimiento de ajuste nuevo, nunca editar uno
+  existente — el saldo es una PROYECCIÓN derivada del libro, no una
+  columna que se actualiza.
+· Toda salida del ledger registra sus capas de costo en
+  movement_cost_allocations (WP-A06, allocateFromLots) — un ajuste
+  negativo también es una salida y también necesita sus capas, o el COGS
+  deja de cerrar.
+· "Saldo disponible" no es lo mismo que "saldo proyectado" (RN-RES-03,
+  para cuando llegue C18): esta sesión expone el saldo del libro, sin
+  descontar reservas todavía porque las reservas ni existen hasta C18.
+
+Alcance: consulta de saldos, ajustes, historial. Apertura de frasco (C11),
+serializados (C12) y fraccionamiento (C13) son sesiones propias.
+```
+
+---
+
+### Sesión 31 — WP-C11 · Inventario: apertura de frasco
+
+```
+Antes de tocar nada: git checkout -b feat/c11-lot-opening-api
+
+Tomá WP-C11 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
+docs/domain-rules.md (RN-LOT-02, RN-LOT-03), ADR-009,
+packages/domain/src/inventory/lotOpening.ts (WP-A13, la función de
+dominio que esta sesión expone por API).
+
+Objetivo: endpoint de apertura de frasco, sobre lotOpening.ts de WP-A13.
+
+Criterio de aceptación: RF-INV-08. Abrir dos veces el mismo lote se
+rechaza (RN-LOT-02, el caso borde 5 del catálogo de domain-rules.md, ya
+cubierto por dominio en WP-A13 — esta sesión verifica que el rechazo
+llega igual a través de la API).
+
+TRAMPAS DE ESTA TAREA:
+· La apertura de frasco es una CONVERSIÓN entre dos lotes (ADR-009), no
+  un cambio de estado — cuatro pasos en una sola transacción: transfer_out
+  del sellado, status → open_for_decant, alta del lote de granel hijo con
+  parent_lot_id, transfer_in del granel. lotOpening.ts (WP-A13) ya calcula
+  esto; esta sesión lo envuelve en withTenantTx (WP-C02) y lo persiste,
+  no lo reimplementa.
+· El lote sellado padre TAMBIÉN queda en open_for_decant, igual que el
+  granel hijo — no es un bug de esta sesión, es el resultado correcto
+  (ver la nota de WP-A13 en el propio backlog). RF-INV-09 ("impedir la
+  venta como sellado de un lote abierto") depende de que este estado
+  compartido esté bien persistido.
+· Precondición de estado: solo se abre un lote sellado en `available`.
+  Uno en `quarantine` o `damaged` se rechaza (RN-LOT-02).
+· El costo se hereda ÍNTEGRO al granel, no se recalcula desde ningún otro
+  dato — si el endpoint recalcula el costo puesto en vez de copiarlo, algo
+  está mal.
+
+Alcance: el endpoint y su transacción. La lógica de conversión ya existe
+en packages/domain, no se reescribe acá.
+```
+
+---
+
+### Sesión 32 — WP-C12 · Inventario: unidades serializadas
+
+```
+Antes de tocar nada: git checkout -b feat/c12-serialized-units
+
+Tomá WP-C12 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
+docs/domain-rules.md (RN-LOT-05, política `serial`; RN-VTA-04),
+docs/especificacion-software.md (RF-INV-10).
+
+Objetivo: administración de unidades serializadas (relojes) — número de
+serie único, garantía, trazabilidad de venta.
+
+Criterio de aceptación: RF-INV-10. El número de serie es único por
+TENANT, no global — dos tenants pueden tener el mismo número de serie sin
+chocar entre sí.
+
+TRAMPAS DE ESTA TAREA:
+· `serial` es una política de selección de lote (RN-LOT-05): "se elige
+  explícitamente", no FIFO/FEFO. El endpoint tiene que dejar elegir la
+  unidad concreta, no aplicar una política automática por encima.
+· RN-VTA-04: una línea de venta con serial_unit_id mueve EXACTAMENTE 1
+  unidad. Al confirmarse, la unidad pasa a `sold` y queda vinculada a esa
+  línea — esto es de la sesión de confirmación de venta (C19), pero el
+  modelo de esta sesión tiene que dejar el campo listo para esa
+  vinculación.
+· La unicidad del serial es un invariante de esquema (constraint), no una
+  validación que la API tenga que reimplementar — si la migración de
+  WP-B01 ya la tiene, no la dupliques en el servicio.
+
+Alcance: alta, consulta y trazabilidad de unidades serializadas. El
+consumo al vender es WP-C19.
+```
+
+---
+
+### Sesión 33 — WP-C13 · Fraccionamiento: planificación y ejecución
+
+```
+Antes de tocar nada: git checkout -b feat/c13-decant-orders
+
+Tomá WP-C13 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
+docs/domain-rules.md (RN-FRA completo), ADR-010,
+packages/domain/src/decant/ (planning.ts, execution.ts, waste.ts de
+WP-A07/A15 — esta sesión los expone, no los reimplementa).
+
+Objetivo: módulo fraccionamiento — planificación, órdenes, ejecución,
+sobre planDecant/executeDecant de packages/domain.
+
+Criterio de aceptación: RF-FRA-01 a RF-FRA-06. Ejecutar una orden sin
+declarar merma real se rechaza (RN-FRA-03: waste_actual es obligatorio,
+sin él la orden no pasa a `done`).
+
+TRAMPAS DE ESTA TAREA:
+· El decant tiene DOS momentos y son dos endpoints, no uno: planDecant
+  (al confirmar la venta) reserva granel e insumos y crea la orden
+  `pending`; executeDecant (cuando alguien llena el vial) recibe la merma
+  REAL y produce los movimientos definitivos. Entre ambos no hay consumo
+  de inventario, solo reserva (RN-FRA-01) — no colapses los dos momentos
+  en un único endpoint "crear y ejecutar".
+· La ejecución consume TODO en una sola transacción: el líquido del
+  granel, la merma real, y cada componente del BOM (RN-FRA-03) — no tres
+  operaciones separadas que puedan quedar a mitad de camino.
+· El origen del granel se valida con variantType + uom, no solo status
+  (RN-FRA-07, WP-A15): un sellado recién abierto comparte status con el
+  granel hijo, pero no es decantable. La función de dominio ya lo rechaza;
+  esta sesión no puede pasarle un LotSnapshot mal armado que lo eluda.
+· El caso borde 2 (merma real > reservada): se permite y se consume lo
+  real; si el granel no alcanza, la orden falla y queda `in_progress` para
+  resolución manual, no se completa a la fuerza.
+
+Alcance: planificación y ejecución de órdenes de fraccionamiento. La orden
+NACE al confirmar una venta (WP-C19) — esta sesión construye el módulo,
+C19 es quien lo dispara en el flujo real.
+```
+
+---
+
+### Sesión 34 — WP-C14 · Compras: proveedores y máquina de estados
+
+```
+Antes de tocar nada: git checkout -b feat/c14-purchase-orders
+
+Tomá WP-C14 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
+docs/domain-rules.md (RN-EST-01), packages/domain (la máquina de estados
+de orden de compra, WP-A08), docs/especificacion-software.md (RF-MKT-01
+a RF-MKT-03).
+
+Objetivo: módulo compras — proveedores, órdenes de compra multi-línea en
+moneda extranjera, gobernadas por la máquina de estados de WP-A08.
+
+Criterio de aceptación: RF-MKT-01 a RF-MKT-03. Una transición inválida de
+la orden se rechaza con un mensaje claro, no un error genérico.
+
+TRAMPAS DE ESTA TAREA:
+· Las transiciones son las de RN-EST-01/WP-A08, como DATOS — no un
+  `switch` nuevo en el servicio de la API que duplique lo que el dominio
+  ya resolvió.
+· Cancelable desde draft/pending_approval/approved/sent. NO desde
+  partially_received ni received: ya entró mercadería. Revertir eso es
+  una devolución a proveedor, fuera de alcance de esta máquina — no la
+  inventes acá.
+· pending_approval puede volver a draft (rechazo del aprobador) sin pasar
+  por cancelled — no lo trates como una cancelación.
+· Esta sesión NO genera stock ni movimientos: eso pasa recién al
+  contabilizar una recepción, WP-C15. Una orden de compra, por más
+  aprobada que esté, no toca el inventario.
+
+Alcance: proveedores y el ciclo de vida de la orden de compra. Recepciones
+(con prorrateo y generación de lotes) es WP-C15.
+```
+
+---
+
+### Sesión 35 — WP-C15 · Compras: recepciones
+
+```
+Antes de tocar nada: git checkout -b feat/c15-receipts
+
+Tomá WP-C15 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
+docs/domain-rules.md (RN-COS-01 a RN-COS-03), ADR-008,
+packages/domain/src/procurement/ (landedCost.ts y freight.ts de WP-A05,
+esta sesión los expone y persiste), docs/especificacion-software.md
+(RF-MKT-04 a RF-MKT-07).
+
+Objetivo: recepciones de compra como entidad propia, con prorrateo de
+flete/despacho y generación transaccional de lotes de inventario.
+
+Criterio de aceptación: RF-MKT-04 a RF-MKT-07. Una recepción por una
+cantidad mayor a la pedida se rechaza.
+
+TRAMPAS DE ESTA TAREA:
+· El tipo de cambio es el REAL de la recepción, congelado, independiente
+  del estimado de la orden de compra (RN-COS-01, RF-MKT-06) — nunca el
+  de la orden.
+· El prorrateo usa Money.allocate (WP-A03/A05) por debajo: si el reparto
+  no suma exactamente el total del flete, algo se está calculando a mano
+  en vez de reusar la función de dominio.
+· Generar los lotes y sus movimientos de entrada es UNA transacción
+  (RF-MKT-07, withTenantTx de C02) — una recepción parcial que falla a
+  mitad de camino no puede dejar lotes sin sus movimientos o viceversa.
+· Admite recepciones PARCIALES y múltiples por orden de compra (RF-MKT-04)
+  — no asumas una recepción = una orden completa.
+· Esta sesión SÍ escribe en el ledger de inventario (a diferencia de
+  WP-C14): cada recepción contabilizada es la primera entrada real de
+  stock del flujo de compras.
+
+Alcance: recepciones, prorrateo, generación de lotes. La orden de compra
+en sí es WP-C14.
+```
+
+---
+
+### Sesión 36 — WP-C16 · Sourcing: escenarios y comparación
+
+```
+Antes de tocar nada: git checkout -b feat/c16-sourcing
+
+Tomá WP-C16 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
+docs/especificacion-software.md (RF-SRC completo).
+
+Objetivo: módulo sourcing — escenarios de compra con supuestos de tipo de
+cambio, flete y aranceles, comparados línea por línea.
+
+Criterio de aceptación: RF-SRC-01 a RF-SRC-05. Un escenario NO toca
+inventario ni caja (RF-SRC-04) — es una simulación, no una operación.
+
+TRAMPAS DE ESTA TAREA:
+· RF-SRC-04 es el criterio central del módulo: un escenario reusa
+  landedCost.ts/freight.ts (WP-A05) para PROYECTAR, sin insertar ningún
+  movimiento real. Si un test de este módulo necesita limpiar
+  inventory_movements después de correr, algo está mal diseñado.
+· "Convertir un escenario en orden de compra" (RF-SRC-05) es la única
+  operación que sí produce un efecto real — y en ese momento deja de ser
+  un escenario, se vuelve una orden de compra (WP-C14) con el origen
+  registrado.
+· El umbral de margen para alertar (RF-SRC-03) es CONFIGURABLE, no un
+  número fijo en el código.
+
+Alcance: escenarios, comparación, alerta de margen, conversión a orden de
+compra. Sin canales de venta (RF-MKT-08…10, fuera del bloque C).
+```
+
+---
+
+### Sesión 37 — WP-C17 · Ventas: pedidos, totales, IVA
+
+```
+Antes de tocar nada: git checkout -b feat/c17-sales-orders
+
+Tomá WP-C17 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
+docs/domain-rules.md (RN-VTA-01, RN-EST-02, RN-IVA completo),
+packages/domain/src/sales/ (order.ts de WP-A08/A09, esta sesión lo
+expone), docs/especificacion-software.md (RF-VTA-01 a RF-VTA-03).
+
+Objetivo: módulo ventas — pedidos de mostrador con líneas de cualquier
+tipo de variante, totales, IVA.
+
+Criterio de aceptación: RF-VTA-01 a RF-VTA-03. Un total inconsistente
+(que no cumpla total = subtotal − descuento + envío) se rechaza.
+
+TRAMPAS DE ESTA TAREA:
+· total_pyg = subtotal − discount + shipping es un INVARIANTE impuesto
+  por la base (RN-VTA-01) — el endpoint no "confía" en el total que manda
+  el cliente, lo recalcula o lo valida contra el cálculo de dominio.
+· El pedido nace en `draft` y pasa a `awaiting_payment` (RN-EST-02) — esta
+  sesión NO toca inventario todavía: RN-VTA-02 es explícito en que el
+  inventario se consume recién al CONFIRMARSE EL PAGO, no al crear el
+  pedido. Si esta sesión inserta un movimiento de inventario, está
+  adelantando trabajo de WP-C19.
+· El IVA es RN-IVA (WP-A04): extraído del precio con impuesto incluido,
+  nunca una multiplicación por 0.10 aparte.
+· Un pedido mixto (RN-VTA-05) combina decants, sellados y serializados en
+  la misma transacción — cada línea sigue su propia lógica de consumo,
+  pero eso es C19; acá alcanza con que el modelo de línea soporte los tres
+  tipos.
+
+Alcance: creación del pedido, líneas, totales, IVA. Reservas (C18),
+confirmación con consumo (C19), señas (C20) y anulación (C21) son
+sesiones propias.
+```
+
+---
+
+### Sesión 38 — WP-C18 · Ventas: reservas con TTL
+
+```
+Antes de tocar nada: git checkout -b feat/c18-reservations
+
+Tomá WP-C18 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
+docs/domain-rules.md (RN-RES completo), ADR-019,
+packages/domain/src/sales/reservation.ts (WP-A09).
+
+Objetivo: reservas de stock al comprometer una venta, con TTL según medio
+de pago y un job que libera las vencidas.
+
+Criterio de aceptación: RF-VTA-04. Una reserva vencida se libera en menos
+de 5 minutos (RN-RES-04: el job corre cada 5 min).
+
+TRAMPAS DE ESTA TAREA:
+· Los TTL son la tabla de RN-RES-02 exacta: 15 min checkout, 30 min
+  tarjeta pendiente, 48 h transferencia, hasta el vencimiento de la seña,
+  hasta 30 días la retención manual — no un único TTL genérico.
+· El carrito NO reserva (RN-RES-01, ADR-019) — la reserva nace en el
+  checkout/al comprometer la venta, no antes. Si esta sesión reserva al
+  agregar al carrito, contradice el ADR directamente.
+· Una reserva liberada NO se reactiva (RN-RES-04): se crea una nueva. No
+  hay un "revivir" una reserva vencida.
+· `disponible = saldo_proyectado − Σ reservas vivas` (RN-RES-03) es el
+  cálculo que WP-C10 (saldos) va a necesitar extender una vez que esta
+  sesión exista — decilo en el PR si C10 ya está cerrado y necesita un
+  ajuste, no lo edites en silencio.
+
+Alcance: reservas y el job de liberación. El conflicto en checkout
+(RN-RES-05, qué pasa si la reserva venció al confirmar el pago) es de
+WP-C19, no de esta sesión.
+```
+
+---
+
+### Sesión 39 — WP-C19 · Ventas: confirmación, consumo y COGS
+
+```
+Antes de tocar nada: git checkout -b feat/c19-sale-confirmation
+
+Tomá WP-C19 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
+docs/domain-rules.md (RN-VTA-02, RN-VTA-05, RN-RES-05, RN-COS-04),
+docs/api-conventions.md (sección 8.2, bloqueo), ADR-007, ADR-008.
+
+Objetivo: confirmación de venta — consumo real de inventario, cálculo y
+persistencia del COGS por línea, con bloqueo de lotes ordenado para
+soportar concurrencia.
+
+Criterio de aceptación: RF-VTA-05, RF-VTA-06. Test de concurrencia que
+demuestre que dos confirmaciones simultáneas sobre pedidos multilínea que
+tocan los mismos lotes NO producen interbloqueo.
+
+TRAMPAS DE ESTA TAREA — es el paquete de mayor riesgo del proyecto:
+· Bloqueo de lotes en orden ASCENDENTE de lot_id, en una sola sentencia
+  (SELECT ... FOR UPDATE ORDER BY id, docs/api-conventions.md §8.2). Sin
+  orden determinístico, dos pedidos multilínea que tocan los mismos lotes
+  en orden distinto producen interbloqueo — y esto no se ve en desarrollo
+  con datos de prueba, aparece con carga real. El comentario de por qué va
+  en el código, porque es exactamente el detalle que alguien "prolija" en
+  un refactor futuro.
+· El inventario se consume AL CONFIRMARSE EL PAGO, no al crear el pedido
+  (RN-VTA-02) — esta es la sesión donde el movimiento de inventario recién
+  ocurre, no antes.
+· Si la reserva venció y el stock ya no alcanza: RECHAZAR, reembolsar el
+  pago, cancelar el pedido con motivo `stock_no_disponible` (RN-RES-05).
+  NUNCA se confirma una venta sin stock, bajo ninguna circunstancia — ni
+  siquiera "solo por esta vez" con aprobación manual.
+· Un pedido mixto (RN-VTA-05) combina lógicas de consumo distintas en la
+  MISMA transacción: sellado consume del lote directo, decant dispara
+  planDecant (WP-C13) que reserva y genera una orden de fraccionamiento
+  pendiente (no consumo inmediato de granel), serializado mueve
+  exactamente 1 unidad y pasa a `sold` (RN-VTA-04). No trates las tres
+  líneas con el mismo camino de código.
+· El COGS se calcula y persiste por línea y por pedido (RF-VTA-06,
+  allocateFromLots de WP-A06) — no un promedio, capas reales.
+
+Revisión cruzada OBLIGATORIA antes de fusionar (ver §4.2 y §6). No cierres
+esta sesión sin ella, sin importar cuán verde esté la suite local.
+
+Alcance: solo confirmación de pago → consumo → COGS → bloqueo. Reservas
+(C18) y fraccionamiento (C13) ya existen como módulos, esta sesión los
+orquesta.
+```
+
+---
+
+### Sesión 40 — WP-C20 · Ventas: señas y aplicación
+
+```
+Antes de tocar nada: git checkout -b feat/c20-deposits
+
+Tomá WP-C20 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
+docs/domain-rules.md (RN-SEN completo), ADR-013,
+packages/domain/src/sales/deposit.ts (WP-A09).
+
+Objetivo: señas de clientes como pasivo, con aplicación explícita a un
+pedido.
+
+Criterio de aceptación: RF-VTA-07, RF-VTA-08.
+
+TRAMPAS DE ESTA TAREA:
+· La seña es un PASIVO (RN-SEN-01, ADR-013): acredita
+  2.1.02.001 Señas de clientes. No es ingreso hasta que se aplica a una
+  venta — si el endpoint la trata como ingreso al recibirla, el asiento
+  contable (cuando exista, bloque H) va a estar mal desde acá.
+· applied_pyg + refunded_pyg ≤ amount_pyg es un INVARIANTE (RN-SEN-02),
+  impuesto por la base — no una validación que el servicio pueda saltarse
+  porque "ya viene validado del frontend".
+· Una seña puede aplicarse a VARIOS pedidos, y un pedido puede recibir
+  VARIAS señas (RN-SEN-03) — cada aplicación es su propia fila con su
+  monto, no un campo único "pedido aplicado" en la seña.
+· Una seña vencida con saldo sin aplicar NO se cancela automáticamente
+  (RN-SEN-04) — aparece en un reporte para decisión humana. No le agregues
+  un cron que la cancele "para prolijidad": es una decisión de negocio y
+  contable, no del sistema.
+
+Alcance: registro y aplicación de señas. El asiento contable de la seña
+(RN-CTB-04) es bloque H, no de esta sesión — acá solo la parte
+transaccional del pasivo.
+```
+
+---
+
+### Sesión 41 — WP-C21 · Ventas: anulación por reversión
+
+```
+Antes de tocar nada: git checkout -b feat/c21-sale-voiding
+
+Tomá WP-C21 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
+docs/domain-rules.md (RN-VTA-03, RN-EST-02, el criterio de fondo de
+RN-EST completo), docs/especificacion-software.md (RF-VTA-09).
+
+Objetivo: anulación de una venta confirmada, generando movimientos de
+reversión hacia los mismos lotes de origen.
+
+Criterio de aceptación: RF-VTA-09. Los movimientos ORIGINALES quedan
+intactos — la anulación no los edita ni los borra.
+
+TRAMPAS DE ESTA TAREA:
+· Anular genera movimientos `return_in` NUEVOS hacia los mismos lotes de
+  origen, con el MISMO costo (RN-VTA-03) — nunca se editan los movimientos
+  originales, el ledger sigue siendo append-only también acá.
+· `cancelled` y `refunded` no son sinónimos (RN-EST-02): `cancelled` es
+  "nunca pasó nada" (solo alcanzable desde draft/awaiting_payment, antes
+  de que el inventario se tocara); `refunded` es "pasó algo y se revierte"
+  — desde `paid` en adelante, la salida es SIEMPRE `refunded`, nunca
+  `cancelled`. Esta sesión trabaja sobre pedidos ya `paid` o posteriores,
+  así que su salida es refunded.
+· Reversión, no reprocesamiento: no vuelvas a correr planDecant/
+  executeDecant al revés para "deshacer" un fraccionamiento — generá el
+  movimiento de reversión directamente, con el costo que ya quedó
+  registrado en movement_cost_allocations.
+
+Alcance: la anulación por reversión de una venta confirmada. Devoluciones
+con inspección de mercadería (RF-VTA-12) son bloque I, posterior.
+```
+
+---
+
+### Sesión 42 — WP-C22 · Contabilidad: plan de cuentas, caja, arqueo
+
+```
+Antes de tocar nada: git checkout -b feat/c22-accounting-core
+
+Tomá WP-C22 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
+docs/domain-rules.md (RN-CTB-01, RN-CTB-02), ADR-012,
+docs/data-model.md (sección 3.6), packages/db/seed/ (el plan de cuentas
+sembrado en WP-B02).
+
+Objetivo: módulo contabilidad — plan de cuentas jerárquico, movimientos de
+caja en guaraníes y dólares, arqueo.
+
+Criterio de aceptación: RF-CTB-01, RF-CTB-02.
+
+TRAMPAS DE ESTA TAREA:
+· El plan de cuentas YA existe, sembrado por WP-B02 (packages/db/seed/) —
+  esta sesión lo administra (CRUD sobre cuentas imputables y de
+  agrupación), no lo vuelve a crear. Y sigue siendo el que hay que validar
+  con el contador (pendiente abierto en CLAUDE.md, no de esta sesión).
+· El MOTOR DE POSTEO (asientos derivados de eventos, RN-CTB-01, RF-CTB-03)
+  es bloque H, explícitamente posterior — esta sesión NO genera asientos
+  automáticos todavía. Caja y arqueo son movimientos que el operador
+  registra directo, no derivados de una regla.
+· SUM(debe) = SUM(haber) por asiento (RN-CTB-02) es un invariante para
+  cuando SÍ haya asientos (bloque H) — dejalo documentado como
+  restricción del modelo, aunque el motor que los genera todavía no
+  exista.
+· Caja en dos monedas (guaraníes y dólares): cada movimiento en moneda
+  extranjera lleva sus cuatro campos (amount_minor, currency,
+  fx_rate_to_pyg, amount_pyg como snapshot) — el mismo patrón de WP-A05,
+  no uno nuevo para caja.
+
+Alcance: plan de cuentas, caja, arqueo. El motor de posteo es bloque H.
+```
+
+---
+
+### Sesión 43 — WP-C23 · Fiscal: documentos y puerto
+
+```
+Antes de tocar nada: git checkout -b feat/c23-fiscal-documents
+
+Tomá WP-C23 del backlog.
+
+Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
+docs/domain-rules.md (RN-FIS completo), ADR-014.
+
+Objetivo: módulo fiscal — documentos como entidad separada de la venta,
+puerto FiscalProvider con un adaptador manual.
+
+Criterio de aceptación: RF-FIS-01 a RF-FIS-04, RF-FIS-07.
+
+TRAMPAS DE ESTA TAREA:
+· NO se construye el integrador SIFEN en esta sesión. Se construye el
+  PUERTO (FiscalProvider) y UN SOLO adaptador: el manual, que registra el
+  CDC que alguien cargó a mano desde fuera del sistema (RF-FIS-04). El
+  adaptador homologado de proveedor (RF-FIS-05/06) es WP-H07, posterior,
+  y depende además de un pendiente de negocio (el grupo SIFEN del RUC de
+  JODA, todavía sin determinar). Ver ADR-014.
+· total_pyg = taxed_10 + taxed_5 + exempt (RN-FIS-02) — el desglose por
+  tasa es obligatorio en el documento, no un cálculo aparte que pueda
+  desalinearse del total.
+· Un documento en `approved` SIEMPRE tiene código de control (RN-FIS-03,
+  RF-FIS-07) — impuesto por la base, no solo validado en el servicio.
+· Una nota de crédito/débito referencia OBLIGATORIAMENTE el documento que
+  rectifica (RN-FIS-01) — no hay nota de crédito "suelta".
+
+Alcance: el puerto, el adaptador manual, los documentos. El adaptador
+homologado es WP-H07.
+```
+
+---
+
+### Sesión 44 — WP-C24 · Seguridad: usuarios y roles
+
+```
+Antes de tocar nada: git checkout -b feat/c24-user-admin
+
+Tomá WP-C24 del backlog.
+
+Leé primero: .claude/rules/api.md, docs/security-spec.md (sección 2
+completa, sección 3.2), ADR-016.
+
+Objetivo: administración de usuarios de personal y sus roles, sobre el
+middleware de permisos de WP-C05.
+
+Criterio de aceptación: RF-SEG-03, RF-SEG-06. Revocar un permiso tiene
+efecto en menos de 2 minutos.
+
+TRAMPAS DE ESTA TAREA:
+· La revocación rápida sale GRATIS si WP-C05 usó Redis con TTL 60 s como
+  corresponde (docs/security-spec.md §3.2) — esta sesión no necesita
+  inventar un mecanismo de invalidación aparte, solo asegurarse de
+  invalidar/actualizar la entrada de caché al cambiar el rol, no esperar
+  a que expire sola.
+· `settings.user:write` (crear/editar usuarios y roles) es exclusivo de
+  `owner` según la matriz de roles (docs/security-spec.md §2.1) — ni
+  `manager` lo tiene. No relajes esa fila sin confirmarlo.
+· Un cliente nunca puede tener rol de personal — es un invariante de
+  esquema (ADR-015), no algo que este módulo tenga que validar a mano.
+
+Alcance: administración de usuarios y roles de personal. El catálogo de
+permisos en sí ya existe (docs/security-spec.md §2), esta sesión no lo
+redefine.
+```
+
+---
+
+### Sesión 45 — WP-C25 · Observabilidad
+
+```
+Antes de tocar nada: git checkout -b feat/c25-observability
+
+Tomá WP-C25 del backlog.
+
+Leé primero: .claude/rules/api.md, docs/especificacion-software.md
+(sección 3.6, RNF-OBS completo), docs/data-model.md (sección 5, vistas —
+v_balance_drift es la fuente de la alerta de deriva).
+
+Objetivo: bitácoras estructuradas, identificador de correlación
+propagado, y las seis alertas de negocio.
+
+Criterio de aceptación: RNF-OBS-01 a RNF-OBS-04. Las seis alertas
+configuradas: saldo negativo, deriva de proyección, asiento descuadrado,
+evento sin postear con más de 24 h, notificación de pago fallida, margen
+negativo.
+
+TRAMPAS DE ESTA TAREA:
+· El identificador de correlación (requestId, ya armado en el contexto de
+  WP-C01) se propaga a TODAS las bitácoras de una petición, no solo al log
+  de entrada — si un error ocurre tres capas más abajo, tiene que llevar
+  el mismo requestId.
+· Dos de las seis alertas (asiento descuadrado, evento sin postear +24h)
+  dependen de que exista el motor de posteo — que es bloque H, todavía no
+  construido. Dejalas CONFIGURADAS y documentadas como "sin datos que
+  disparen todavía", no las inventes simulando eventos que el sistema no
+  genera aún.
+· La deriva de proyección se apoya en v_balance_drift (docs/data-model.md
+  §5), la misma vista que WP-B03/B06 ya usan en los tests de invariantes —
+  no crees una consulta nueva que calcule lo mismo de otra forma.
+· Los errores no controlados van a un sistema de seguimiento con traza y
+  contexto (RNF-OBS-04) — esto es DISTINTO de las bitácoras estructuradas
+  de negocio (RNF-OBS-02): un logger no reemplaza a un tracker de errores.
+
+Alcance: bitácoras, correlación, las seis alertas (dos de ellas
+configuradas pero inertes hasta el bloque H). Sin dashboard de
+visualización — eso es reportes (bloque E/G), no de esta sesión.
+```
+
+---
+
+### Reparto entre agentes — Fase 2
+
+El criterio de reparto no es la dificultad del paquete: es **qué escribe en el ledger de inventario** (`inventory_movements`, append-only desde WP-B01). CLAUDE.md ya lo dice para el código en sí — corregir un error ahí es insertar un movimiento de ajuste, nunca editar uno existente — y vale igual para quien lo escribe y para quien lo revisa: un `git revert` deshace el código que produjo una fila mal escrita, pero no deshace la fila ya insertada en un Postgres compartido. Los paquetes que insertan movimientos reales del ledger quedan con Claude Code, que tiene encima los guardas mecánicos de `.claude/` (bloqueo de `prisma migrate`, formateo automático, hooks). El resto puede repartirse con Codex, porque AGENTS.md es explícito en que **esos guardas mecánicos no protegen a Codex** — ahí las reglas "mecánicas" de Claude Code vuelven a ser de confianza, y conviene reservar esa situación para paquetes donde un descuido sale barato de corregir.
+
+| Sesión | WP  | ¿Escribe en `inventory_movements`?                           | Agente                          | Por qué                                                                                              |
+| ------ | --- | ------------------------------------------------------------ | ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| 28     | C08 | No                                                           | Codex                           | Catálogo puro, sin tocar stock.                                                                      |
+| 29     | C09 | No                                                           | Codex                           | Archivos y derivados, sin tocar stock.                                                               |
+| 30     | C10 | Sí (ajustes)                                                 | **Claude Code**                 | Un ajuste mal escrito es una fila de ledger real, no reversible con `git revert`.                    |
+| 31     | C11 | Sí                                                           | **Claude Code**                 | Conversión de lote en cuatro pasos transaccionales (ADR-009); un error deja un frasco a medio abrir. |
+| 32     | C12 | Sí (indirecto, vía venta/transferencia)                      | **Claude Code**                 | Trazabilidad serial es tan irreversible como el resto del ledger.                                    |
+| 33     | C13 | Sí                                                           | **Claude Code**                 | Ejecución consume granel + insumos reales; la mitad más delicada del dominio (WP-A07).               |
+| 34     | C14 | No                                                           | Codex                           | La orden de compra no genera stock hasta la recepción (C15).                                         |
+| 35     | C15 | Sí                                                           | **Claude Code**                 | Genera lotes y sus movimientos de entrada, de forma transaccional.                                   |
+| 36     | C16 | No, por diseño (RF-SRC-04)                                   | Codex                           | Un escenario no debe tocar inventario ni caja — si lo hiciera, sería el bug del WP.                  |
+| 37     | C17 | No (RN-VTA-02: se consume al confirmar el pago, no al crear) | Codex, con revisión liviana     | El pedido en sí no mueve stock todavía.                                                              |
+| 38     | C18 | No (reservas son su propia tabla)                            | Codex                           | El job de liberación no inserta movimientos del ledger.                                              |
+| 39     | C19 | Sí — el de mayor riesgo del proyecto                         | **Claude Code, exclusivamente** | Consumo real + COGS + bloqueo bajo concurrencia. Revisión cruzada obligatoria además (§6).           |
+| 40     | C20 | No (toca caja/pasivo, no inventario)                         | Codex, con revisión de caja     | Dinero, pero no el ledger de stock.                                                                  |
+| 41     | C21 | Sí (`return_in`)                                             | **Claude Code**                 | Inserta movimientos de reversión reales hacia lotes reales.                                          |
+| 42     | C22 | No (caja/plan de cuentas, no inventario)                     | Codex, con revisión de caja     | Dinero, pero no el ledger de stock.                                                                  |
+| 43     | C23 | No                                                           | Codex                           | Documentos fiscales, sin tocar stock ni caja.                                                        |
+| 44     | C24 | No                                                           | Codex, con revisión de permisos | Sensible por seguridad, pero no escribe el ledger.                                                   |
+| 45     | C25 | No                                                           | Codex                           | Solo lectura y configuración de alertas.                                                             |
+
+La Fase 1 (Sesiones 21 a 27) queda fuera de este reparto porque es secuencial y de cimiento: conviene que la lleve una sola sesión/agente de punta a punta para que `withTenantTx`, el mapeador de errores y el middleware de permisos salgan coherentes entre sí, en vez de conciliar cuatro estilos distintos después.
+
+---
+
 ### Sesión de ejemplo — WP-E01 · Tokens de diseño
 
 El primer paquete de frontend merece su propio prompt porque es donde un agente, sin instrucciones, produce la estética genérica.
@@ -1001,6 +2040,30 @@ Si notás que ignora una instrucción, `/context` es el primer diagnóstico: cas
 **Si una sesión se está alargando y el agente empieza a repetirse o a proponer cambios cada vez más amplios, cortala.** Commiteá lo que esté en verde, abrí una sesión limpia y volvé a empezar desde el punto siguiente. Insistir en un contexto degradado cuesta más que reiniciar.
 
 **Nombrá siempre los documentos a leer.** `CLAUDE.md` se carga solo; el resto no. Un agente que no leyó `domain-rules.md` va a inventar la regla de la merma, y la versión que invente va a sonar razonable.
+
+### Niveles de rigor por paquete
+
+La base para todo paquete es §4.1 (verificación antes de cerrar) — eso no es opcional para ninguno. Lo que cambia es si además hace falta §4.2 (revisión cruzada, en sesión nueva y limpia).
+
+**Riesgo alto — revisión cruzada obligatoria antes de fusionar:**
+
+| WP  | Por qué                                                                                                                                                                                                                                                                                                       |
+| --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C02 | `withTenantTx` es la única barrera entre el contexto de un tenant y el de otro reutilizando la misma conexión del pool. Un `set_config` sin el tercer parámetro en `true` es un error de aislamiento silencioso — ningún test lo detecta si nadie construyó el escenario exacto de reutilización de conexión. |
+| C05 | El middleware de permisos es la Capa 2 ("defensa principal", docs/security-spec.md §3) de todo el sistema. Un permiso mal resuelto, o un procedimiento que se cuela sin `meta.permission`, expone datos de un módulo entero.                                                                                  |
+| C13 | El fraccionamiento es la parte más delicada del dominio (ya lo advertía la Sesión 7, WP-A07) y acá se conecta con dinero real: merma mal contabilizada es COGS mal calculado en cada decant vendido.                                                                                                          |
+| C19 | Confirmación de venta: consumo real de inventario, COGS y bloqueo concurrente en una sola transacción. El paquete de mayor riesgo del proyecto — un interbloqueo o una venta confirmada sin stock no se notan en desarrollo, aparecen con carga real.                                                         |
+
+**Riesgo bajo — autoverificación (§4.1) y CI alcanzan, sin revisión cruzada:**
+
+| WP  | Por qué                                                                                                                                                                                                     |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| C08 | Catálogo: CRUD sobre productos y variantes, sin dinero ni inventario de por medio. El test del DTO público ya cubre el riesgo real (fuga de costos).                                                        |
+| C09 | Subida de imágenes: el riesgo (archivo malicioso) lo cubre la validación por bytes mágicos, verificable con un test directo, sin ambigüedad de interpretación.                                              |
+| C24 | Administración de usuarios: sensible, pero el riesgo real (revocación lenta, permiso mal asignado) ya lo prueba el criterio de aceptación — no depende de una lectura humana que un test no pueda capturar. |
+| C25 | Observabilidad: agrega visibilidad, no cambia el comportamiento del sistema. El peor caso de un error acá es una alerta que no dispara, no un dato corrompido.                                              |
+
+El resto de los paquetes de la Fase 2 quedan en el nivel por defecto: §4.1 siempre, §4.2 a criterio de quien los cierra — si algo se siente arriesgado al terminar, pedila, no hace falta que esté en esta lista para justificarlo.
 
 ---
 
