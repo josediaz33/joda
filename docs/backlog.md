@@ -170,6 +170,10 @@ Identificador: `WP-<bloque><nn>`. Referencialo en la rama, el commit y el PR.
 
 **Hallazgo, no corregido de paso — cada paquete con `tsc -p tsconfig.json` (sin excluir tests) corre sus tests dos veces.** `vitest run` descubre tanto `src/**/*.test.ts` como `dist/**/*.test.js`, porque el build no excluye los archivos de test del `outDir`. Preexistente desde WP-A11 (`packages/contracts`); WP-C01 lo hereda en `apps/api` al copiar el mismo patrón de `tsconfig.json`/scripts. No es incorrecto (ambas corridas pasan, son el mismo test dos veces) pero duplica el tiempo de `test`. No se corrigió acá: es un ajuste de configuración de build que toca un patrón ya establecido en un WP distinto, fuera del alcance de C01.
 
+**Matiz de la revisión cruzada de C01 — `exampleRouter.ts` no declara `meta.permission`.** `.claude/rules/api.md` exige que todo procedimiento lo declare, sin excepción textual, y `docs/api-conventions.md` §9 dice que un procedimiento sin `meta.permission` "falla en el arranque" — ese chequeo es el middleware de permisos de **WP-C05**, todavía sin implementar, así que hoy no falla nada. No es un incumplimiento de C01 (la autorización está explícitamente fuera de su alcance), pero la regla en sí no trae una cláusula de excepción transitoria para el período C01→C05. Quien tome **WP-C05** va a tener que decidir qué hacer con `example.ping`/`example.ping.failWith*` antes de que el chequeo "todo procedimiento declara permiso" empiece a correr: agregarles un permiso, o sacar el router de ejemplo del árbol montado en `apps/api/src/trpc/router.ts`.
+
+**Riesgo señalado en la revisión cruzada de C01, para vigilar en WP-C02.** `PgError` (`apps/api/src/middleware/errorMapper.ts`) es hoy un tipo estructural sin ninguna conexión real a Postgres detrás — nada verifica todavía que el cliente que C02 conecte (`pg` crudo o a través de Prisma) exponga realmente `code`/`message`/`detail`/`constraint` con esa forma exacta. Si no coincide, el mapeo se rompe en silencio, sin ningún test que lo grite hoy.
+
 ---
 
 ## Bloque D — Migración
