@@ -134,6 +134,8 @@ Si la API usara `service_role` o el dueño de las tablas, RLS **no se evaluaría
 
 **Verificado:** conectado como `joda_api`, sin `tenant_id` en contexto → cero filas; con otro tenant → cero filas; `UPDATE` sobre el libro → `permission denied`.
 
+**Provisión de la credencial de runtime (WP-C02).** `apps/api` se conecta exclusivamente con `DATABASE_URL_API` (ver `.env.example`) — nunca con `DATABASE_URL`, que queda reservada a migraciones y ETL (el equivalente local de `service_role`). Sin `DATABASE_URL_API` el proceso no arranca: se valida con Zod al inicio (`apps/api/src/config/env.ts`), sin fallback a ninguna otra variable. Además, antes de aceptar tráfico, `apps/api` corre `SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user` (`apps/api/src/db/client.ts`, `assertRlsNotBypassed`) y aborta el arranque si devuelve `true` — la red que atrapa a `DATABASE_URL_API` apuntando por error al owner de las tablas o a un superusuario. La password de desarrollo la fija `packages/db/seed/0002_seed_joda_api_credential.sql`; en producción sale del gestor de secretos.
+
 ### 3.2 Capa 2 — Middleware
 
 ```ts

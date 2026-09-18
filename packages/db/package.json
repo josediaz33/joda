@@ -3,13 +3,21 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Esquema SQL-first (ADR-018): migraciones, seed y suite de invariantes contra PostgreSQL 16 (WP-B01/B02/B03, ver docs/backlog.md).",
+  "description": "Esquema SQL-first (ADR-018): migraciones, seed y suite de invariantes contra PostgreSQL 16 (WP-B01/B02/B03, ver docs/backlog.md). También el cliente Prisma tipado que consume apps/api (WP-C02, src/client.ts).",
+  "main": "./dist/client.js",
+  "types": "./dist/client.d.ts",
+  "exports": {
+    ".": "./dist/client.js"
+  },
   "scripts": {
     "db:migrate": "node scripts/migrate.mjs && pnpm run db:pull",
     "db:pull": "prisma db pull --schema=prisma/schema.prisma && node scripts/patch-prisma-schema.mjs && prisma generate --schema=prisma/schema.prisma && node scripts/verify-prisma-client.mjs",
     "db:seed": "node scripts/seed.mjs",
     "db:reset": "node scripts/reset.mjs",
     "db:test": "node scripts/test.mjs",
+    "generate": "prisma generate --schema=prisma/schema.prisma",
+    "postinstall": "pnpm run generate",
+    "build": "tsc -p tsconfig.build.json",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint test"

@@ -1,6 +1,13 @@
 import type { CreateFastifyContextOptions } from "@trpc/server/adapters/fastify";
 
-export type Audience = "staff" | "public";
+// GLOSARIO.md "Audiencia (audience)" y el enum real de Postgres
+// (packages/db/migrations/0001_foundation.sql, `actor_audience`) — no
+// "public": ese nombre es el de `publicProcedure` (docs/api-conventions.md
+// §9, un tipo de procedimiento tRPC), un concepto distinto de qué actor
+// corre la transacción. `app.current_audience()` hace `::actor_audience`
+// sobre este valor (vía `withTenantTx`, WP-C02) — un valor fuera del enum
+// no falla al compilar, falla en Postgres en tiempo de ejecución.
+export type Audience = "staff" | "customer" | "system";
 
 // El contexto de petición (docs/api-conventions.md §1, §8.1, §9): de dónde
 // sale cada campo cambia con el bloque C, esta sesión (WP-C01) solo arma la

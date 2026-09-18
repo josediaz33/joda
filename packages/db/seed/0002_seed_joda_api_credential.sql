@@ -1,0 +1,20 @@
+-- =====================================================================
+-- seed/0002_seed_joda_api_credential.sql — credencial de runtime de joda_api
+-- =====================================================================
+-- migrations/0010_security_rls.sql crea joda_api LOGIN NOBYPASSRLS sin
+-- password: a una migración de esquema no le corresponde fijar un secreto.
+-- Provisionar esa credencial para que apps/api pueda conectarse (WP-C02,
+-- docs/security-spec.md §3.1) es responsabilidad del seed, igual que el
+-- resto de los datos de arranque de este archivo.
+--
+-- La password es fija y de desarrollo, igual que POSTGRES_PASSWORD=postgres
+-- en infra/docker/docker-compose.yml y en el job `db` del CI — no protege
+-- nada por sí misma, es DATABASE_URL_API con NOBYPASSRLS lo que sostiene el
+-- aislamiento (RLS no se puede eludir con esta credencial, a diferencia de
+-- postgres/postgres). En producción se reemplaza por una rotada desde el
+-- gestor de secretos, fuera del alcance de este WP (ver .env.example).
+--
+-- ALTER ROLE ... PASSWORD es idempotente: correr este archivo de nuevo deja
+-- la misma password, no falla ni duplica nada (packages/db/README.md, "cada
+-- archivo es idempotente por diseño").
+ALTER ROLE joda_api PASSWORD 'joda_api';

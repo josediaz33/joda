@@ -4,6 +4,8 @@
 // lógica de negocio ni acceso a datos.
 import { fastifyTRPCPlugin } from "@trpc/server/adapters/fastify";
 import Fastify from "fastify";
+import { loadEnv } from "./config/env.js";
+import { assertRlsNotBypassed, createPrismaClient } from "./db/client.js";
 import { createContext } from "./trpc/context.js";
 import { appRouter, type AppRouter } from "./trpc/router.js";
 
@@ -28,10 +30,19 @@ export function buildServer() {
 
 async function main() {
   const app = buildServer();
-  const port = Number(process.env.PORT ?? 3333);
 
   try {
-    await app.listen({ port, host: "0.0.0.0" });
+    // WP-C02 (docs/security-spec.md §3.1): sin DATABASE_URL_API el proceso no
+    // arranca, y arranca solo después de confirmar que esa credencial no
+    // elude RLS. Todavía no hay ningún procedimiento que use este cliente —
+    // lo conecta y lo valida el primer módulo de negocio real (bloque C en
+    // adelante) vía withTenantTx (src/db/withTenantTx.ts); esta verificación
+    // es la red de seguridad que corre desde ya, en cada arranque.
+    const env = loadEnv();
+    const db = createPrismaClient(env.DATABASE_URL_API);
+    await assertRlsNotBypassed(db);
+
+    await app.listen({ port: env.PORT ?? 3333, host: "0.0.0.0" });
   } catch (error) {
     app.log.error(error);
     process.exit(1);

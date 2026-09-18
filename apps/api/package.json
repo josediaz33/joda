@@ -13,9 +13,12 @@
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
+    "@testcontainers/postgresql": "catalog:",
+    "@types/pg": "8.15.5",
     "eslint": "catalog:",
     "eslint-config-prettier": "catalog:",
     "eslint-plugin-boundaries": "catalog:",
+    "pg": "8.16.3",
     "tsx": "4.23.13",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
@@ -23,6 +26,7 @@
   },
   "dependencies": {
     "@joda/contracts": "workspace:*",
+    "@joda/db": "workspace:*",
     "@trpc/server": "11.19.0",
     "fastify": "5.12.5",
     "zod": "4.6.5"
