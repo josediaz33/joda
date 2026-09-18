@@ -1,10 +1,18 @@
 # Entorno local de desarrollo: Postgres + Redis.
 # Uso: docker compose -f infra/docker/docker-compose.yml up -d (ver CONTRIBUTING.md §1)
 #
+# `name: joda` fija el nombre de proyecto de Compose (si no, Compose lo toma
+# del directorio que contiene este archivo — "docker" — y los volúmenes
+# reales terminan como docker_postgres_data en vez de joda_postgres_data,
+# sin relación con el nombre del proyecto).
+name: joda
+
 # Postgres fijado a 16, la misma versión contra la que se validó el esquema
 # (packages/db/README.md "Verificación") y la que usa el job `db` de CI
-# (.github/workflows/ci.yml) — nunca `latest`. Mismas credenciales que CI
-# (postgres/postgres/joda) para que DATABASE_URL sea el mismo valor acá y ahí.
+# (.github/workflows/ci.yml) — nunca `latest`. Mismo usuario/contraseña/base
+# que CI (postgres/postgres/joda) — no el mismo DATABASE_URL completo: el
+# puerto de host difiere (55432 acá, ver más abajo; 5432 en CI, donde no hay
+# riesgo de colisión con un Postgres nativo del runner).
 #
 # Puerto de host 55432, no el 5432 de siempre: adentro del contenedor sigue
 # siendo 5432 (lo que importa para que coincida con lo validado), pero
@@ -24,7 +32,7 @@ services:
     ports:
       - "55432:5432"
     volumes:
-      - joda_postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
       interval: 5s
@@ -36,7 +44,7 @@ services:
     ports:
       - "6379:6379"
     volumes:
-      - joda_redis_data:/data
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -44,5 +52,5 @@ services:
       retries: 10
 
 volumes:
-  joda_postgres_data:
-  joda_redis_data:
+  postgres_data:
+  redis_data:
