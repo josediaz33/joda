@@ -178,6 +178,24 @@ En la práctica, esto significa que dos personas corriendo `pnpm db:pull` contra
 
 **Si `applyMigrations`/`applySeeds` falla a mitad de camino, `startTestDb()` detiene el contenedor antes de relanzar el error** — sin eso, una migración rota dejaba un contenedor huérfano por cada corrida fallida (mitigado parcialmente por Ryuk, el limpiador de Testcontainers, pero no de inmediato).
 
+### 7. Docker Compose (WP-B07): el puerto de host de Postgres es 55432, no 5432
+
+`infra/docker/docker-compose.yml` publica Postgres en `55432:5432` — adentro
+del contenedor sigue siendo 5432 (lo que importa para que coincida con lo
+validado en "Verificación" más arriba), pero el puerto del **host** no es el
+default. Se encontró en la práctica al correr la verificación de este WP en
+una máquina de desarrollo Windows con Postgres ya instalado como servicio
+nativo (`Get-Service PostgreSQL`, escuchando en `127.0.0.1:5432`): Windows
+prioriza esa dirección específica sobre el `0.0.0.0:5432` que publica el
+proxy de Docker, así que `localhost:5432` termina hablando con el servicio
+nativo, no con el contenedor — y el error (`password authentication failed
+for user "postgres"`) no menciona Docker para nada, así que sin este
+hallazgo cuesta diagnosticar. Publicar en `5432:5432` funciona sin problema
+en una máquina sin Postgres nativo (así corre el job `db` de CI, en un
+runner limpio) pero rompe silenciosamente apenas hay uno — y detenerlo no es
+una opción: puede estar ahí para otra cosa que no tiene nada que ver con
+este repositorio. `DATABASE_URL` de `.env.example` ya apunta a `55432`.
+
 **`packages/db/package.json` tiene `"lint": "eslint test"`, no `"eslint ."`.** Lintear todo el paquete saca a la luz ~20 errores preexistentes en `scripts/*.mjs` (`console`/`process` sin `languageOptions.globals` de Node en `packages/config/eslint/index.js`, que hasta este WP nunca linteaba estos scripts porque `packages/db` no tenía script `lint`). No es una regla de negocio ni algo que WP-B05 causó: es deuda preexistente, fuera de alcance de este WP, y se anota acá en vez de arreglarse de paso.
 
 ---

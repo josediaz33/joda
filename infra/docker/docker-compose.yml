@@ -1,0 +1,48 @@
+# Entorno local de desarrollo: Postgres + Redis.
+# Uso: docker compose -f infra/docker/docker-compose.yml up -d (ver CONTRIBUTING.md §1)
+#
+# Postgres fijado a 16, la misma versión contra la que se validó el esquema
+# (packages/db/README.md "Verificación") y la que usa el job `db` de CI
+# (.github/workflows/ci.yml) — nunca `latest`. Mismas credenciales que CI
+# (postgres/postgres/joda) para que DATABASE_URL sea el mismo valor acá y ahí.
+#
+# Puerto de host 55432, no el 5432 de siempre: adentro del contenedor sigue
+# siendo 5432 (lo que importa para que coincida con lo validado), pero
+# publicarlo tal cual en el host choca con cualquier instalación nativa de
+# Postgres que ya esté corriendo como servicio en la máquina de desarrollo
+# (frecuente en Windows) — sin que el compose se entere, `localhost:5432`
+# termina resolviendo al servicio nativo en vez del contenedor y la
+# autenticación falla con un mensaje que no menciona Docker para nada. Ver
+# packages/db/README.md.
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: joda
+    ports:
+      - "55432:5432"
+    volumes:
+      - joda_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    volumes:
+      - joda_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  joda_postgres_data:
+  joda_redis_data:
