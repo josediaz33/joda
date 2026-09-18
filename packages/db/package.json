@@ -9,7 +9,10 @@
     "db:pull": "prisma db pull --schema=prisma/schema.prisma && node scripts/patch-prisma-schema.mjs && prisma generate --schema=prisma/schema.prisma && node scripts/verify-prisma-client.mjs",
     "db:seed": "node scripts/seed.mjs",
     "db:reset": "node scripts/reset.mjs",
-    "db:test": "node scripts/test.mjs"
+    "db:test": "node scripts/test.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint test"
   },
   "dependencies": {
     "pg": "8.16.3",
@@ -17,6 +20,15 @@
   },
   "devDependencies": {
     "@types/pg": "8.15.5",
-    "prisma": "6.19.3"
+    "prisma": "6.19.3",
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "eslint": "catalog:",
+    "@eslint/js": "catalog:",
+    "typescript-eslint": "catalog:",
+    "eslint-plugin-boundaries": "catalog:",
+    "eslint-config-prettier": "catalog:",
+    "vitest": "catalog:",
+    "@testcontainers/postgresql": "catalog:"
   }
 }
