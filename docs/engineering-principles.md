@@ -334,6 +334,16 @@ Compromiso temporal separado del consumo definitivo, con TTL según el nivel de 
 `packages/domain` no puede construir un `Date` nuevo (`no-restricted-globals` sobre el identificador `Date`, `.claude/rules/domain.md`): una función pura que calcula "esto vence dentro de N minutos/días" no puede devolver ese resultado como `Date`, porque hacerlo requeriría `new Date(...)`. La salida es un `number` (epoch en milisegundos): `startedAt.getTime() + duraciónMs`. Leer con `.getTime()` un `Date` que YA entró por parámetro está permitido (es un método, no una construcción); construir uno nuevo, no. Quien orquesta (con I/O, fuera de `packages/domain`) arma el `Date`/`timestamptz` final a partir de ese número.
 **Dónde:** `sales/reservation.ts` (`computeReservationExpiresAt`, `computeManualHoldExpiresAt`, WP-A09). Usalo como precedente antes de que otro módulo necesite devolver un vencimiento calculado.
 
+### Mapeador de errores de Postgres en middleware de tRPC
+
+`docs/api-conventions.md` §4.4 ya definía la forma (`PgError`, `ApiError`, `appError`, `PG_ERROR_MAP` por ERRCODE); lo que este patrón agrega es cómo engancharla a tRPC sin que cada `service`/`repository` tenga que acordarse de llamar al traductor. Tres piezas fijas, no reinventar para el próximo módulo:
+
+1. Un middleware global (`t.procedure.use(...)`, no un middleware por router) atrapa cualquier error de Postgres crudo que se escape sin traducir y lo convierte una sola vez.
+2. **Trampa de tRPC v11 — `next()` de un middleware NO relanza el error del resolver como excepción de JS.** Internamente (`callRecursive`, `@trpc/server`) cada nivel de middleware atrapa el throw y lo devuelve como `{ ok: false, error }`, no como una excepción que suba por un `try/catch` alrededor de `await next()`. El middleware tiene que inspeccionar `result.ok`, no envolver `next()` en `try/catch` — eso último compila, no tira ningún error de tipos, y simplemente no hace nada (el error pasa de largo intacto). El error original crudo sobrevive en `result.error.cause` sin envolver, porque `getTRPCErrorFromUnknown` no reenvuelve algo que ya es instancia de `Error`.
+3. El `ApiError` ya traducido viaja como `cause` del `TRPCError` que se relanza; el `errorFormatter` de la instancia de tRPC lo reconoce por _duck typing_ (`isApiError`), no por referencia — tRPC envuelve cualquier `cause` que no sea instancia de `Error` en su propio `UnknownCauseError`, que copia las propiedades pero no conserva la identidad del objeto original.
+
+**Dónde:** `apps/api/src/middleware/errorMapper.ts` (`mapPgError`, `appError`, `toTRPCError`, `isApiError`) + `apps/api/src/trpc/trpc.ts` (`catchPgErrors`, `errorFormatter`), WP-C01. El mismo `errorFormatter` también enmascara cualquier error no traducido (`INTERNAL_SERVER_ERROR`) con un mensaje genérico en español — no solo los ERRCODE reconocidos — para que "ningún mensaje de Postgres llega al usuario" se cumpla incluso ante un bug no previsto.
+
 ---
 
 ## Parte IV — Antipatrones prohibidos

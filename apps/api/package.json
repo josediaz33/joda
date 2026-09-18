@@ -3,11 +3,11 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Fastify + tRPC — único origen de escritura sobre PostgreSQL. Esqueleto (WP-A01); el hola mundo llega en WP-A02.",
+  "description": "Fastify + tRPC — único origen de escritura sobre PostgreSQL. Esqueleto Fastify de WP-A02; tRPC, el contexto de petición y el mapeador de errores llegan en WP-C01.",
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
-    "test": "node ../../scripts/pending-task.mjs \"test (api)\" WP-C01",
+    "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint ."
   },
@@ -18,9 +18,13 @@
     "eslint-plugin-boundaries": "catalog:",
     "tsx": "4.23.13",
     "typescript": "catalog:",
-    "typescript-eslint": "catalog:"
+    "typescript-eslint": "catalog:",
+    "vitest": "catalog:"
   },
   "dependencies": {
-    "fastify": "5.12.5"
+    "@joda/contracts": "workspace:*",
+    "@trpc/server": "11.19.0",
+    "fastify": "5.12.5",
+    "zod": "4.6.5"
   }
 }
