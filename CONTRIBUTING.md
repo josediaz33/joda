@@ -12,12 +12,14 @@ git clone <repo> && cd joda
 git config core.hooksPath .githooks   # activa los hooks de .githooks/, ver abajo
 cp .env.example .env          # completar valores
 pnpm install
-docker compose up -d          # postgres + redis
+docker compose -f infra/docker/docker-compose.yml up -d   # postgres + redis
 pnpm db:reset                 # migraciones + seed
 pnpm dev
 ```
 
 **Objetivo: menos de 15 minutos desde cero.** Si tardaste más, algo del arranque está mal documentado y arreglarlo es parte del trabajo.
+
+**El Postgres de `docker-compose.yml` publica en el puerto 55432 del host, no 5432.** Si ya tenés una instalación nativa de Postgres corriendo como servicio (frecuente en Windows), `localhost:5432` resuelve a esa instancia y no al contenedor — la autenticación falla con un mensaje que no menciona Docker para nada. `DATABASE_URL` de `.env.example` ya apunta a `55432`; adentro del contenedor sigue siendo 5432. Detalle en `packages/db/README.md`, hallazgo 7.
 
 Verificación de que quedó bien:
 
