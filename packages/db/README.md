@@ -170,6 +170,16 @@ La solución **no** es un índice `UNIQUE(product_id, kind)` real en Postgres �
 
 En la práctica, esto significa que dos personas corriendo `pnpm db:pull` contra el mismo esquema, con la única diferencia de si su `DATABASE_URL` local tiene o no `?schema=app`, terminan committeando un `prisma/views/**/*.sql` distinto — puro ruido de diff, pero suficiente para que el chequeo de drift del CI (hallazgo 4) falle por una razón que no tiene nada que ver con el esquema. Por eso `?schema=app` dejó de ser un detalle del ejemplo en "Cómo correrlo" y pasó a ser parte de `DATABASE_URL` en todos lados — incluido el `DATABASE_URL` del job `db` en `.github/workflows/ci.yml`.
 
+### 6. Testcontainers (WP-B05): qué deja listo `startTestDb()` y qué no
+
+`test/setup/db.ts` expone `startTestDb()`: levanta un `postgres:16` real vía `@testcontainers/postgresql`, corre `applyMigrations` + `applySeeds` (las mismas funciones que usa `pnpm db:reset`, no una copia) y devuelve un `pg.Client` ya conectado. Se llama una sola vez por archivo de test, en `beforeAll` — recrear el contenedor en cada `it()` es lo que hace que una corrida tarde minutos en vez de segundos.
+
+**No deja un tenant con roles instanciados.** Igual que `pnpm db:seed` a secas (ver el aviso más arriba en este README), `seed/0001_seed_base.sql` solo carga el catálogo global de `permissions`; no invoca `app.seed_roles`, `app.seed_chart_of_accounts` ni `app.seed_posting_rules` para ningún tenant. Un test de integración que necesite un tenant real con roles y plan de cuentas (la prueba de aislamiento RLS de WP-B06, por ejemplo, que se conecta como `joda_api` con `tenant_id` en contexto) tiene que invocar esas funciones — o cargar `tests/smoke_business_flow.sql`, que sí lo hace con el tenant fijo `11111111-1111-1111-1111-111111111111` — dentro de su propio `beforeAll`, después de `startTestDb()`. No se resolvió acá porque la mayoría de los tests de integración (el ejemplo de este WP incluido) no necesitan un tenant instanciado, y adelantarlo sin un consumidor real hubiera sido diseñar a ciegas para WP-B06.
+
+**Si `applyMigrations`/`applySeeds` falla a mitad de camino, `startTestDb()` detiene el contenedor antes de relanzar el error** — sin eso, una migración rota dejaba un contenedor huérfano por cada corrida fallida (mitigado parcialmente por Ryuk, el limpiador de Testcontainers, pero no de inmediato).
+
+**`packages/db/package.json` tiene `"lint": "eslint test"`, no `"eslint ."`.** Lintear todo el paquete saca a la luz ~20 errores preexistentes en `scripts/*.mjs` (`console`/`process` sin `languageOptions.globals` de Node en `packages/config/eslint/index.js`, que hasta este WP nunca linteaba estos scripts porque `packages/db` no tenía script `lint`). No es una regla de negocio ni algo que WP-B05 causó: es deuda preexistente, fuera de alcance de este WP, y se anota acá en vez de arreglarse de paso.
+
 ---
 
 ## Decisiones no obvias del esquema

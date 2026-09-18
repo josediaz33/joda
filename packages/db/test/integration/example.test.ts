@@ -7,6 +7,11 @@ import { startTestDb, type TestDb } from "../setup/db.js";
 describe("infraestructura de integración: base efímera por corrida", () => {
   let db: TestDb;
 
+  // Este 60_000 es el timeout del hook de Vitest (para no colgarse si el
+  // pull de la imagen o la migración se traban) — no es una medición ni
+  // una aserción de que la corrida completa entra en el presupuesto de 60s
+  // del criterio de aceptación de WP-B05. Esa medición es manual: ver el
+  // tiempo real del job "Test" en CI para este PR.
   beforeAll(async () => {
     db = await startTestDb();
   }, 60_000);
