@@ -126,7 +126,9 @@ Obligatoria y explícita: conectarse como `joda_api` (no como superusuario) y ve
 ```ts
 it("RLS aísla por tenant con el rol de aplicación", async () => {
   const api = connectAs("joda_api");
-  await api.query(`SELECT set_config('app.tenant_id', $1, false)`, [OTHER_TENANT]);
+  // El true final es obligatorio: hace el valor local a la transacción
+  // para que no se filtre por el pool (AGENTS.md, docs/api-conventions.md §8.1).
+  await api.query(`SELECT set_config('app.tenant_id', $1, true)`, [OTHER_TENANT]);
   const { rowCount } = await api.query("SELECT * FROM app.products");
   expect(rowCount).toBe(0);
 });
