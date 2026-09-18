@@ -18,6 +18,10 @@ import { runSmokeBusinessFlow } from "../../scripts/lib/smoke.mjs";
 // pendiente — así que se le asigna una password de un solo uso dentro del
 // contenedor efímero de este test, exclusivamente para poder autenticarse.
 const REAL_TENANT_ID = "11111111-1111-1111-1111-111111111111";
+// No corresponde a ningún tenant sembrado — no hace falta que exista una
+// fila en `tenants`, porque `app.current_tenant_id()` solo lee un valor de
+// sesión (sin FK) y la política compara por igualdad de UUID. Cualquier
+// UUID distinto de REAL_TENANT_ID prueba lo mismo.
 const OTHER_TENANT_ID = "22222222-0000-0000-0000-000000000099";
 const JODA_API_TEST_PASSWORD = "rls-isolation-test-only";
 
