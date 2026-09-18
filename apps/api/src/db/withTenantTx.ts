@@ -1,6 +1,5 @@
 import type { Prisma, PrismaClient } from "@joda/db";
-
-export type Audience = "staff" | "public";
+import type { Audience } from "../trpc/context.js";
 
 export interface TenantTxContext {
   userId: string;
