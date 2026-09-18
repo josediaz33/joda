@@ -32,10 +32,13 @@ El flujo de negocio de `tests/smoke_business_flow.sql` corre de punta a punta: c
 
 ## Cómo correrlo
 
-Con `DATABASE_URL` apuntando a una base Postgres 16 vacía (ver `.env.example`):
+Con `DATABASE_URL` apuntando a una base Postgres 16 vacía (ver `.env.example`).
+El `?schema=app` es necesario para que `pnpm db:pull` sea reproducible —
+ver hallazgo 5 más abajo — así que es parte de la variable, no un detalle
+opcional del ejemplo:
 
 ```bash
-export DATABASE_URL="postgresql://usuario:clave@localhost:5432/joda"
+export DATABASE_URL="postgresql://usuario:clave@localhost:5432/joda?schema=app"
 
 pnpm db:migrate   # aplica migrations/*.sql en orden, y encadena pnpm db:pull
 pnpm db:pull      # prisma db pull + parche de schema + prisma generate
@@ -102,6 +105,19 @@ pnpm db:pull   # prisma db pull + parche de schema (ver hallazgo 4) + prisma gen
 
 `pnpm db:pull` se corre después de cada migración — encadenado automáticamente desde `pnpm db:migrate`, para que nadie tenga que acordarse — y el `schema.prisma` resultante (más `prisma/views/**/*.sql`, que introspección escribe para las vistas) se commitea. Prisma no gestiona el ciclo de migraciones, lo refleja.
 
+**Por qué Prisma 6.19.3 y no la versión `latest` de npm.** Al implementar WP-B04, la tag `latest` de `prisma`/`@prisma/client` en npm resolvía a Prisma 7 (`prisma` en particular a un release candidate, `8.0.0-rc.15`). Prisma 7 elimina el soporte de `datasource.url = env("DATABASE_URL")` para el CLI — `prisma db pull` falla con:
+
+```
+Error: Prisma schema validation - (get-config wasm)
+Error code: P1012
+error: The datasource property `url` is no longer supported in schema files.
+Move connection URLs for Migrate to `prisma.config.ts` and pass either
+`adapter` for a direct database connection or `accelerateUrl` for
+Accelerate to the `PrismaClient` constructor.
+```
+
+Migrar a ese modelo (`prisma.config.ts` + un driver adapter tipo `@prisma/adapter-pg` en el `PrismaClient`) es un cambio de arquitectura real, no cubierto por este ADR ni documentado en ningún lado del repo. Se fijó **6.19.3** (última 6.x estable) para no adoptarlo de paso en un WP cuyo alcance es solo introspección. Si en el futuro se decide migrar a Prisma 7+, esa decisión necesita su propio ADR — actualiza esta nota y el bloque de comandos de arriba cuando eso pase.
+
 ---
 
 ## Hallazgos de la implementación
@@ -146,7 +162,13 @@ Con números reales de un frasco de nicho, esa diferencia son unos 1.800 Gs. por
 
 La introspección (`prisma db pull`) sale bien y produce los 61 modelos exactos. `prisma generate` sí falla, con `P1012`, sobre `accessory_details`, `perfume_details` y `watch_details`: cada una tiene `product_id` como `PRIMARY KEY` y además una FK compuesta `(product_id, kind) → products(id, kind)` (la que impide mezclar verticales, `docs/data-model.md` §8). Como `product_id` ya es único, `(product_id, kind)` también lo es por transitividad — pero Prisma introspecciona unicidad de forma literal, no transitiva, y sin una anotación `@@unique` explícita en el modelo trata la segunda relación como uno-a-uno inválido.
 
-La solución **no** es un índice `UNIQUE(product_id, kind)` real en Postgres — sería puramente redundante y un cambio de esquema fuera del alcance de este WP para resolver una limitación de la herramienta, no del modelo de datos. En cambio, `pnpm db:pull` corre `scripts/patch-prisma-schema.mjs` entre la introspección y `prisma generate`: detecta cualquier modelo con una relación `fields: [product_id, kind], references: [id, kind]` y le agrega `@@unique([product_id, kind])` antes de generar. Es determinístico y corre en cada `db:pull`, así que no depende de que alguien lo re-edite a mano después de que la introspección reescriba `schema.prisma` (que es exactamente lo que ADR-018 prohíbe). La próxima vertical que se agregue con el mismo patrón (`docs/data-model.md` §8) queda cubierta sin tocar el script.
+La solución **no** es un índice `UNIQUE(product_id, kind)` real en Postgres — sería puramente redundante y un cambio de esquema fuera del alcance de este WP para resolver una limitación de la herramienta, no del modelo de datos. En cambio, `pnpm db:pull` corre `scripts/patch-prisma-schema.mjs` entre la introspección y `prisma generate`: detecta cualquier modelo con una relación `fields: [product_id, kind], references: [id, kind]` y le agrega `@@unique([product_id, kind])` antes de generar. Es determinístico y corre en cada `db:pull`, así que no depende de que alguien lo re-edite a mano después de que la introspección reescriba `schema.prisma` (que es exactamente lo que ADR-018 prohíbe). La próxima vertical que se agregue con el mismo patrón (`docs/data-model.md` §8) queda cubierta sin tocar el script. Si el parche no se puede aplicar (el formato de introspección cambió y el regex ya no matchea), el script corta con exit 1 en vez de escribir un `schema.prisma` a medias — y `scripts/verify-prisma-client.mjs`, que corre al final de `db:pull`, falla si el cliente generado no expone la misma cantidad de modelos y vistas que declara `schema.prisma`. El criterio de aceptación de WP-B04 ("el cliente compila y expone los 61 modelos") queda protegido en cada corrida, no solo comprobado una vez a mano — y el job `db` del CI corre `pnpm db:pull` después de `pnpm db:reset` y falla si el resultado no coincide con lo commiteado (`git diff --exit-code`), así que una migración nueva sin su `schema.prisma` actualizado no pasa el PR.
+
+### 5. La introspección de vistas no es reproducible sin fijar el `search_path`
+
+`prisma db pull` con la preview feature `views` escribe el SQL de cada vista (`prisma/views/**/*.sql`) tal como Postgres lo reconstruye con `pg_get_viewdef()`. Esa función solo omite el prefijo de esquema en los nombres de tabla que están en el `search_path` **de la conexión que hace la introspección** — no es una propiedad de la vista en sí. Con `DATABASE_URL` sin `?schema=app`, el `search_path` por defecto es `"$user", public`, así que `app.inventory_lots` sale calificado; con `?schema=app`, Prisma antepone `app` al `search_path` y la misma vista sale como `inventory_lots` a secas.
+
+En la práctica, esto significa que dos personas corriendo `pnpm db:pull` contra el mismo esquema, con la única diferencia de si su `DATABASE_URL` local tiene o no `?schema=app`, terminan committeando un `prisma/views/**/*.sql` distinto — puro ruido de diff, pero suficiente para que el chequeo de drift del CI (hallazgo 4) falle por una razón que no tiene nada que ver con el esquema. Por eso `?schema=app` dejó de ser un detalle del ejemplo en "Cómo correrlo" y pasó a ser parte de `DATABASE_URL` en todos lados — incluido el `DATABASE_URL` del job `db` en `.github/workflows/ci.yml`.
 
 ---
 

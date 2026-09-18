@@ -19,9 +19,8 @@ model accessory_details {
   products_accessory_details_product_idToproducts      products     @relation("accessory_details_product_idToproducts", fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   products_accessory_details_product_id_kindToproducts products     @relation("accessory_details_product_id_kindToproducts", fields: [product_id, kind], references: [id, kind], onDelete: NoAction, onUpdate: NoAction)
 
-  @@unique([product_id, kind])
-
   @@schema("app")
+  @@unique([product_id, kind])
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
@@ -658,9 +657,8 @@ model perfume_details {
   products_perfume_details_product_idToproducts      products              @relation("perfume_details_product_idToproducts", fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   products_perfume_details_product_id_kindToproducts products              @relation("perfume_details_product_id_kindToproducts", fields: [product_id, kind], references: [id, kind], onDelete: NoAction, onUpdate: NoAction)
 
-  @@unique([product_id, kind])
-
   @@schema("app")
+  @@unique([product_id, kind])
 }
 
 model permissions {
@@ -1324,9 +1322,8 @@ model watch_details {
   products_watch_details_product_idToproducts      products       @relation("watch_details_product_idToproducts", fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   products_watch_details_product_id_kindToproducts products       @relation("watch_details_product_id_kindToproducts", fields: [product_id, kind], references: [id, kind], onDelete: NoAction, onUpdate: NoAction)
 
-  @@unique([product_id, kind])
-
   @@schema("app")
+  @@unique([product_id, kind])
 }
 
 view v_trial_balance {

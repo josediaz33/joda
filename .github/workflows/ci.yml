@@ -63,9 +63,28 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/joda
+      # ?schema=app fija qué schema califica sin prefijo cuando Postgres
+      # reconstruye el SQL de una vista (pg_get_viewdef) — sin esto, `pnpm
+      # db:pull` genera un `prisma/views/**/*.sql` con nombres de tabla
+      # calificados distinto (`app.inventory_lots` en vez de
+      # `inventory_lots`) y el chequeo de drift de más abajo se rompe todo
+      # el tiempo por una diferencia cosmética. Ver packages/db/README.md.
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/joda?schema=app
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
       - run: pnpm db:reset
       - run: pnpm db:test
+      # WP-B04: el cliente tipado (packages/db/prisma/schema.prisma) se
+      # regenera por introspección y se commitea — nada lo obliga a estar al
+      # día salvo esto. `db:pull` ya falla si el cliente generado no expone
+      # los mismos modelos/vistas que schema.prisma (scripts/verify-prisma-
+      # client.mjs); el diff de acá atrapa el otro caso, que alguien haya
+      # cambiado una migración sin correr `pnpm db:pull` y commitear el
+      # resultado.
+      - run: pnpm db:pull
+      - run: |
+          git diff --exit-code -- packages/db/prisma/schema.prisma packages/db/prisma/views || {
+            echo "::error::schema.prisma (o prisma/views) está desactualizado. Corré 'pnpm db:pull' y commiteá el resultado.";
+            exit 1;
+          }

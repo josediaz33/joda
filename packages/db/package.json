@@ -6,7 +6,7 @@
   "description": "Esquema SQL-first (ADR-018): migraciones, seed y suite de invariantes contra PostgreSQL 16 (WP-B01/B02/B03, ver docs/backlog.md).",
   "scripts": {
     "db:migrate": "node scripts/migrate.mjs && pnpm run db:pull",
-    "db:pull": "prisma db pull --schema=prisma/schema.prisma && node scripts/patch-prisma-schema.mjs && prisma generate --schema=prisma/schema.prisma",
+    "db:pull": "prisma db pull --schema=prisma/schema.prisma && node scripts/patch-prisma-schema.mjs && prisma generate --schema=prisma/schema.prisma && node scripts/verify-prisma-client.mjs",
     "db:seed": "node scripts/seed.mjs",
     "db:reset": "node scripts/reset.mjs",
     "db:test": "node scripts/test.mjs"
