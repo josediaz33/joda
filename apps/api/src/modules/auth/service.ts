@@ -10,6 +10,12 @@ import type { PrismaClient } from "@joda/db";
 import type { Redis } from "ioredis";
 import { generateRefreshSecret, hashRefreshSecret } from "../../adapters/secureToken.js";
 import { withTenantTx } from "../../db/withTenantTx.js";
+import {
+  checkBruteForceGuard,
+  delay,
+  recordFailedLoginAttempt,
+  resetLoginAttempts,
+} from "./bruteForceGuard.js";
 import type { StaffSessionCookieValue } from "./cookie.js";
 import {
   consumeRefreshToken,
@@ -44,7 +50,7 @@ export interface AuthServiceDeps {
 /** Ventana ABSOLUTA de 8 h (docs/security-spec.md §1): no se extiende al rotar. */
 const SESSION_WINDOW_MS = 8 * 60 * 60 * 1000;
 
-export type LoginError = { readonly code: "INVALID_CREDENTIALS" };
+export type LoginError = { readonly code: "INVALID_CREDENTIALS" } | { readonly code: "LOCKED" };
 
 export interface LoginResult {
   readonly profile: StaffUserProfileRow;
@@ -52,10 +58,21 @@ export interface LoginResult {
   readonly expiresAt: Date;
 }
 
+/**
+ * `clientIp` identifica el intento para el guardia de fuerza bruta
+ * (docs/security-spec.md §5.1, `bruteForceGuard.ts`) — nunca para decidir
+ * si la credencial es válida, eso lo sigue resolviendo únicamente
+ * `authProvider`/`findStaffLoginByEmail`.
+ */
 export async function login(
   deps: AuthServiceDeps,
   credentials: { readonly email: string; readonly password: string },
+  clientIp: string,
 ): Promise<Result<LoginResult, LoginError>> {
+  const guard = await checkBruteForceGuard(deps.redis, clientIp, credentials.email);
+  if (guard.locked) return err({ code: "LOCKED" });
+  await delay(guard.delayMs);
+
   // Las dos corren en paralelo, siempre las dos — nunca "si no existe el
   // email, ni te molestes en llamar al proveedor": eso sería justo la
   // asimetría de tiempo de respuesta que docs/security-spec.md §5.1 pide
@@ -65,10 +82,17 @@ export async function login(
     deps.authProvider.verifyPassword(credentials),
   ]);
 
-  if (!authResult.ok) return err({ code: "INVALID_CREDENTIALS" });
-  if (!lookup || !lookup.isActive || lookup.authSubject !== authResult.value.authSubject) {
+  if (
+    !authResult.ok ||
+    !lookup ||
+    !lookup.isActive ||
+    lookup.authSubject !== authResult.value.authSubject
+  ) {
+    await recordFailedLoginAttempt(deps.redis, clientIp, credentials.email);
     return err({ code: "INVALID_CREDENTIALS" });
   }
+
+  await resetLoginAttempts(deps.redis, clientIp, credentials.email);
 
   const now = deps.clock.now();
   const expiresAt = new Date(now.getTime() + SESSION_WINDOW_MS);
@@ -219,6 +243,20 @@ export interface ResolvedStaffSession {
  * secundario de resolver el contexto de una `query`, que por convención
  * nunca escribe (docs/api-conventions.md §2) — solo recalienta el caché de
  * 15 min con el mismo secreto, todavía vigente.
+ *
+ * RIESGO RESIDUAL, a propósito, sin resolver acá: "rotativo" (docs/
+ * security-spec.md §4.2) describe el camino de `auth.session.refresh`, no
+ * este. Si el cliente nunca llama a `refresh` explícito — nada en este
+ * archivo lo fuerza a hacerlo periódicamente — el mismo secreto sigue
+ * siendo válido por las 8 h enteras de la sesión sin rotar nunca, y una
+ * copia de ese secreto (XSS, log, lo que sea) tampoco dispara
+ * `reuse_detected` mientras ni el original ni la copia pasen por
+ * `refresh`: los dos siguen autenticando en paralelo por el camino lento,
+ * indistinguibles entre sí. La detección de reúso de este WP cubre el
+ * camino de rotación explícita, no la ventana completa de 8 h. Cerrar esto
+ * necesita que algo del lado cliente (el admin, todavía sin construir)
+ * llame a `refresh` con cadencia menor a 15 min — no hay WP que lo declare
+ * todavía.
  */
 export async function resolveRequestSession(
   deps: AuthServiceDeps,

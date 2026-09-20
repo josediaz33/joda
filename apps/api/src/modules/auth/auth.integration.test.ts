@@ -7,7 +7,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { createFakeStaffAuthProvider } from "../../adapters/staffAuth/fakeStaffAuthProvider.js";
 import { jodaApiConnectionUrl, startTestDb, type TestDb } from "../../db/testDb.js";
 import { buildServer } from "../../index.js";
+import { checkBruteForceGuard, recordFailedLoginAttempt } from "./bruteForceGuard.js";
 import type { AuthServiceDeps } from "./service.js";
+
+const LOCALHOST_IP = "127.0.0.1"; // `remoteAddress` por defecto de light-my-request (`app.inject`).
 
 // UUID v4 válidos de verdad (nibble de versión "4", variante "a") — no el
 // "11111111-1111-1111-1111-111111111111" de packages/db/tests/
@@ -258,6 +261,40 @@ describe("WP-C03 · sesión de personal (auth.session.login/refresh/logout)", ()
       const afterReuse = await refresh(app, rotatedCookie);
       expect(afterReuse.statusCode).toBe(401);
       expect(afterReuse.json().error.data.appCode).toBe("UNAUTHENTICATED_SESSION_EXPIRED");
+    });
+  });
+
+  describe("docs/security-spec.md §5.1 · fuerza bruta sobre auth.session.login", () => {
+    it("bloquea con 429 y Retry-After tras 10 intentos fallidos registrados, sin siquiera llamar al proveedor", async () => {
+      for (let i = 0; i < 10; i++) {
+        await recordFailedLoginAttempt(redis, LOCALHOST_IP, STAFF_EMAIL);
+      }
+
+      // Contraseña CORRECTA a propósito: el bloqueo tiene que ganarle a una
+      // credencial válida — si no, no protege nada.
+      const response = await login(app, STAFF_PASSWORD);
+
+      expect(response.statusCode).toBe(429);
+      expect(response.headers["retry-after"]).toBe(String(15 * 60));
+      expect(response.json().error.data.appCode).toBe("RATE_LIMITED_LOGIN_LOCKED");
+    });
+
+    it("un login exitoso resetea el contador de intentos fallidos previos", async () => {
+      await recordFailedLoginAttempt(redis, LOCALHOST_IP, STAFF_EMAIL);
+      await recordFailedLoginAttempt(redis, LOCALHOST_IP, STAFF_EMAIL);
+
+      const response = await login(app);
+      expect(response.statusCode).toBe(200);
+
+      const guard = await checkBruteForceGuard(redis, LOCALHOST_IP, STAFF_EMAIL);
+      expect(guard).toEqual({ locked: false, delayMs: 0 });
+    });
+
+    it("un intento fallido cuenta para el bloqueo, incluso sin llegar a los 10", async () => {
+      await login(app, "incorrecta");
+
+      const guard = await checkBruteForceGuard(redis, LOCALHOST_IP, STAFF_EMAIL);
+      expect(guard).toEqual({ locked: false, delayMs: 250 });
     });
   });
 });

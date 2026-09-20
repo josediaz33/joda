@@ -307,7 +307,7 @@ La resolución vigente de una sesión de personal — quién es, de qué tenant,
 
 ### Token de refresco
 
-Secreto opaco, rotativo, que renueva el token de acceso dentro de la ventana de 8 h de una sesión de personal. Cada uso emite uno nuevo e invalida el anterior — nunca se reescribe un token existente, se inserta una fila nueva y se marca `consumed_at` en la vieja (mismo espíritu que el ledger de inventario: append-only, no editar en su lugar).
+Secreto opaco, rotativo, que renueva el token de acceso dentro de la ventana de 8 h de una sesión de personal. **"Rotativo" describe el uso explícito** — cada llamada a `auth.session.refresh` emite uno nuevo e invalida el anterior, nunca se reescribe un token existente, se inserta una fila nueva y se marca `consumed_at` en la vieja (mismo espíritu que el ledger de inventario: append-only, no editar en su lugar). Fuera de ese camino, validar el mismo secreto repetidas veces (el "camino lento" de `apps/api/src/trpc/context.ts` cuando el token de acceso cacheado venció) no lo rota — es un riesgo residual conocido, documentado en `resolveRequestSession` (`apps/api/src/modules/auth/service.ts`), no cerrado por este WP.
 
 ### Detección de reúso
 

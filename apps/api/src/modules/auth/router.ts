@@ -6,6 +6,7 @@ import {
 } from "@joda/contracts";
 import { appError, toTRPCError } from "../../middleware/errorMapper.js";
 import { procedure, router } from "../../trpc/trpc.js";
+import { LOCKOUT_WINDOW_SECONDS } from "./bruteForceGuard.js";
 import {
   clearStaffSessionCookie,
   readStaffSessionCookie,
@@ -42,6 +43,14 @@ const SESSION_REUSE_ERROR = appError(
   "Se detectó un uso sospechoso de la sesión. Iniciá sesión de nuevo.",
 );
 
+// docs/security-spec.md §5.1 ("bloqueo temporal a los 10 intentos") +
+// docs/api-conventions.md §4.2 (familia RATE_LIMITED → 429).
+const LOCKED_ERROR = appError(
+  "RATE_LIMITED_LOGIN_LOCKED",
+  429,
+  "Demasiados intentos. Esperá unos minutos antes de volver a intentar.",
+);
+
 /**
  * `deps === null` solo pasa en apps/api/src/trpc/router.test.ts (WP-C01),
  * que levanta `buildServer()` sin Postgres ni Redis para probar el esqueleto
@@ -65,8 +74,14 @@ export function createAuthRouter(deps: AuthServiceDeps | null) {
         .input(staffLoginInput)
         .output(staffSessionProfile)
         .mutation(async ({ input, ctx }) => {
-          const result = await login(requireDeps(deps), input);
-          if (!result.ok) throw toTRPCError(GENERIC_LOGIN_ERROR);
+          const result = await login(requireDeps(deps), input, ctx.req.ip);
+          if (!result.ok) {
+            if (result.error.code === "LOCKED") {
+              ctx.res.header("Retry-After", String(LOCKOUT_WINDOW_SECONDS));
+              throw toTRPCError(LOCKED_ERROR);
+            }
+            throw toTRPCError(GENERIC_LOGIN_ERROR);
+          }
 
           setStaffSessionCookie(ctx.res, result.value.cookie, result.value.expiresAt);
           return toStaffSessionProfile(result.value.profile);

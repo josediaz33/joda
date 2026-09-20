@@ -140,7 +140,7 @@ it("RLS aísla por tenant con el rol de aplicación", async () => {
 
 ## 4. Nivel 3 — Invariantes de base
 
-`packages/db/tests/invariants.sql`: 19 pruebas que **intentan una operación inválida y esperan el rechazo**.
+`packages/db/tests/invariants.sql`: 20 pruebas que **intentan una operación inválida y esperan el rechazo**.
 
 ```sql
 SELECT pg_temp.expect_fail(3, 'Sobreventa',
