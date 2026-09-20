@@ -1156,6 +1156,7 @@ model staff_users {
   purchase_orders_purchase_orders_created_byTostaff_users        purchase_orders[]               @relation("purchase_orders_created_byTostaff_users")
   sale_orders                                                    sale_orders[]
   sourcing_scenarios                                             sourcing_scenarios[]
+  staff_sessions                                                 staff_sessions[]
   staff_user_roles_staff_user_roles_granted_byTostaff_users      staff_user_roles[]              @relation("staff_user_roles_granted_byTostaff_users")
   staff_user_roles_staff_user_roles_staff_user_idTostaff_users   staff_user_roles[]              @relation("staff_user_roles_staff_user_idTostaff_users")
   tenants                                                        tenants                         @relation(fields: [tenant_id], references: [id], onUpdate: NoAction)
@@ -1242,49 +1243,51 @@ model tags {
 }
 
 model tenants {
-  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  slug                String                @unique @db.Citext
-  legal_name          String
-  trade_name          String
-  ruc                 String?
-  base_currency       String                @default("PYG") @db.Char(3)
-  timezone            String                @default("America/Asuncion")
-  created_at          DateTime              @default(now()) @db.Timestamptz(6)
-  updated_at          DateTime              @default(now()) @db.Timestamptz(6)
-  accounting_periods  accounting_periods[]
-  bom_components      bom_components[]
-  brands              brands[]
-  categories          categories[]
-  chart_of_accounts   chart_of_accounts[]
-  customer_deposits   customer_deposits[]
-  customers           customers[]
-  decant_work_orders  decant_work_orders[]
-  fiscal_config       fiscal_config?
-  fiscal_documents    fiscal_documents[]
-  goods_receipts      goods_receipts[]
-  idempotency_keys    idempotency_keys[]
-  inventory_lots      inventory_lots[]
-  inventory_movements inventory_movements[]
-  journal_entries     journal_entries[]
-  media               media[]
-  payment_events      payment_events[]
-  payments            payments[]
-  posting_rules       posting_rules[]
-  product_variants    product_variants[]
-  products            products[]
-  purchase_orders     purchase_orders[]
-  returns             returns[]
-  roles               roles[]
-  sale_orders         sale_orders[]
-  sales_channels      sales_channels[]
-  serialized_units    serialized_units[]
-  shipments           shipments[]
-  sourcing_scenarios  sourcing_scenarios[]
-  staff_users         staff_users[]
-  stock_reservations  stock_reservations[]
-  suppliers           suppliers[]
-  tags                tags[]
-  unposted_events     unposted_events[]
+  id                   String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug                 String                 @unique @db.Citext
+  legal_name           String
+  trade_name           String
+  ruc                  String?
+  base_currency        String                 @default("PYG") @db.Char(3)
+  timezone             String                 @default("America/Asuncion")
+  created_at           DateTime               @default(now()) @db.Timestamptz(6)
+  updated_at           DateTime               @default(now()) @db.Timestamptz(6)
+  accounting_periods   accounting_periods[]
+  bom_components       bom_components[]
+  brands               brands[]
+  categories           categories[]
+  chart_of_accounts    chart_of_accounts[]
+  customer_deposits    customer_deposits[]
+  customers            customers[]
+  decant_work_orders   decant_work_orders[]
+  fiscal_config        fiscal_config?
+  fiscal_documents     fiscal_documents[]
+  goods_receipts       goods_receipts[]
+  idempotency_keys     idempotency_keys[]
+  inventory_lots       inventory_lots[]
+  inventory_movements  inventory_movements[]
+  journal_entries      journal_entries[]
+  media                media[]
+  payment_events       payment_events[]
+  payments             payments[]
+  posting_rules        posting_rules[]
+  product_variants     product_variants[]
+  products             products[]
+  purchase_orders      purchase_orders[]
+  returns              returns[]
+  roles                roles[]
+  sale_orders          sale_orders[]
+  sales_channels       sales_channels[]
+  serialized_units     serialized_units[]
+  shipments            shipments[]
+  sourcing_scenarios   sourcing_scenarios[]
+  staff_refresh_tokens staff_refresh_tokens[]
+  staff_sessions       staff_sessions[]
+  staff_users          staff_users[]
+  stock_reservations   stock_reservations[]
+  suppliers            suppliers[]
+  tags                 tags[]
+  unposted_events      unposted_events[]
 
   @@schema("app")
 }
@@ -1324,6 +1327,43 @@ model watch_details {
 
   @@schema("app")
   @@unique([product_id, kind])
+}
+
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model staff_refresh_tokens {
+  id                         String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id                  String                 @db.Uuid
+  session_id                 String                 @db.Uuid
+  token_hash                 String                 @unique
+  created_at                 DateTime               @default(now()) @db.Timestamptz(6)
+  consumed_at                DateTime?              @db.Timestamptz(6)
+  replaced_by                String?                @db.Uuid
+  staff_refresh_tokens       staff_refresh_tokens?  @relation("staff_refresh_tokensTostaff_refresh_tokens", fields: [replaced_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  other_staff_refresh_tokens staff_refresh_tokens[] @relation("staff_refresh_tokensTostaff_refresh_tokens")
+  staff_sessions             staff_sessions         @relation(fields: [session_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants                    tenants                @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([session_id], map: "staff_refresh_tokens_session")
+  @@schema("app")
+}
+
+/// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
+/// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
+model staff_sessions {
+  id                   String                           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id            String                           @db.Uuid
+  staff_user_id        String                           @db.Uuid
+  created_at           DateTime                         @default(now()) @db.Timestamptz(6)
+  expires_at           DateTime                         @db.Timestamptz(6)
+  last_used_at         DateTime                         @default(now()) @db.Timestamptz(6)
+  revoked_at           DateTime?                        @db.Timestamptz(6)
+  revoked_reason       staff_session_revocation_reason?
+  staff_refresh_tokens staff_refresh_tokens[]
+  staff_users          staff_users                      @relation(fields: [staff_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants              tenants                          @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@index([tenant_id, staff_user_id], map: "staff_sessions_user")
+  @@schema("app")
 }
 
 view v_trial_balance {
@@ -1679,6 +1719,13 @@ enum watch_movement {
   solar
   kinetic
   spring_drive
+
+  @@schema("app")
+}
+
+enum staff_session_revocation_reason {
+  logout
+  reuse_detected
 
   @@schema("app")
 }

@@ -14,6 +14,32 @@ const envSchema = z.object({
       "DATABASE_URL_API es obligatoria (docs/security-spec.md §3.1). apps/api nunca usa " +
         "DATABASE_URL (reservada a migraciones/ETL) ni arranca sin una credencial explícita de joda_api.",
     ),
+  // WP-C03 (docs/security-spec.md §4): la sesión de personal necesita las
+  // tres — sin alguna, el proceso arranca "andando" pero con el login roto
+  // recién en el primer request, que es peor que no arrancar. Mismo criterio
+  // de "fallar acá es preferible" que ya usa DATABASE_URL_API arriba.
+  REDIS_URL: z
+    .string()
+    .min(
+      1,
+      "REDIS_URL es obligatoria: ahí vive el caché de sesión de 15 min (docs/security-spec.md §4.2).",
+    ),
+  SESSION_SECRET: z
+    .string()
+    .min(
+      32,
+      "SESSION_SECRET es obligatoria y necesita al menos 32 caracteres: firma la cookie " +
+        "__Host-joda_a (docs/security-spec.md §4.1).",
+    ),
+  SUPABASE_URL: z
+    .string()
+    .min(
+      1,
+      "SUPABASE_URL es obligatoria: WP-C03 verifica la contraseña de personal contra Supabase Auth (ADR-004).",
+    ),
+  SUPABASE_ANON_KEY: z
+    .string()
+    .min(1, "SUPABASE_ANON_KEY es obligatoria junto con SUPABASE_URL (ADR-004)."),
   PORT: z.coerce.number().int().positive().optional(),
 });
 

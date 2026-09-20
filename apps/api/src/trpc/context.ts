@@ -1,4 +1,7 @@
 import type { CreateFastifyContextOptions } from "@trpc/server/adapters/fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
+import { readStaffSessionCookie } from "../modules/auth/cookie.js";
+import { resolveRequestSession, type AuthServiceDeps } from "../modules/auth/service.js";
 
 // GLOSARIO.md "Audiencia (audience)" y el enum real de Postgres
 // (packages/db/migrations/0001_foundation.sql, `actor_audience`) — no
@@ -9,32 +12,69 @@ import type { CreateFastifyContextOptions } from "@trpc/server/adapters/fastify"
 // no falla al compilar, falla en Postgres en tiempo de ejecución.
 export type Audience = "staff" | "customer" | "system";
 
-// El contexto de petición (docs/api-conventions.md §1, §8.1, §9): de dónde
-// sale cada campo cambia con el bloque C, esta sesión (WP-C01) solo arma la
-// forma.
+// El contexto de petición (docs/api-conventions.md §1, §8.1, §9).
 //
-// - `requestId` es real desde ahora: lo genera Fastify por petición (`req.id`,
-//   `logger: true` en index.ts ya lo agrega a cada línea de log) y sirve para
-//   correlacionar un error con su log sin exponer nada del cliente.
-// - `userId`/`tenantId`/`audience` todavía no tienen de dónde salir: no hay
-//   sesión de personal (WP-C03) ni segundo factor (WP-C04) todavía. Quedan en
-//   `null` a propósito — inventar una lectura de header/cookie acá sería
-//   confiar en un dato que el cliente puede falsificar, exactamente lo que
-//   `set_config` (WP-C02) y la sesión de personal (WP-C03) existen para
-//   evitar. `withTenantTx` (WP-C02) es quien primero necesita que estos
-//   campos dejen de ser `null`.
+// - `requestId` lo genera Fastify por petición (`req.id`, WP-C01).
+// - `userId`/`tenantId`/`audience`/`sessionId` salen de la cookie de
+//   personal `__Host-joda_a` (WP-C03, docs/security-spec.md §4) — nunca de
+//   un header sin verificar: `resolveRequestSession`
+//   (modules/auth/service.ts) es quien valida la firma de la cookie y, si
+//   hace falta, el token de refresco contra Postgres. Sin cookie válida,
+//   los cuatro quedan en `null`: la audiencia "customer" (clientes,
+//   ADR-015) todavía no tiene sesión propia — llega con otro WP, fuera del
+//   bloque C de personal.
+// - `req`/`res` son la petición/respuesta cruda de Fastify: auth.session.*
+//   (modules/auth/router.ts) los necesita para leer y escribir la cookie.
+//   Ningún caso de uso de negocio debería necesitar tocarlos — reciben
+//   userId/tenantId/audience ya resueltos.
 export interface RequestContext {
   requestId: string;
   userId: string | null;
   tenantId: string | null;
   audience: Audience | null;
+  sessionId: string | null;
+  req: FastifyRequest;
+  res: FastifyReply;
 }
 
-export function createContext({ req }: CreateFastifyContextOptions): RequestContext {
-  return {
-    requestId: req.id,
-    userId: null,
-    tenantId: null,
-    audience: null,
+/**
+ * Factory en vez de una función suelta: `createContext` necesita el cliente
+ * de Postgres, el de Redis y el reloj para resolver la sesión, y
+ * `fastifyTRPCPlugin` solo acepta `(opts) => context`, no un cuarto
+ * parámetro. `deps: null` (usado por apps/api/src/trpc/router.test.ts, que
+ * no levanta Postgres ni Redis) resuelve todo request como no autenticado,
+ * sin tocar ninguno de los dos — ningún procedimiento que no sea de
+ * auth.session.* lo necesita para existir.
+ */
+export function buildCreateContext(deps: AuthServiceDeps | null) {
+  return async function createContext({
+    req,
+    res,
+  }: CreateFastifyContextOptions): Promise<RequestContext> {
+    const base: RequestContext = {
+      requestId: req.id,
+      userId: null,
+      tenantId: null,
+      audience: null,
+      sessionId: null,
+      req,
+      res,
+    };
+
+    if (deps === null) return base;
+
+    const cookie = readStaffSessionCookie(req);
+    if (!cookie) return base;
+
+    const session = await resolveRequestSession(deps, cookie);
+    if (!session) return base;
+
+    return {
+      ...base,
+      userId: session.userId,
+      tenantId: session.tenantId,
+      audience: session.audience,
+      sessionId: session.sessionId,
+    };
   };
 }

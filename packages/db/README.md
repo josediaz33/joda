@@ -210,6 +210,17 @@ La alternativa obvia — reusar la conexión superusuario y hacer `SET LOCAL ROL
 
 La password de `rls_isolation.test.ts` vive solo en el contenedor efímero de esa corrida de test — nunca en un archivo versionado — y se pierde con el contenedor al terminar. La de `seed/0002_seed_joda_api_credential.sql` sí está versionada, a propósito: es de desarrollo, no un secreto de producción.
 
+### 9. Una función `SECURITY DEFINER` con un parámetro `citext` no se puede llamar desde Prisma sin un cast — y el cast tampoco es gratis (WP-C03)
+
+`app.find_staff_login_by_email` (`migrations/0011_staff_sessions.sql`, luego corregida en `0012_fix_staff_login_lookup_param_type.sql`) necesitaba buscar `staff_users` por email **antes** de que exista `tenant_id` en contexto — el mismo problema que resuelve `has_permission()` (`0002_identity_rbac.sql`), aplicado al login en vez de a permisos. Se declaró en un primer momento con `p_email citext`, calcando el tipo de la columna `staff_users.email`.
+
+Eso rompe en dos pasos:
+
+1. **`db.$queryRaw\`...find_staff_login_by_email(${email})\``falla con`42883`("function ... does not exist").** Prisma manda el parámetro como`text`sin un OID concreto, y Postgres no resuelve la sobrecarga`(citext)` a partir de eso — hace falta un cast explícito en el sitio de la consulta.
+2. **El cast obvio, `${email}::citext`, falla con `42501` ("permission denied for schema public").** `citext` vive en `public` (la extensión se crea antes del primer `SET search_path = app, public` de `0001_foundation.sql`), y `joda_api` solo tiene `USAGE` sobre `app` (`0010_security_rls.sql`) — nombrar un tipo de `public` en un cast, aunque no se toque ninguna tabla de ese schema, exige ese `USAGE`.
+
+La salida no es dar `USAGE ON SCHEMA public TO joda_api` (ampliar el acceso de la credencial de runtime para esquivar un error de tipos es exactamente el tipo de atajo que `docs/security-spec.md` §3.1 existe para evitar). Es declarar el parámetro de la función como `text`, no `citext`: `email = p_email` dentro de la función igual resuelve al operador `citext = text` que la extensión ya define, así que la comparación sigue siendo case-insensitive — lo único que cambia es la firma. `app.find_staff_refresh_token` (misma migración) no tuvo este problema porque su parámetro ya era `text` desde el principio (compara contra un hash, no contra la columna `citext`).
+
 ---
 
 ## Decisiones no obvias del esquema

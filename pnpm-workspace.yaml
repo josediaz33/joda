@@ -20,3 +20,6 @@ catalog:
   "@types/node": 22.20.2
   fast-check: 4.9.0
   "@testcontainers/postgresql": 12.1.0
+  "@testcontainers/redis": 12.1.0
+  ioredis: 6.0.0
+  "@fastify/cookie": 11.1.2
