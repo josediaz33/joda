@@ -16,9 +16,17 @@ import { defaultExclude, defineConfig } from "vitest/config";
 // por ruta relativa a `import.meta.url`, y esos `.ts` no existen dentro de
 // `dist/`. Sin este `exclude`, `pnpm test` en la raíz queda roto para
 // cualquiera que haya corrido un build de este paquete antes.
+//
+// `src/__boundary-check.generated.test.ts` — mismo motivo que el `exclude`
+// de tsconfig.json (ver ese comentario): packages/config/test/
+// boundaries.test.ts lo escribe y lo borra en cada test, y corre en
+// paralelo con este paquete cuando Turbo ejecuta "test". Sin excluirlo acá
+// también, una corrida de `vitest run` de este paquete podría, con la
+// misma mala suerte de timing, descubrirlo como un archivo de test real a
+// mitad de escritura.
 export default defineConfig({
   test: {
-    exclude: [...defaultExclude, "dist/**"],
+    exclude: [...defaultExclude, "dist/**", "src/__boundary-check.generated.test.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text", "html"],
