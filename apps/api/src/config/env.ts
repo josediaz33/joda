@@ -40,6 +40,19 @@ const envSchema = z.object({
   SUPABASE_ANON_KEY: z
     .string()
     .min(1, "SUPABASE_ANON_KEY es obligatoria junto con SUPABASE_URL (ADR-004)."),
+  // WP-C04 (docs/security-spec.md §4.3/§6): cifra el secreto TOTP de
+  // personal en reposo (adapters/mfaSecretCipher.ts, AES-256-GCM) — a
+  // diferencia del token de refresco (hash de un solo sentido), este
+  // secreto hay que poder recuperarlo para calcular el código vigente, así
+  // que no alcanza con un hash. 64 caracteres hex = 32 bytes = una clave de
+  // AES-256 exacta. Generar una de desarrollo con `openssl rand -hex 32`.
+  MFA_ENCRYPTION_KEY: z
+    .string()
+    .regex(
+      /^[0-9a-f]{64}$/i,
+      "MFA_ENCRYPTION_KEY es obligatoria: 64 caracteres hexadecimales (32 bytes, AES-256-GCM) " +
+        "para cifrar el secreto TOTP de personal (docs/security-spec.md §4.3).",
+    ),
   PORT: z.coerce.number().int().positive().optional(),
 });
 

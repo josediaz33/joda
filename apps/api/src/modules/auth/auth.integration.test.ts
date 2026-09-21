@@ -102,6 +102,7 @@ describe("WP-C03 · sesión de personal (auth.session.login/refresh/logout)", ()
         new Map([[STAFF_EMAIL, { password: STAFF_PASSWORD, authSubject: AUTH_SUBJECT }]]),
       ),
       clock,
+      mfaEncryptionKey: Buffer.from("0".repeat(64), "hex"),
     };
     app = buildServer(authDeps, SESSION_SECRET);
   });
@@ -118,7 +119,14 @@ describe("WP-C03 · sesión de personal (auth.session.login/refresh/logout)", ()
 
       expect(response.statusCode).toBe(200);
       const body = response.json();
-      expect(body.result.data).toEqual({ id: STAFF_USER_ID, email: STAFF_EMAIL, fullName: "José" });
+      // mfaStatus: "pending_enrollment" — este fixture nunca inscribe TOTP
+      // (WP-C04); ver mfa.integration.test.ts para el resto del ciclo.
+      expect(body.result.data).toEqual({
+        id: STAFF_USER_ID,
+        email: STAFF_EMAIL,
+        fullName: "José",
+        mfaStatus: "pending_enrollment",
+      });
       expect(JSON.stringify(body)).not.toContain(STAFF_PASSWORD);
 
       const setCookie = response.headers["set-cookie"];

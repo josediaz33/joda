@@ -20,10 +20,14 @@ SELECT app.seed_chart_of_accounts('11111111-1111-1111-1111-111111111111');
 SELECT app.seed_roles('11111111-1111-1111-1111-111111111111');
 SELECT app.seed_posting_rules('11111111-1111-1111-1111-111111111111');
 
-INSERT INTO staff_users (id, tenant_id, auth_subject, email, full_name, mfa_enrolled)
+-- mfa_secret_encrypted: cualquier valor no nulo alcanza acá — este flujo no
+-- ejercita TOTP de verdad (WP-C04, packages/db/migrations/0013_staff_mfa.sql),
+-- solo necesita satisfacer el CHECK que exige el secreto cuando
+-- mfa_enrolled = true.
+INSERT INTO staff_users (id, tenant_id, auth_subject, email, full_name, mfa_enrolled, mfa_secret_encrypted)
 VALUES ('22222222-2222-2222-2222-222222222222',
         '11111111-1111-1111-1111-111111111111',
-        'auth|jose', 'jose@jodaparfums.com', 'José', true);
+        'auth|jose', 'jose@jodaparfums.com', 'José', true, 'smoke-fixture-not-a-real-ciphertext');
 
 INSERT INTO staff_user_roles (staff_user_id, role_id)
 SELECT '22222222-2222-2222-2222-222222222222', id

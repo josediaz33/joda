@@ -14,6 +14,7 @@ export interface StaffLoginLookup {
   readonly tenantId: string;
   readonly authSubject: string;
   readonly isActive: boolean;
+  readonly mfaEnrolled: boolean;
 }
 
 export async function findStaffLoginByEmail(
@@ -26,7 +27,13 @@ export async function findStaffLoginByEmail(
   // sitio de la consulta es viable acá. La comparación adentro de la
   // función sigue siendo case-insensitive contra `staff_users.email`.
   const rows = await db.$queryRaw<
-    { id: string; tenant_id: string; auth_subject: string; is_active: boolean }[]
+    {
+      id: string;
+      tenant_id: string;
+      auth_subject: string;
+      is_active: boolean;
+      mfa_enrolled: boolean;
+    }[]
   >`SELECT * FROM app.find_staff_login_by_email(${email})`;
   const row = rows[0];
   if (!row) return null;
@@ -35,6 +42,7 @@ export async function findStaffLoginByEmail(
     tenantId: row.tenant_id,
     authSubject: row.auth_subject,
     isActive: row.is_active,
+    mfaEnrolled: row.mfa_enrolled,
   };
 }
 
@@ -46,6 +54,9 @@ export interface StaffRefreshTokenLookup {
   readonly staffUserId: string;
   readonly sessionRevokedAt: Date | null;
   readonly sessionExpiresAt: Date;
+  /** epoch de `staff_sessions.mfa_verified_at` — `null` si ESTA sesión todavía no satisfizo el desafío TOTP (WP-C04). */
+  readonly sessionMfaVerifiedAt: Date | null;
+  readonly mfaEnrolled: boolean;
 }
 
 export async function findRefreshTokenByHash(
@@ -61,6 +72,8 @@ export async function findRefreshTokenByHash(
       staff_user_id: string;
       session_revoked_at: Date | null;
       session_expires_at: Date;
+      session_mfa_verified_at: Date | null;
+      mfa_enrolled: boolean;
     }[]
   >`SELECT * FROM app.find_staff_refresh_token(${tokenHash})`;
   const row = rows[0];
@@ -73,6 +86,8 @@ export async function findRefreshTokenByHash(
     staffUserId: row.staff_user_id,
     sessionRevokedAt: row.session_revoked_at,
     sessionExpiresAt: row.session_expires_at,
+    sessionMfaVerifiedAt: row.session_mfa_verified_at,
+    mfaEnrolled: row.mfa_enrolled,
   };
 }
 
@@ -156,4 +171,64 @@ export async function getStaffUserProfile(
     select: { id: true, email: true, full_name: true },
   });
   return { id: row.id, email: row.email, fullName: row.full_name };
+}
+
+// ---------------------------------------------------------------------
+// Segundo factor (WP-C04, docs/security-spec.md §4.3). Estas, a diferencia
+// de findStaffLoginByEmail/findRefreshTokenByHash, corren DENTRO de
+// withTenantTx — el request ya trae una sesión de personal resuelta
+// (ctx.userId/ctx.tenantId), así que RLS evalúa normalmente, sin necesitar
+// una función SECURITY DEFINER.
+// ---------------------------------------------------------------------
+export interface StaffMfaSecretRow {
+  readonly mfaEnrolled: boolean;
+  /** El cifrado (adapters/mfaSecretCipher.ts) — `null` si nunca se llamó a auth.mfa.enroll. */
+  readonly secretEncrypted: string | null;
+}
+
+export async function getStaffMfaSecret(
+  tx: TenantTx,
+  staffUserId: string,
+): Promise<StaffMfaSecretRow> {
+  const row = await tx.staff_users.findUniqueOrThrow({
+    where: { id: staffUserId },
+    select: { mfa_enrolled: true, mfa_secret_encrypted: true },
+  });
+  return { mfaEnrolled: row.mfa_enrolled, secretEncrypted: row.mfa_secret_encrypted };
+}
+
+/** Guarda el secreto generado por auth.mfa.enroll SIN inscribir todavía — mfa_enrolled sigue en false hasta confirmar el primer código. */
+export async function setPendingMfaSecret(
+  tx: TenantTx,
+  input: { readonly staffUserId: string; readonly secretEncrypted: string },
+): Promise<void> {
+  await tx.staff_users.update({
+    where: { id: input.staffUserId },
+    data: { mfa_secret_encrypted: input.secretEncrypted },
+  });
+}
+
+/** auth.mfa.confirmEnroll: inscribe al usuario Y satisface el desafío de ESTA sesión en la misma transacción — ya probó posesión del código. */
+export async function recordMfaEnrollmentConfirmed(
+  tx: TenantTx,
+  input: { readonly staffUserId: string; readonly sessionId: string; readonly verifiedAt: Date },
+): Promise<void> {
+  await tx.staff_users.update({
+    where: { id: input.staffUserId },
+    data: { mfa_enrolled: true },
+  });
+  await tx.staff_sessions.update({
+    where: { id: input.sessionId },
+    data: { mfa_verified_at: input.verifiedAt },
+  });
+}
+
+export async function markSessionMfaVerified(
+  tx: TenantTx,
+  input: { readonly sessionId: string; readonly verifiedAt: Date },
+): Promise<void> {
+  await tx.staff_sessions.update({
+    where: { id: input.sessionId },
+    data: { mfa_verified_at: input.verifiedAt },
+  });
 }

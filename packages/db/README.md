@@ -221,6 +221,14 @@ Eso rompe en dos pasos:
 
 La salida no es dar `USAGE ON SCHEMA public TO joda_api` (ampliar el acceso de la credencial de runtime para esquivar un error de tipos es exactamente el tipo de atajo que `docs/security-spec.md` §3.1 existe para evitar). Es declarar el parámetro de la función como `text`, no `citext`: `email = p_email` dentro de la función igual resuelve al operador `citext = text` que la extensión ya define, así que la comparación sigue siendo case-insensitive — lo único que cambia es la firma. `app.find_staff_refresh_token` (misma migración) no tuvo este problema porque su parámetro ya era `text` desde el principio (compara contra un hash, no contra la columna `citext`).
 
+### 10. `CREATE OR REPLACE FUNCTION` no sirve para agregarle columnas al `RETURNS TABLE` de una función existente (WP-C04)
+
+`0013_staff_mfa.sql` necesitaba que `app.find_staff_login_by_email` y `app.find_staff_refresh_token` (`0011_staff_sessions.sql`, `0012_fix_staff_login_lookup_param_type.sql`) devolvieran columnas nuevas (`mfa_enrolled`, `session_mfa_verified_at`) — son `SECURITY DEFINER` que corren antes de que exista `tenant_id` en contexto (mismo motivo que el hallazgo 9), así que no hay forma de pedir esas columnas con una consulta aparte.
+
+El primer intento fue `CREATE OR REPLACE FUNCTION ... RETURNS TABLE (...)` con la lista de columnas ampliada. Postgres lo rechaza: `cannot change return type of existing function` — `CREATE OR REPLACE` solo tolera cambiar el cuerpo, nunca la firma de salida, ni siquiera para agregar columnas al final. Es el mismo problema que forzó el `DROP FUNCTION` + `CREATE FUNCTION` de `0012_fix_staff_login_lookup_param_type.sql` para cambiar un parámetro de `citext` a `text` — ahí cambiaba la entrada, acá la salida, pero la regla de Postgres es la misma: cualquier cambio de firma (entrada o salida) exige borrar la función vieja primero.
+
+`REVOKE ALL ... FROM PUBLIC` y `GRANT EXECUTE ... TO joda_api` tampoco sobreviven al `DROP` — hay que repetir las dos sentencias después del `CREATE`, si no la función nueva queda ejecutable por `PUBLIC` (el default de Postgres para toda función nueva) hasta el próximo deploy que lo note.
+
 ---
 
 ## Decisiones no obvias del esquema

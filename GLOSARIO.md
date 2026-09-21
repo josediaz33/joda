@@ -313,6 +313,10 @@ Secreto opaco, rotativo, que renueva el token de acceso dentro de la ventana de 
 
 Si un token de refresco ya consumido (con `consumed_at` no nulo) vuelve a presentarse, es la señal de que alguien copió un token — se invalida **toda la familia** de la sesión, no solo ese token, y se fuerza reautenticación (`docs/security-spec.md` §4.2, criterio de aceptación de WP-C03).
 
+### Segundo factor / TOTP (`staff_users.mfa_enrolled`)
+
+Obligatorio para personal, opcional para clientes (ADR-015). TOTP (_Time-based One-Time Password_, RFC 6238): un código de 6 dígitos que cambia cada 30 s, derivado de un secreto compartido entre el servidor y la app autenticadora del usuario. Un usuario sin inscribir solo puede acceder a la pantalla de inscripción (`auth.mfa.enroll`/`confirmEnroll`); uno ya inscripto tiene que satisfacer el desafío (`auth.mfa.verify`) en **cada sesión nueva**, no solo la primera vez — si no, dejaría de ser un segundo factor después de la primera inscripción. El estado se guarda por sesión, no por usuario: `staff_sessions.mfa_verified_at` (`docs/security-spec.md` §4.3, criterio de aceptación de WP-C04).
+
 ### Idempotencia
 
 Garantía de que repetir una operación no la duplica. Aplica a webhooks de pago (`UNIQUE (provider, external_event_id)`) y a mutaciones offline del admin (`Idempotency-Key`). Bancard reintenta: sin esto, una venta se confirma dos veces.

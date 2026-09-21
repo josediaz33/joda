@@ -1,3 +1,4 @@
+import type { StaffMfaStatus } from "@joda/domain";
 import type { CreateFastifyContextOptions } from "@trpc/server/adapters/fastify";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { readStaffSessionCookie } from "../modules/auth/cookie.js";
@@ -20,9 +21,15 @@ export type Audience = "staff" | "customer" | "system";
 //   un header sin verificar: `resolveRequestSession`
 //   (modules/auth/service.ts) es quien valida la firma de la cookie y, si
 //   hace falta, el token de refresco contra Postgres. Sin cookie válida,
-//   los cuatro quedan en `null`: la audiencia "customer" (clientes,
+//   los cinco quedan en `null`: la audiencia "customer" (clientes,
 //   ADR-015) todavía no tiene sesión propia — llega con otro WP, fuera del
 //   bloque C de personal.
+// - `mfaStatus` (WP-C04, docs/security-spec.md §4.3) es `null` cuando no
+//   aplica (sin sesión de personal) y, con sesión, el estado explícito que
+//   packages/domain/src/security/totp.ts (`resolveStaffMfaStatus`) calcula.
+//   `trpc/trpc.ts` (`enforceMfaGate`) es el único lugar que lo lee para
+//   decidir si bloquea el procedimiento — ningún caso de uso de negocio
+//   debería tener que consultarlo.
 // - `req`/`res` son la petición/respuesta cruda de Fastify: auth.session.*
 //   (modules/auth/router.ts) los necesita para leer y escribir la cookie.
 //   Ningún caso de uso de negocio debería necesitar tocarlos — reciben
@@ -33,6 +40,7 @@ export interface RequestContext {
   tenantId: string | null;
   audience: Audience | null;
   sessionId: string | null;
+  mfaStatus: StaffMfaStatus | null;
   req: FastifyRequest;
   res: FastifyReply;
 }
@@ -57,6 +65,7 @@ export function buildCreateContext(deps: AuthServiceDeps | null) {
       tenantId: null,
       audience: null,
       sessionId: null,
+      mfaStatus: null,
       req,
       res,
     };
@@ -75,6 +84,7 @@ export function buildCreateContext(deps: AuthServiceDeps | null) {
       tenantId: session.tenantId,
       audience: session.audience,
       sessionId: session.sessionId,
+      mfaStatus: session.mfaStatus,
     };
   };
 }

@@ -1,4 +1,8 @@
 import {
+  mfaActionOutput,
+  mfaConfirmEnrollInput,
+  mfaEnrollOutput,
+  mfaVerifyInput,
   staffLoginInput,
   staffLogoutOutput,
   staffSessionProfile,
@@ -13,7 +17,16 @@ import {
   setStaffSessionCookie,
 } from "./cookie.js";
 import { toStaffSessionProfile } from "./mappers.js";
-import { login, logout, refresh, type AuthServiceDeps } from "./service.js";
+import { confirmMfaEnrollment, enrollMfa, verifyMfaChallenge } from "./mfaService.js";
+import { MFA_LOCKOUT_WINDOW_SECONDS } from "./mfaBruteForceGuard.js";
+import {
+  login,
+  logout,
+  refresh,
+  type ActiveStaffSession,
+  type AuthServiceDeps,
+} from "./service.js";
+import type { RequestContext } from "../../trpc/context.js";
 
 // auth.session.{login,refresh,logout} (WP-C03, docs/api-conventions.md §2:
 // módulo "auth", recurso "session"). Ninguno declara `meta.permission`
@@ -51,6 +64,58 @@ const LOCKED_ERROR = appError(
   "Demasiados intentos. Esperá unos minutos antes de volver a intentar.",
 );
 
+// auth.mfa.* (WP-C04, docs/security-spec.md §4.3).
+const NO_SESSION_ERROR = appError(
+  "UNAUTHENTICATED_SESSION_EXPIRED",
+  401,
+  "La sesión venció o no es válida. Iniciá sesión de nuevo.",
+);
+
+const MFA_ALREADY_ENROLLED_ERROR = appError(
+  "CONFLICT_MFA_ALREADY_ENROLLED",
+  409,
+  "Esta cuenta ya tiene un segundo factor inscripto.",
+);
+
+const MFA_ENROLLMENT_NOT_STARTED_ERROR = appError(
+  "CONFLICT_MFA_ENROLLMENT_NOT_STARTED",
+  409,
+  "Todavía no iniciaste la inscripción del segundo factor.",
+);
+
+const MFA_NOT_ENROLLED_ERROR = appError(
+  "CONFLICT_MFA_NOT_ENROLLED",
+  409,
+  "Esta cuenta todavía no tiene un segundo factor inscripto.",
+);
+
+const MFA_INVALID_CODE_ERROR = appError(
+  "UNAUTHENTICATED_MFA_INVALID_CODE",
+  401,
+  "El código ingresado no es válido.",
+);
+
+const MFA_LOCKED_ERROR = appError(
+  "RATE_LIMITED_MFA_LOCKED",
+  429,
+  "Demasiados intentos. Esperá unos minutos antes de volver a intentar.",
+);
+
+/**
+ * auth.mfa.* necesita una sesión de personal concreta — a diferencia de
+ * auth.session.login (todavía no hay sesión) y auth.session.logout
+ * (tolerante a no tenerla), acá "sin sesión" es un 401 real: no hay nada
+ * que inscribir o verificar. `enforceMfaGate` (trpc/trpc.ts) ya deja pasar
+ * estos procedimientos con `ctx.mfaStatus` en `pending_enrollment` o
+ * `pending_verification` — nunca con `ctx.audience` distinto de "staff".
+ */
+function requireActiveSession(ctx: RequestContext): ActiveStaffSession {
+  if (ctx.audience === "staff" && ctx.sessionId && ctx.tenantId && ctx.userId) {
+    return { sessionId: ctx.sessionId, tenantId: ctx.tenantId, staffUserId: ctx.userId };
+  }
+  throw toTRPCError(NO_SESSION_ERROR);
+}
+
 /**
  * `deps === null` solo pasa en apps/api/src/trpc/router.test.ts (WP-C01),
  * que levanta `buildServer()` sin Postgres ni Redis para probar el esqueleto
@@ -84,41 +149,121 @@ export function createAuthRouter(deps: AuthServiceDeps | null) {
           }
 
           setStaffSessionCookie(ctx.res, result.value.cookie, result.value.expiresAt);
-          return toStaffSessionProfile(result.value.profile);
+          return toStaffSessionProfile(result.value.profile, result.value.mfaStatus);
         }),
 
       // Lee la cookie del pedido, no un id que el cliente podría mandar
       // aparte — la rotación tiene que operar sobre el token que
-      // efectivamente llegó firmado (modules/auth/cookie.ts).
-      refresh: procedure.output(staffSessionRefreshOutput).mutation(async ({ ctx }) => {
-        const cookie = readStaffSessionCookie(ctx.req);
-        if (!cookie) throw toTRPCError(SESSION_EXPIRED_ERROR);
+      // efectivamente llegó firmado (modules/auth/cookie.ts). `mfaExempt`:
+      // una sesión con el segundo factor pendiente sigue necesitando poder
+      // refrescar su token de 8 h mientras completa la inscripción/desafío.
+      refresh: procedure
+        .meta({ mfaExempt: true })
+        .output(staffSessionRefreshOutput)
+        .mutation(async ({ ctx }) => {
+          const cookie = readStaffSessionCookie(ctx.req);
+          if (!cookie) throw toTRPCError(SESSION_EXPIRED_ERROR);
 
-        const result = await refresh(requireDeps(deps), cookie);
-        if (!result.ok) {
-          clearStaffSessionCookie(ctx.res);
-          throw toTRPCError(
-            result.error.code === "REUSE_DETECTED" ? SESSION_REUSE_ERROR : SESSION_EXPIRED_ERROR,
-          );
-        }
+          const result = await refresh(requireDeps(deps), cookie);
+          if (!result.ok) {
+            clearStaffSessionCookie(ctx.res);
+            throw toTRPCError(
+              result.error.code === "REUSE_DETECTED" ? SESSION_REUSE_ERROR : SESSION_EXPIRED_ERROR,
+            );
+          }
 
-        setStaffSessionCookie(ctx.res, result.value.cookie, result.value.expiresAt);
-        return { ok: true };
-      }),
+          setStaffSessionCookie(ctx.res, result.value.cookie, result.value.expiresAt);
+          return { ok: true };
+        }),
 
       // Idempotente y tolerante: cerrar sesión sin una sesión válida no es
       // un error (docs/security-spec.md no exige lo contrario, y un cliente
       // reintentando un logout que ya se aplicó no debería ver un 401).
-      logout: procedure.output(staffLogoutOutput).mutation(async ({ ctx }) => {
-        const activeSession =
-          ctx.audience === "staff" && ctx.sessionId && ctx.tenantId && ctx.userId
-            ? { sessionId: ctx.sessionId, tenantId: ctx.tenantId, staffUserId: ctx.userId }
-            : null;
+      // `mfaExempt`: salir tiene que funcionar sin importar en qué estado de
+      // MFA haya quedado atascada la sesión.
+      logout: procedure
+        .meta({ mfaExempt: true })
+        .output(staffLogoutOutput)
+        .mutation(async ({ ctx }) => {
+          const activeSession =
+            ctx.audience === "staff" && ctx.sessionId && ctx.tenantId && ctx.userId
+              ? { sessionId: ctx.sessionId, tenantId: ctx.tenantId, staffUserId: ctx.userId }
+              : null;
 
-        await logout(requireDeps(deps), activeSession);
-        clearStaffSessionCookie(ctx.res);
-        return { ok: true };
-      }),
+          await logout(requireDeps(deps), activeSession);
+          clearStaffSessionCookie(ctx.res);
+          return { ok: true };
+        }),
+    }),
+
+    // auth.mfa.{enroll,confirmEnroll,verify} (WP-C04, docs/api-conventions.md
+    // §2: módulo "auth", recurso "mfa"). Los tres declaran `mfaExempt: true`
+    // a propósito: SON el mecanismo por el que una sesión sale de
+    // `pending_enrollment`/`pending_verification` — igual que
+    // auth.session.login no necesita el permiso que WP-C05 va a exigirle a
+    // todo lo demás.
+    mfa: router({
+      enroll: procedure
+        .meta({ mfaExempt: true })
+        .output(mfaEnrollOutput)
+        .mutation(async ({ ctx }) => {
+          const session = requireActiveSession(ctx);
+          const result = await enrollMfa(requireDeps(deps), session);
+          if (!result.ok) throw toTRPCError(MFA_ALREADY_ENROLLED_ERROR);
+          return result.value;
+        }),
+
+      confirmEnroll: procedure
+        .meta({ mfaExempt: true })
+        .input(mfaConfirmEnrollInput)
+        .output(mfaActionOutput)
+        .mutation(async ({ ctx, input }) => {
+          const session = requireActiveSession(ctx);
+          const result = await confirmMfaEnrollment(
+            requireDeps(deps),
+            session,
+            input.code,
+            ctx.req.ip,
+          );
+          if (!result.ok) {
+            if (result.error.code === "LOCKED") {
+              ctx.res.header("Retry-After", String(MFA_LOCKOUT_WINDOW_SECONDS));
+              throw toTRPCError(MFA_LOCKED_ERROR);
+            }
+            throw toTRPCError(
+              result.error.code === "ENROLLMENT_NOT_STARTED"
+                ? MFA_ENROLLMENT_NOT_STARTED_ERROR
+                : MFA_INVALID_CODE_ERROR,
+            );
+          }
+          return result.value;
+        }),
+
+      verify: procedure
+        .meta({ mfaExempt: true })
+        .input(mfaVerifyInput)
+        .output(mfaActionOutput)
+        .mutation(async ({ ctx, input }) => {
+          const session = requireActiveSession(ctx);
+          const result = await verifyMfaChallenge(
+            requireDeps(deps),
+            session,
+            input.code,
+            ctx.req.ip,
+          );
+          if (!result.ok) {
+            if (result.error.code === "LOCKED") {
+              ctx.res.header("Retry-After", String(MFA_LOCKOUT_WINDOW_SECONDS));
+              throw toTRPCError(MFA_LOCKED_ERROR);
+            }
+            throw toTRPCError(
+              result.error.code === "NOT_ENROLLED"
+                ? MFA_NOT_ENROLLED_ERROR
+                : MFA_INVALID_CODE_ERROR,
+            );
+          }
+          return result.value;
+        }),
     }),
   });
 }

@@ -1,3 +1,4 @@
+import type { StaffMfaStatus } from "@joda/domain";
 import type { Redis } from "ioredis";
 
 // Caché del "token de acceso" de 15 min (docs/security-spec.md §4.2): no es
@@ -17,6 +18,8 @@ export interface CachedStaffSession {
   readonly userId: string;
   readonly tenantId: string;
   readonly audience: "staff";
+  /** WP-C04: se guarda ya resuelto para que el camino rápido no tenga que recalcularlo. */
+  readonly mfaStatus: StaffMfaStatus;
 }
 
 function cacheKey(sessionId: string): string {

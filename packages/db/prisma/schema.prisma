@@ -1143,6 +1143,7 @@ model staff_users {
   last_login_at                                                  DateTime?                       @db.Timestamptz(6)
   created_at                                                     DateTime                        @default(now()) @db.Timestamptz(6)
   updated_at                                                     DateTime                        @default(now()) @db.Timestamptz(6)
+  mfa_secret_encrypted                                           String?
   accounting_periods                                             accounting_periods[]
   customer_deposit_applications                                  customer_deposit_applications[]
   customer_deposits                                              customer_deposits[]
@@ -1358,6 +1359,7 @@ model staff_sessions {
   last_used_at         DateTime                         @default(now()) @db.Timestamptz(6)
   revoked_at           DateTime?                        @db.Timestamptz(6)
   revoked_reason       staff_session_revocation_reason?
+  mfa_verified_at      DateTime?                        @db.Timestamptz(6)
   staff_refresh_tokens staff_refresh_tokens[]
   staff_users          staff_users                      @relation(fields: [staff_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   tenants              tenants                          @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)

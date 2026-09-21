@@ -59,7 +59,15 @@ async function main() {
     supabaseAnonKey: env.SUPABASE_ANON_KEY,
   });
 
-  const authDeps: AuthServiceDeps = { db, redis, authProvider, clock: systemClock };
+  const authDeps: AuthServiceDeps = {
+    db,
+    redis,
+    authProvider,
+    clock: systemClock,
+    // WP-C04: 64 caracteres hex → 32 bytes (AES-256-GCM), validado por
+    // config/env.ts. adapters/mfaSecretCipher.ts nunca recibe el string crudo.
+    mfaEncryptionKey: Buffer.from(env.MFA_ENCRYPTION_KEY, "hex"),
+  };
 
   const app = buildServer(authDeps, env.SESSION_SECRET);
 

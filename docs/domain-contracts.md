@@ -93,7 +93,8 @@ packages/domain/src/
 │   ├── posting.ts           motor de reglas de posteo
 │   └── entry.ts             construcción y cuadre de asientos
 ├── security/
-│   └── refreshToken.ts      decide rotar/rechazar/marcar reúso de un token de refresco (WP-C03)
+│   ├── refreshToken.ts      decide rotar/rechazar/marcar reúso de un token de refresco (WP-C03)
+│   └── totp.ts              estado de sesión frente al 2FA, URI de inscripción TOTP (WP-C04)
 └── ports/
     ├── staffAuth.ts         StaffAuthProvider (WP-C03, primer puerto implementado)
     ├── fiscal.ts            FiscalProvider

@@ -206,6 +206,8 @@ El prefijo `__Host-` impide que un subdominio comprometido sobrescriba la cookie
 
 Obligatorio para personal. TOTP. Un usuario sin segundo factor inscripto puede autenticarse pero solo accede a la pantalla de inscripción.
 
+**El desafío se repite en cada sesión nueva, no solo la primera vez.** Un usuario ya inscripto que inicia sesión no queda automáticamente habilitado: la sesión nace igual de restringida (solo puede llamar a `auth.mfa.verify`) hasta presentar un código válido. Si no fuera así, el segundo factor dejaría de tener efecto después de la primera inscripción — cualquiera con la contraseña entraría para siempre sin él. Implementado en WP-C04: `staff_sessions.mfa_verified_at` guarda el momento en que ESA sesión (no el usuario en general) satisfizo el desafío.
+
 ---
 
 ## 5. Protección de entrada

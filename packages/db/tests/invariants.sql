@@ -194,6 +194,15 @@ SELECT pg_temp.expect_fail(20, 'staff_sessions con revoked_reason sin revoked_at
             '22222222-2222-2222-2222-222222222222',
             now() + interval '8 hours', 'logout')$$);
 
+-- 21 ─ Un usuario no puede quedar "inscripto" en MFA sin secreto guardado
+-- (WP-C04). El fixture de smoke_business_flow.sql ya deja a este staff_user
+-- con mfa_enrolled = true y un mfa_secret_encrypted no nulo — el ataque es
+-- borrarle el secreto sin des-inscribirlo.
+SELECT pg_temp.expect_fail(21, 'staff_users con mfa_enrolled = true y mfa_secret_encrypted NULL',
+  $$UPDATE app.staff_users
+       SET mfa_secret_encrypted = NULL
+     WHERE id = '22222222-2222-2222-2222-222222222222'$$);
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'
