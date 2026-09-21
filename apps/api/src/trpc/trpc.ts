@@ -102,6 +102,14 @@ const MFA_VERIFICATION_REQUIRED_ERROR = appError(
   "Ingresá el código de tu segundo factor antes de continuar.",
 );
 
+// `ctx.mfaStatus === null` deja pasar — pero NO significa "autorizado", solo
+// "no aplica": es lo que trae toda request sin sesión de personal (audiencia
+// distinta de "staff", o directamente sin cookie), incluida una anónima. Este
+// gate resuelve exclusivamente el segundo factor de una sesión que YA existe
+// (docs/security-spec.md §4.3); exigir que EXISTA sesión para empezar es un
+// requisito distinto y todavía sin dueño — WP-C05 (permisos), pendiente en
+// docs/backlog.md. Quien agregue un módulo de negocio nuevo no puede asumir
+// que este middleware ya cubre "necesita estar autenticado": hoy no lo hace.
 const enforceMfaGate = t.middleware(({ ctx, meta, next }) => {
   if (ctx.mfaStatus === null || ctx.mfaStatus === "satisfied" || meta?.mfaExempt) {
     return next();
