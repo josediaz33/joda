@@ -292,6 +292,16 @@ export const salesRouter = router({
 
 `publicProcedure` existe solo para el storefront y está limitado a lecturas de catálogo y a operaciones sobre el propio pedido del cliente.
 
+### 9.1 Segundo factor (WP-C04)
+
+Antes de que exista `meta.permission`, ya existe una barrera más temprana: `enforceMfaGate` (`apps/api/src/trpc/trpc.ts`) bloquea TODO procedimiento, de CUALQUIER módulo, mientras una sesión de personal tenga el segundo factor pendiente (`docs/security-spec.md` §4.3) — sin que el router de ese módulo tenga que hacer nada. Un procedimiento nuevo no necesita declarar nada para quedar cubierto; la excepción es explícita:
+
+```ts
+enroll: procedure.meta({ mfaExempt: true }).mutation(...)
+```
+
+`mfaExempt: true` es solo para el puñado de procedimientos que SON el mecanismo por el que una sesión sale de ese estado: `auth.session.refresh`/`logout` y `auth.mfa.*`. Ningún procedimiento de negocio debería necesitarlo.
+
 ---
 
 ## 10. Auditoría

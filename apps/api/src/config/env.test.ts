@@ -30,12 +30,14 @@ describe("loadEnv exige DATABASE_URL_API sin fallback a DATABASE_URL (docs/secur
 // WP-C03 (docs/security-spec.md §4): REDIS_URL, SESSION_SECRET, SUPABASE_URL
 // y SUPABASE_ANON_KEY son tan obligatorias como DATABASE_URL_API arriba —
 // mismo criterio, un proceso que arranca sin ellas tiene el login roto desde
-// el primer request.
+// el primer request. MFA_ENCRYPTION_KEY se suma en WP-C04 (docs/security-spec.md
+// §4.3): sin ella no hay dónde guardar el secreto TOTP de personal.
 const VALID_SESSION_ENV = {
   REDIS_URL: "redis://localhost:6379",
   SESSION_SECRET: "0".repeat(32),
   SUPABASE_URL: "https://example.supabase.co",
   SUPABASE_ANON_KEY: "anon-key",
+  MFA_ENCRYPTION_KEY: "0".repeat(64),
 };
 
 describe("loadEnv exige REDIS_URL, SESSION_SECRET, SUPABASE_URL y SUPABASE_ANON_KEY (docs/security-spec.md §4)", () => {
@@ -65,10 +67,32 @@ describe("loadEnv exige REDIS_URL, SESSION_SECRET, SUPABASE_URL y SUPABASE_ANON_
     ).toThrow(/SUPABASE_ANON_KEY/);
   });
 
-  it("acepta un entorno con las cuatro variables completas", () => {
+  it("acepta un entorno con las cinco variables completas", () => {
     const env = loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV });
 
     expect(env.REDIS_URL).toBe(VALID_SESSION_ENV.REDIS_URL);
     expect(env.SUPABASE_URL).toBe(VALID_SESSION_ENV.SUPABASE_URL);
+  });
+});
+
+describe("loadEnv exige MFA_ENCRYPTION_KEY — 64 caracteres hex, 32 bytes de AES-256 (docs/security-spec.md §4.3)", () => {
+  const DATABASE_URL_API = "postgresql://joda_api:joda_api@localhost:55432/joda";
+
+  it("rechaza un entorno sin MFA_ENCRYPTION_KEY", () => {
+    expect(() =>
+      loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV, MFA_ENCRYPTION_KEY: undefined }),
+    ).toThrow(/MFA_ENCRYPTION_KEY/);
+  });
+
+  it("rechaza una MFA_ENCRYPTION_KEY que no son 64 caracteres hex", () => {
+    expect(() =>
+      loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV, MFA_ENCRYPTION_KEY: "demasiado-corta" }),
+    ).toThrow(/MFA_ENCRYPTION_KEY/);
+  });
+
+  it("acepta una MFA_ENCRYPTION_KEY de 64 caracteres hex", () => {
+    const env = loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV });
+
+    expect(env.MFA_ENCRYPTION_KEY).toBe(VALID_SESSION_ENV.MFA_ENCRYPTION_KEY);
   });
 });

@@ -2,9 +2,11 @@ import {
   decideRefreshOutcome,
   err,
   ok,
+  resolveStaffMfaStatus,
   type Clock,
   type Result,
   type StaffAuthProvider,
+  type StaffMfaStatus,
 } from "@joda/domain";
 import type { PrismaClient } from "@joda/db";
 import type { Redis } from "ioredis";
@@ -45,6 +47,8 @@ export interface AuthServiceDeps {
   readonly redis: Redis;
   readonly authProvider: StaffAuthProvider;
   readonly clock: Clock;
+  /** WP-C04: 32 bytes (AES-256-GCM) — cifra/descifra el secreto TOTP (adapters/mfaSecretCipher.ts). Nunca login/refresh/logout, solo modules/auth/mfaService.ts. */
+  readonly mfaEncryptionKey: Buffer;
 }
 
 /** Ventana ABSOLUTA de 8 h (docs/security-spec.md §1): no se extiende al rotar. */
@@ -56,6 +60,7 @@ export interface LoginResult {
   readonly profile: StaffUserProfileRow;
   readonly cookie: StaffSessionCookieValue;
   readonly expiresAt: Date;
+  readonly mfaStatus: StaffMfaStatus;
 }
 
 /**
@@ -118,13 +123,23 @@ export async function login(
     },
   );
 
+  // WP-C04: una sesión recién creada NUNCA nace "satisfied" — ni para un
+  // usuario ya inscripto. Si naciera satisfecha, el segundo factor dejaría
+  // de tener efecto después de la primera inscripción (docs/security-spec.md
+  // §4.3, trampa de WP-C04).
+  const mfaStatus = resolveStaffMfaStatus({
+    mfaEnrolled: lookup.mfaEnrolled,
+    sessionVerifiedAt: null,
+  });
+
   await setCachedStaffSession(deps.redis, sessionId, {
     userId: lookup.staffUserId,
     tenantId: lookup.tenantId,
     audience: "staff",
+    mfaStatus,
   });
 
-  return ok({ profile, cookie: { sessionId, secret }, expiresAt });
+  return ok({ profile, cookie: { sessionId, secret }, expiresAt, mfaStatus });
 }
 
 export type RefreshError = { readonly code: "SESSION_INVALID" | "REUSE_DETECTED" };
@@ -195,6 +210,13 @@ export async function refresh(
     userId: lookup.staffUserId,
     tenantId: lookup.tenantId,
     audience: "staff",
+    // Rotar el token de refresco NO satisface el desafío TOTP (WP-C04) —
+    // son dos mecanismos distintos. `mfa_verified_at` de la sesión no
+    // cambia con un refresh; solo lo cambian auth.mfa.verify/confirmEnroll.
+    mfaStatus: resolveStaffMfaStatus({
+      mfaEnrolled: lookup.mfaEnrolled,
+      sessionVerifiedAt: lookup.sessionMfaVerifiedAt?.getTime() ?? null,
+    }),
   });
 
   return ok({
@@ -231,6 +253,7 @@ export interface ResolvedStaffSession {
   readonly tenantId: string;
   readonly audience: "staff";
   readonly sessionId: string;
+  readonly mfaStatus: StaffMfaStatus;
 }
 
 /**
@@ -303,6 +326,10 @@ export async function resolveRequestSession(
     tenantId: lookup.tenantId,
     audience: "staff",
     sessionId: lookup.sessionId,
+    mfaStatus: resolveStaffMfaStatus({
+      mfaEnrolled: lookup.mfaEnrolled,
+      sessionVerifiedAt: lookup.sessionMfaVerifiedAt?.getTime() ?? null,
+    }),
   };
   await setCachedStaffSession(deps.redis, lookup.sessionId, resolved);
   return resolved;
