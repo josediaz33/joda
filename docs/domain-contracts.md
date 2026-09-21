@@ -92,7 +92,10 @@ packages/domain/src/
 ├── accounting/
 │   ├── posting.ts           motor de reglas de posteo
 │   └── entry.ts             construcción y cuadre de asientos
+├── security/
+│   └── refreshToken.ts      decide rotar/rechazar/marcar reúso de un token de refresco (WP-C03)
 └── ports/
+    ├── staffAuth.ts         StaffAuthProvider (WP-C03, primer puerto implementado)
     ├── fiscal.ts            FiscalProvider
     ├── payments.ts          PaymentProvider
     └── storage.ts           ObjectStorage

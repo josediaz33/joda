@@ -297,6 +297,22 @@ Credencial elevada de Supabase. **Exclusiva de migraciones y ETL ejecutados desd
 
 Quién está actuando: `staff`, `customer` o `system`. Determina qué superficie del sistema es accesible.
 
+### Sesión de personal
+
+La identidad autenticada de un usuario de `staff_users` mientras opera el backoffice (ADR-015). Vive del lado del servidor: la cookie `__Host-joda_a` es lo único que llega al navegador, httpOnly y firmada. Dura como máximo 8 h desde el login — una ventana **absoluta**, que no se extiende al usar el sistema — y agrupa una **familia** de tokens de refresco que rotan dentro de esa ventana (`staff_sessions`, `staff_refresh_tokens`, `packages/db/migrations/0011_staff_sessions.sql`).
+
+### Token de acceso
+
+La resolución vigente de una sesión de personal — quién es, de qué tenant, con qué audiencia — cacheada en Redis por 15 min (`docs/security-spec.md` §4.2). No es un artefacto que viaje aparte al cliente: nunca sale del servidor, ni siquiera en el cuerpo de una respuesta.
+
+### Token de refresco
+
+Secreto opaco, rotativo, que renueva el token de acceso dentro de la ventana de 8 h de una sesión de personal. **"Rotativo" describe el uso explícito** — cada llamada a `auth.session.refresh` emite uno nuevo e invalida el anterior, nunca se reescribe un token existente, se inserta una fila nueva y se marca `consumed_at` en la vieja (mismo espíritu que el ledger de inventario: append-only, no editar en su lugar). Fuera de ese camino, validar el mismo secreto repetidas veces (el "camino lento" de `apps/api/src/trpc/context.ts` cuando el token de acceso cacheado venció) no lo rota — es un riesgo residual conocido, documentado en `resolveRequestSession` (`apps/api/src/modules/auth/service.ts`), no cerrado por este WP.
+
+### Detección de reúso
+
+Si un token de refresco ya consumido (con `consumed_at` no nulo) vuelve a presentarse, es la señal de que alguien copió un token — se invalida **toda la familia** de la sesión, no solo ese token, y se fuerza reautenticación (`docs/security-spec.md` §4.2, criterio de aceptación de WP-C03).
+
 ### Idempotencia
 
 Garantía de que repetir una operación no la duplica. Aplica a webhooks de pago (`UNIQUE (provider, external_event_id)`) y a mutaciones offline del admin (`Idempotency-Key`). Bancard reintenta: sin esto, una venta se confirma dos veces.

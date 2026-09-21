@@ -180,6 +180,20 @@ SELECT pg_temp.expect_fail(18, 'DELETE sobre audit_log',
     END $x$
   $$);
 
+-- 19 ─ Una sesión de personal revocada siempre lleva su motivo (WP-C03)
+SELECT pg_temp.expect_fail(19, 'staff_sessions con revoked_at sin revoked_reason',
+  $$INSERT INTO app.staff_sessions (tenant_id, staff_user_id, expires_at, revoked_at)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '22222222-2222-2222-2222-222222222222',
+            now() + interval '8 hours', now())$$);
+
+-- 20 ─ ... y viceversa: un motivo sin revoked_at tampoco entra (WP-C03)
+SELECT pg_temp.expect_fail(20, 'staff_sessions con revoked_reason sin revoked_at',
+  $$INSERT INTO app.staff_sessions (tenant_id, staff_user_id, expires_at, revoked_reason)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '22222222-2222-2222-2222-222222222222',
+            now() + interval '8 hours', 'logout')$$);
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'

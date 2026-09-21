@@ -159,7 +159,7 @@ No des una tarea por terminada sin esto:
 1. `pnpm typecheck && pnpm lint` — en verde.
 2. `pnpm format:check` — en verde. No es decorativo: si queda en rojo por defecto, nadie distingue lo preexistente de lo que rompiste vos.
 3. `pnpm test` — en verde. Si tocaste `packages/domain`, agregaste tests.
-4. Si tocaste el esquema: `pnpm db:reset && pnpm db:test`. Las 18 pruebas de invariantes tienen que seguir pasando, y agregaste una por cada invariante nuevo.
+4. Si tocaste el esquema: `pnpm db:reset && pnpm db:test`. Las pruebas de invariantes existentes (20 al cierre de WP-C03, `packages/db/tests/invariants.sql`) tienen que seguir pasando, y agregaste una por cada invariante nuevo.
 5. Si tocaste código que **escribe** en el ledger o genera asientos (`apps/api`, ETL): verificá que `v_balance_drift` devuelva cero filas y que los asientos cuadren. No aplica a lógica pura de dominio (`packages/domain`), que no tiene forma de escribir nada.
 6. Si tocaste algo que un ADR menciona, releé el ADR y confirmá que no lo violaste.
 

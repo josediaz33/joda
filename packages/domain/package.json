@@ -4,6 +4,11 @@
   "private": true,
   "type": "module",
   "description": "Lógica de negocio pura, sin I/O (CLAUDE.md § Código).",
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
+  "exports": {
+    ".": "./dist/src/index.js"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "vitest run --coverage",

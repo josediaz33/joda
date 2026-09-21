@@ -5,5 +5,21 @@
     "moduleResolution": "NodeNext",
     "outDir": "dist"
   },
-  "include": ["src", "test"]
+  "include": ["src", "test"],
+  // packages/config/test/boundaries.test.ts escribe estos dos archivos acá
+  // adentro en cada test y los borra en su afterEach (nunca se commitean,
+  // ver .gitignore) — son la copia real que ese test lintea con el CLI de
+  // ESLint. Turbo corre "build" (este tsconfig) y "test" (ese archivo) de
+  // paquetes distintos en paralelo: sin este exclude, una corrida de
+  // `pnpm test` puede toparse con el archivo generado a mitad de escritura
+  // justo cuando `tsc` enumera los fuentes de este paquete, y falla con
+  // "Cannot find module '@prisma/client'"/"'react'" — las importaciones a
+  // propósito inválidas que ese test necesita para probar la regla, no un
+  // error real de este paquete.
+  "exclude": [
+    "node_modules",
+    "dist",
+    "src/__boundary-check.generated.ts",
+    "src/__boundary-check.generated.test.ts"
+  ]
 }
