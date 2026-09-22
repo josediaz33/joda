@@ -185,6 +185,8 @@ Cursor, no offset. El offset se degrada y produce resultados inconsistentes cuan
 
 El cursor es opaco: base64 de `(orden, id)`. El cliente no lo interpreta.
 
+Cuando el `orderBy` de un procedimiento es fijo del lado del servidor (el caso normal: el cliente nunca elige el orden), alcanza con codificar el `id` — el cursor nativo de Prisma (`cursor: { id }, skip: 1`) ya resuelve la posición correcta dentro de ese orden compuesto sin necesitar el valor de orden viajando aparte. `apps/api/src/db/cursor.ts` (WP-C08) es la referencia de esta simplificación.
+
 Para listados que el usuario necesita contar (reportes), un procedimiento `count` separado. Nunca devolver `total` en cada página: obliga a un `COUNT(*)` costoso en toda consulta.
 
 ---

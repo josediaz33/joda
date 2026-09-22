@@ -1,3 +1,4 @@
+import { createCatalogRouter } from "../modules/catalog/router.js";
 import { createAuthRouter } from "../modules/auth/router.js";
 import type { AuthServiceDeps } from "../modules/auth/service.js";
 import { createExampleRouter } from "./exampleRouter.js";
@@ -15,6 +16,7 @@ export function createAppRouter(authDeps: AuthServiceDeps | null) {
   return router({
     example: createExampleRouter(authDeps?.db ?? null),
     auth: createAuthRouter(authDeps),
+    catalog: createCatalogRouter(authDeps?.db ?? null),
   });
 }
 

@@ -10,13 +10,27 @@ export interface TenantTxContext {
 export type TenantTx = Prisma.TransactionClient;
 
 /**
- * Toda transacción de escritura de apps/api pasa por acá (docs/api-conventions.md
+ * Toda transacción de ESCRITURA de apps/api pasa por acá (docs/api-conventions.md
  * §8.1). El contexto de sesión se establece ANTES de cualquier otra consulta,
  * con el tercer parámetro de `set_config` en `true` — eso hace el valor LOCAL
  * a la transacción. Sin él, el valor sobrevive al COMMIT/ROLLBACK y queda
  * pegado a la conexión física: la siguiente petición que el pool le asigne a
  * esa misma conexión heredaría el tenant/usuario de una petición ajena, un
  * error de aislamiento silencioso y grave (AGENTS.md § Seguridad).
+ *
+ * **También la usan lecturas** que necesitan que RLS evalúe con el tenant
+ * correcto (`modules/auth/repository.ts::getGrantedPermissionCodes`, WP-C05;
+ * todo `list`/`byId` de `modules/catalog/service.ts`, WP-C08) — no es una
+ * desviación de §8.3 ("no abras una transacción para leer"): esa regla habla
+ * de no abrir una transacción SEPARADA solo para leer antes de una escritura
+ * de la misma operación de negocio, no de que una consulta no pueda ir
+ * envuelta en transacción. `set_config(..., true)` exige una transacción para
+ * que el valor sea local a ella (ver el párrafo de arriba) — hoy no existe en
+ * este código un mecanismo de "contexto de sesión sin transacción completa"
+ * más liviano, así que toda consulta que dependa de RLS pasa por acá aunque
+ * no escriba nada. Si ese costo alguna vez importa, la alternativa es una
+ * sesión de Postgres dedicada por request en vez de un pool compartido — un
+ * cambio de arquitectura que ningún WP pidió todavía.
  *
  * El bloqueo de lotes en orden ascendente de `lot_id` (docs/api-conventions.md
  * §8.2, para cuando lo use WP-C19) va DENTRO de la función `fn` que cada
