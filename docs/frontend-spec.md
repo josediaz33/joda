@@ -203,7 +203,7 @@ Es el rubro que más pesa en una perfumería, y donde más se gana.
 
 ```tsx
 <Image
-  src={media.url} // R2 + CDN, URL pública inmutable
+  src={media.url} // Supabase Storage (ADR-025), URL pública inmutable
   alt={`${product.brandName} ${product.name}`}
   width={800}
   height={1000} // SIEMPRE: evita el salto de layout

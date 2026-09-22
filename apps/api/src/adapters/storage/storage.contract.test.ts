@@ -9,12 +9,11 @@ import { createLocalDiskStorage } from "./localDiskStorage.js";
 // docs/engineering-principles.md Parte I "L · Sustitución de Liskov": "los
 // mismos tests de contrato corren contra todos los adaptadores"). Corre
 // parametrizado por implementación — hoy solo LocalDiskStorage. El
-// adaptador de Supabase Storage (ADR pendiente sobre el reemplazo de
-// Cloudflare R2, fuera de esta rama) se agrega a `implementations` cuando
-// exista, mismo criterio que SupabasePasswordProvider en
-// staffAuthProvider.contract.test.ts — cada implementación recibe una raíz
-// nueva por test (`rootDir`), así que se parametriza por una FACTORY, no
-// por una instancia ya construida.
+// adaptador de Supabase Storage (ADR-025, el destino de producción) se
+// agrega a `implementations` cuando exista, mismo criterio que
+// SupabasePasswordProvider en staffAuthProvider.contract.test.ts — cada
+// implementación recibe una raíz nueva por test (`rootDir`), así que se
+// parametriza por una FACTORY, no por una instancia ya construida.
 const implementations: ReadonlyArray<{
   readonly name: string;
   readonly create: (rootDir: string) => ObjectStorage;

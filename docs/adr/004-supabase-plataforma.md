@@ -1,6 +1,6 @@
 # ADR-004 — Supabase como plataforma, API propia como autoridad de negocio
 
-- **Estado:** Aceptada
+- **Estado:** Aceptada — **parcialmente reemplazada por ADR-025** (ver abajo)
 - **Fecha:** 2026-09-09
 - **Ámbito:** Infraestructura
 
@@ -14,7 +14,7 @@ Es un falso dilema. Supabase no es un estilo arquitectónico, es un paquete de s
 
 ## Decisión
 
-**Supabase provee Postgres y Auth. La API en Fastify contiene todos los casos de uso y es el único origen de escritura.** Las imágenes públicas van a Cloudflare R2.
+**Supabase provee Postgres y Auth. La API en Fastify contiene todos los casos de uso y es el único origen de escritura.** ~~Las imágenes públicas van a Cloudflare R2.~~ **Reemplazado por ADR-025 (2026-09-22): las imágenes de catálogo van a Supabase Storage, no a R2** — el resto de esta decisión no cambia.
 
 ## Consecuencias
 
@@ -24,7 +24,7 @@ Es un falso dilema. Supabase no es un estilo arquitectónico, es un paquete de s
 
 **Negativas.** Dependencia de plataforma. Se mitiga con disciplina de portabilidad: Prisma como capa de acceso, cero SDK de Supabase dentro de `packages/domain`, auth encapsulada tras una interfaz. Migrar a Neon o RDS costaría días, no meses.
 
-**Por qué R2 y no Supabase Storage para el catálogo.** El egress de Supabase Storage se factura y un catálogo de perfumería es tráfico de imágenes. R2 no cobra egress. Los documentos privados (comprobantes, reportes) sí van a Supabase Storage con URLs firmadas.
+**Por qué R2 y no Supabase Storage para el catálogo — reemplazado, ver ADR-025.** La razón original fue que el egress de Supabase Storage se factura y un catálogo de perfumería es tráfico de imágenes; R2 no cobra egress. A la escala que fijan los supuestos S-02/S-04 (`docs/especificacion-software.md` §4.2 — menos de 500 ventas mensuales, catálogo bajo 2.000 productos) ese costo resultó no ser material, mientras que un segundo proveedor sí tiene costo operativo real para quien opera solo. ADR-025 formaliza el reemplazo: catálogo público e imágenes privadas, ambos en Supabase Storage.
 
 ## Alternativas descartadas
 

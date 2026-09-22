@@ -31,22 +31,22 @@ Multi-depósito, onboarding de terceros tenants, app móvil nativa, automatizaci
 
 ### 2.1 Catálogo (`RF-CAT`)
 
-| ID        | Requerimiento                                                                                                          | Prio |
-| --------- | ---------------------------------------------------------------------------------------------------------------------- | ---- |
-| RF-CAT-01 | Crear, editar y archivar productos de las verticales perfume, reloj y accesorio, con los atributos tipados de cada una | MVP  |
-| RF-CAT-02 | Asignar un producto a múltiples categorías comerciales, marcando una como primaria para el breadcrumb                  | MVP  |
-| RF-CAT-03 | Administrar el árbol de categorías con jerarquía padre-hijo, orden y visibilidad                                       | MVP  |
-| RF-CAT-04 | Asignar tags transversales de marketing a productos                                                                    | MVP  |
-| RF-CAT-05 | Definir variantes por producto: sellado, granel, decant, unidad, insumo, tester                                        | MVP  |
-| RF-CAT-06 | Declarar el modo de producción de cada variante (`stocked` / `made_to_order`) y su granel de origen                    | MVP  |
-| RF-CAT-07 | Definir la lista de insumos (BOM) que consume una variante fraccionada                                                 | MVP  |
-| RF-CAT-08 | Cargar imágenes de producto, generando derivados AVIF/WebP en múltiples anchos                                         | MVP  |
-| RF-CAT-09 | Publicar y despublicar productos hacia el storefront de forma independiente del estado interno                         | MVP  |
-| RF-CAT-10 | Buscar productos por texto libre en el backoffice, con acentos insensibles                                             | MVP  |
-| RF-CAT-11 | Filtrar el catálogo público por facetas (familia olfativa, concentración, marca, rango de precio, disponibilidad)      | P2   |
-| RF-CAT-12 | Duplicar un producto existente como base para uno nuevo                                                                | P2   |
-| RF-CAT-13 | Marcar qué fichas tienen descripción propia y cuáles repiten la del fabricante                                         | P2   |
-| RF-CAT-14 | Importar productos masivamente desde CSV con validación previa y reporte de errores                                    | P3   |
+| ID        | Requerimiento                                                                                                                                                                                                                                                                                                | Prio |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---- |
+| RF-CAT-01 | Crear, editar y archivar productos de las verticales perfume, reloj y accesorio, con los atributos tipados de cada una                                                                                                                                                                                       | MVP  |
+| RF-CAT-02 | Asignar un producto a múltiples categorías comerciales, marcando una como primaria para el breadcrumb                                                                                                                                                                                                        | MVP  |
+| RF-CAT-03 | Administrar el árbol de categorías con jerarquía padre-hijo, orden y visibilidad                                                                                                                                                                                                                             | MVP  |
+| RF-CAT-04 | Asignar tags transversales de marketing a productos                                                                                                                                                                                                                                                          | MVP  |
+| RF-CAT-05 | Definir variantes por producto: sellado, granel, decant, unidad, insumo, tester                                                                                                                                                                                                                              | MVP  |
+| RF-CAT-06 | Declarar el modo de producción de cada variante (`stocked` / `made_to_order`) y su granel de origen                                                                                                                                                                                                          | MVP  |
+| RF-CAT-07 | Definir la lista de insumos (BOM) que consume una variante fraccionada                                                                                                                                                                                                                                       | MVP  |
+| RF-CAT-08 | Cargar imágenes de producto, generando derivados AVIF/WebP en 320/640/1024/1600px. Válida por bytes mágicos, nunca por `Content-Type` ni extensión; rechaza archivos de más de 20 MB o imágenes de más de 8000px por lado, antes de generar ningún derivado (`packages/domain/src/catalog/media.ts`, WP-C09) | MVP  |
+| RF-CAT-09 | Publicar y despublicar productos hacia el storefront de forma independiente del estado interno                                                                                                                                                                                                               | MVP  |
+| RF-CAT-10 | Buscar productos por texto libre en el backoffice, con acentos insensibles                                                                                                                                                                                                                                   | MVP  |
+| RF-CAT-11 | Filtrar el catálogo público por facetas (familia olfativa, concentración, marca, rango de precio, disponibilidad)                                                                                                                                                                                            | P2   |
+| RF-CAT-12 | Duplicar un producto existente como base para uno nuevo                                                                                                                                                                                                                                                      | P2   |
+| RF-CAT-13 | Marcar qué fichas tienen descripción propia y cuáles repiten la del fabricante                                                                                                                                                                                                                               | P2   |
+| RF-CAT-14 | Importar productos masivamente desde CSV con validación previa y reporte de errores                                                                                                                                                                                                                          | P3   |
 
 ### 2.2 Inventario (`RF-INV`)
 

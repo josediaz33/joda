@@ -61,26 +61,26 @@ El sistema deja de ser "de perfumería". Hoy soporta perfumes y relojes; mañana
 
 ## 2. Decisiones arquitectónicas
 
-| #   | Área         | Decisión                                                                         | Fundamento en una línea                                                                 |
-| --- | ------------ | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| 1   | Catálogo     | **CTI + facetas JSONB + categorías N:N + tags**                                  | Lo que participa en cálculos necesita tipos; lo descriptivo no.                         |
-| 2   | Repositorio  | **Monorepo pnpm + Turborepo**                                                    | El contrato de tipos compartido es el activo, y el `tsc` del CI lo protege.             |
-| 3   | Storefront   | **Next.js (App Router)**                                                         | Un SPA arranca perdiendo el long-tail de búsqueda, que es donde compite el nicho.       |
-| 4   | Backoffice   | **React 19 + Vite** (evolución del código actual)                                | SEO irrelevante, DX rápido, y ya existe.                                                |
-| 5   | Backend      | **Fastify + tRPC + Prisma**, monolito modular                                    | Un caso de uso de venta toca ocho tablas: necesita una capa de aplicación explícita.    |
-| 6   | Plataforma   | **Supabase para Postgres + Auth**; **Cloudflare R2** para imágenes públicas      | Auth y Postgres gestionados salen más baratos que construirlos; R2 no cobra egress.     |
-| 7   | Escrituras   | **Solo la API escribe.** El storefront lee vistas estables                       | Si el storefront leyera tablas, el esquema interno sería API pública.                   |
-| 8   | Inventario   | **Kardex append-only** + proyección de saldos + capas de costo                   | Es la única forma de auditar mililitros, mermas y stock comprometido.                   |
-| 9   | Dinero       | **`bigint` en guaraníes enteros** + snapshot de FX por transacción               | El PYG no tiene subdivisión operativa; el costo importado sí es multi-moneda.           |
-| 10  | Contabilidad | **Partida doble desde el día 1**, asientos **derivados** por reglas de posteo    | Retrofitear el libro mayor es carísimo; exigir que el usuario sepa contabilidad, fatal. |
-| 11  | Fiscal       | `fiscal_documents` + **puerto** `FiscalProvider` con adaptadores                 | Construir el integrador SIFEN es un producto en sí mismo. No lo construimos.            |
-| 12  | Identidades  | **`customers` y `staff_users` en tablas separadas**                              | Que un cliente no pueda tener rol de staff es invariante de esquema, no validación.     |
-| 13  | RLS          | La API conecta con rol **`NOBYPASSRLS`**; `service_role` solo en CI **[V]**      | Con credencial privilegiada, RLS no se evalúa y es decorativo.                          |
-| 14  | Triggers     | **Solo invariantes.** Nunca lógica de negocio                                    | La base garantiza lo que debe seguir siendo cierto; la app decide.                      |
-| 15  | Reservas     | El carrito **no** reserva; la reserva nace en checkout con TTL por medio de pago | Reservar en carrito permite bloquear piezas únicas abriendo pestañas.                   |
-| 16  | Pagos        | Checkout **hospedado** (el PAN nunca toca el sistema) + webhooks idempotentes    | SAQ A en vez de SAQ D; y Bancard reintenta.                                             |
-| 17  | Migración    | **Corte único** con ETL idempotente y reconciliación. Sin dual-write             | Un usuario único puede cerrar un domingo; el dual-write agrega divergencia.             |
-| 18  | Esquema      | **SQL-first.** Prisma se regenera por introspección                              | Prisma no expresa constraint triggers diferidos, RLS, dominios ni FK compuestas.        |
+| #   | Área         | Decisión                                                                         | Fundamento en una línea                                                                                                                                  |
+| --- | ------------ | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | Catálogo     | **CTI + facetas JSONB + categorías N:N + tags**                                  | Lo que participa en cálculos necesita tipos; lo descriptivo no.                                                                                          |
+| 2   | Repositorio  | **Monorepo pnpm + Turborepo**                                                    | El contrato de tipos compartido es el activo, y el `tsc` del CI lo protege.                                                                              |
+| 3   | Storefront   | **Next.js (App Router)**                                                         | Un SPA arranca perdiendo el long-tail de búsqueda, que es donde compite el nicho.                                                                        |
+| 4   | Backoffice   | **React 19 + Vite** (evolución del código actual)                                | SEO irrelevante, DX rápido, y ya existe.                                                                                                                 |
+| 5   | Backend      | **Fastify + tRPC + Prisma**, monolito modular                                    | Un caso de uso de venta toca ocho tablas: necesita una capa de aplicación explícita.                                                                     |
+| 6   | Plataforma   | **Supabase para Postgres + Auth + Storage** (ADR-025)                            | Auth y Postgres gestionados salen más baratos que construirlos; una sola plataforma evita un segundo proveedor sin beneficio proporcional a esta escala. |
+| 7   | Escrituras   | **Solo la API escribe.** El storefront lee vistas estables                       | Si el storefront leyera tablas, el esquema interno sería API pública.                                                                                    |
+| 8   | Inventario   | **Kardex append-only** + proyección de saldos + capas de costo                   | Es la única forma de auditar mililitros, mermas y stock comprometido.                                                                                    |
+| 9   | Dinero       | **`bigint` en guaraníes enteros** + snapshot de FX por transacción               | El PYG no tiene subdivisión operativa; el costo importado sí es multi-moneda.                                                                            |
+| 10  | Contabilidad | **Partida doble desde el día 1**, asientos **derivados** por reglas de posteo    | Retrofitear el libro mayor es carísimo; exigir que el usuario sepa contabilidad, fatal.                                                                  |
+| 11  | Fiscal       | `fiscal_documents` + **puerto** `FiscalProvider` con adaptadores                 | Construir el integrador SIFEN es un producto en sí mismo. No lo construimos.                                                                             |
+| 12  | Identidades  | **`customers` y `staff_users` en tablas separadas**                              | Que un cliente no pueda tener rol de staff es invariante de esquema, no validación.                                                                      |
+| 13  | RLS          | La API conecta con rol **`NOBYPASSRLS`**; `service_role` solo en CI **[V]**      | Con credencial privilegiada, RLS no se evalúa y es decorativo.                                                                                           |
+| 14  | Triggers     | **Solo invariantes.** Nunca lógica de negocio                                    | La base garantiza lo que debe seguir siendo cierto; la app decide.                                                                                       |
+| 15  | Reservas     | El carrito **no** reserva; la reserva nace en checkout con TTL por medio de pago | Reservar en carrito permite bloquear piezas únicas abriendo pestañas.                                                                                    |
+| 16  | Pagos        | Checkout **hospedado** (el PAN nunca toca el sistema) + webhooks idempotentes    | SAQ A en vez de SAQ D; y Bancard reintenta.                                                                                                              |
+| 17  | Migración    | **Corte único** con ETL idempotente y reconciliación. Sin dual-write             | Un usuario único puede cerrar un domingo; el dual-write agrega divergencia.                                                                              |
+| 18  | Esquema      | **SQL-first.** Prisma se regenera por introspección                              | Prisma no expresa constraint triggers diferidos, RLS, dominios ni FK compuestas.                                                                         |
 
 ### 2.1 Principio rector
 
@@ -118,8 +118,8 @@ Esta frase resuelve la mayoría de las discusiones de diseño que aparecieron du
           └───────┬──────────┬───────┘
                   │          │
       ┌───────────▼──┐   ┌───▼──────────┐   ┌──────────────┐
-      │  PostgreSQL  │   │  Redis       │   │ Cloudflare R2│
-      │  (Supabase)  │   │  BullMQ      │   │ + CDN        │
+      │  PostgreSQL  │   │  Redis       │   │ Supabase     │
+      │  (Supabase)  │   │  BullMQ      │   │ Storage      │
       │  fuente de   │   │  jobs, caché │   │ imágenes     │
       │  verdad      │   │  de permisos │   │ públicas     │
       └──────────────┘   └──────────────┘   └──────────────┘
@@ -459,14 +459,14 @@ export interface FiscalProvider {
 
 Fase 1: adaptador `manual` — se registra el CDC emitido en e-Kuatia'i. Fase 2: adaptador del proveedor homologado que se elija. El resto del sistema no se entera.
 
-### 8.3 Almacenamiento de imágenes
+### 8.3 Almacenamiento de imágenes (ADR-025: Supabase Storage, no Cloudflare R2)
 
-| Recurso                        | Acceso                           | Por qué                                                             |
-| ------------------------------ | -------------------------------- | ------------------------------------------------------------------- |
-| Fotos de catálogo publicadas   | **Público, inmutable, CDN (R2)** | Firmar rompe el caché del CDN y las previsualizaciones de WhatsApp. |
-| Fotos de productos en `draft`  | Firmada, TTL 5 min               | Todavía no se filtra un lanzamiento.                                |
-| Comprobantes, reportes de caja | Firmada, TTL 60 s                | Datos financieros.                                                  |
-| Originales sin procesar        | Privado                          | Se sirven derivados, no originales.                                 |
+| Recurso                        | Acceso                 | Por qué                                                                                 |
+| ------------------------------ | ---------------------- | --------------------------------------------------------------------------------------- |
+| Fotos de catálogo publicadas   | **Público, inmutable** | URLs por hash, cacheables — firmar rompe el caché y las previsualizaciones de WhatsApp. |
+| Fotos de productos en `draft`  | Firmada, TTL 5 min     | Todavía no se filtra un lanzamiento.                                                    |
+| Comprobantes, reportes de caja | Firmada, TTL 60 s      | Datos financieros.                                                                      |
+| Originales sin procesar        | Privado                | Se sirven derivados, no originales.                                                     |
 
 Buckets separados con políticas distintas. Uno solo con reglas por prefijo termina en un error de configuración algún día.
 
