@@ -29,8 +29,8 @@ VALUES ('22222222-2222-2222-2222-222222222222',
         '11111111-1111-1111-1111-111111111111',
         'auth|jose', 'jose@jodaparfums.com', 'José', true, 'smoke-fixture-not-a-real-ciphertext');
 
-INSERT INTO staff_user_roles (staff_user_id, role_id)
-SELECT '22222222-2222-2222-2222-222222222222', id
+INSERT INTO staff_user_roles (tenant_id, staff_user_id, role_id)
+SELECT '11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222', id
   FROM roles WHERE tenant_id = '11111111-1111-1111-1111-111111111111' AND code = 'owner';
 
 INSERT INTO brands (id, tenant_id, slug, name, country)
@@ -57,17 +57,20 @@ VALUES ('44444444-4444-4444-4444-444444444444',
         'active', now(),
         '{"familia":"ambar-vainilla","genero":"unisex","temporada":["otono","invierno"]}');
 
-INSERT INTO perfume_details (product_id, concentration, nominal_volume_ml,
+INSERT INTO perfume_details (tenant_id, product_id, concentration, nominal_volume_ml,
                              olfactory_family, notes_top, notes_heart, notes_base,
                              waste_factor, unusable_residue_ml)
-VALUES ('44444444-4444-4444-4444-444444444444', 'edp', 125,
+VALUES ('11111111-1111-1111-1111-111111111111',
+        '44444444-4444-4444-4444-444444444444', 'edp', 125,
         'Ámbar Vainilla', '{bergamota,manzana,lavanda}', '{jazmín,violeta,geranio}',
         '{vainilla,sándalo,pachulí}', 0.02, 2.5);
 
 -- Un producto vive en varias categorías comerciales a la vez.
-INSERT INTO product_categories (product_id, category_id, is_primary) VALUES
-  ('44444444-4444-4444-4444-444444444444', 'c0000000-0000-0000-0000-000000000002', true),
-  ('44444444-4444-4444-4444-444444444444', 'c0000000-0000-0000-0000-000000000003', false);
+INSERT INTO product_categories (tenant_id, product_id, category_id, is_primary) VALUES
+  ('11111111-1111-1111-1111-111111111111',
+   '44444444-4444-4444-4444-444444444444', 'c0000000-0000-0000-0000-000000000002', true),
+  ('11111111-1111-1111-1111-111111111111',
+   '44444444-4444-4444-4444-444444444444', 'c0000000-0000-0000-0000-000000000003', false);
 
 \echo '--- Variantes: sellado 125ml, granel, decant 10ml (bajo pedido), insumos'
 INSERT INTO product_variants (id, tenant_id, product_id, sku, variant_type, uom,
@@ -92,8 +95,9 @@ INSERT INTO products (id, tenant_id, kind, slug, name, status)
 VALUES ('44444444-0000-0000-0000-00000000aaaa',
         '11111111-1111-1111-1111-111111111111', 'accessory', 'insumos-decant',
         'Insumos de fraccionamiento', 'active');
-INSERT INTO accessory_details (product_id, material) VALUES
-  ('44444444-0000-0000-0000-00000000aaaa', 'vidrio/plástico');
+INSERT INTO accessory_details (tenant_id, product_id, material) VALUES
+  ('11111111-1111-1111-1111-111111111111',
+   '44444444-0000-0000-0000-00000000aaaa', 'vidrio/plástico');
 
 INSERT INTO product_variants (id, tenant_id, product_id, sku, variant_type, uom,
                               price_pyg, online_visible) VALUES
@@ -135,9 +139,10 @@ VALUES ('77777777-7777-7777-7777-777777777777',
         '22222222-2222-2222-2222-222222222222',
         '22222222-2222-2222-2222-222222222222', now());
 
-INSERT INTO purchase_order_lines (id, purchase_order_id, variant_id, qty_ordered,
+INSERT INTO purchase_order_lines (id, tenant_id, purchase_order_id, variant_id, qty_ordered,
                                   uom, unit_price_minor)
 VALUES ('77777777-0000-0000-0000-000000000001',
+        '11111111-1111-1111-1111-111111111111',
         '77777777-7777-7777-7777-777777777777',
         '55555555-0000-0000-0000-000000000001', 1, 'unit', 19000);
 
@@ -148,10 +153,11 @@ VALUES ('88888888-8888-8888-8888-888888888888',
         'REC-2026-001', 'posted', 7300.00000000, 1500,
         '22222222-2222-2222-2222-222222222222', now());
 
-INSERT INTO goods_receipt_lines (id, goods_receipt_id, purchase_order_line_id,
+INSERT INTO goods_receipt_lines (id, tenant_id, goods_receipt_id, purchase_order_line_id,
                                  variant_id, qty_received, uom, unit_price_minor,
                                  allocated_freight_pyg, batch_code)
 VALUES ('88888888-0000-0000-0000-000000000001',
+        '11111111-1111-1111-1111-111111111111',
         '88888888-8888-8888-8888-888888888888', '77777777-0000-0000-0000-000000000001',
         '55555555-0000-0000-0000-000000000001', 1, 'unit', 19000, 109500, 'B2601');
 
@@ -259,9 +265,10 @@ VALUES ('cccccccc-0000-0000-0000-000000000001',
         'aaaaaaaa-0000-0000-0000-000000000001', 'VTA-2026-0001', 'awaiting_payment',
         245000, 0, 245000, app.vat_from_gross(245000, 'iva_10'), now());
 
-INSERT INTO sale_order_lines (id, sale_order_id, variant_id, qty, uom,
+INSERT INTO sale_order_lines (id, tenant_id, sale_order_id, variant_id, qty, uom,
                               unit_price_pyg, line_total_pyg, vat_rate, vat_pyg)
 VALUES ('cccccccc-0000-0000-0000-00000000000a',
+        '11111111-1111-1111-1111-111111111111',
         'cccccccc-0000-0000-0000-000000000001', '55555555-0000-0000-0000-000000000003',
         1, 'ml', 245000, 245000, 'iva_10', app.vat_from_gross(245000, 'iva_10'));
 
@@ -364,17 +371,17 @@ VALUES ('f0000000-0000-0000-0000-000000000001',
         now(), '22222222-2222-2222-2222-222222222222');
 
 -- IVA 10% sobre precio con impuesto incluido: 245.000 / 11 = 22.273 Gs.
-INSERT INTO journal_lines (entry_id, account_id, debit_pyg, credit_pyg, memo, position)
-SELECT 'f0000000-0000-0000-0000-000000000001', id, 245000, 0, 'Cobro tarjeta', 1
+INSERT INTO journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg, memo, position)
+SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-000000000001', id, 245000, 0, 'Cobro tarjeta', 1
   FROM chart_of_accounts WHERE tenant_id = '11111111-1111-1111-1111-111111111111'
    AND code = '1.1.01.020';
-INSERT INTO journal_lines (entry_id, account_id, debit_pyg, credit_pyg, memo, position)
-SELECT 'f0000000-0000-0000-0000-000000000001', id, 0,
+INSERT INTO journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg, memo, position)
+SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-000000000001', id, 0,
        245000 - app.vat_from_gross(245000, 'iva_10'), 'Venta neta', 2
   FROM chart_of_accounts WHERE tenant_id = '11111111-1111-1111-1111-111111111111'
    AND code = '4.1.01.001';
-INSERT INTO journal_lines (entry_id, account_id, debit_pyg, credit_pyg, memo, position)
-SELECT 'f0000000-0000-0000-0000-000000000001', id, 0,
+INSERT INTO journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg, memo, position)
+SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-000000000001', id, 0,
        app.vat_from_gross(245000, 'iva_10'), 'IVA débito 10%', 3
   FROM chart_of_accounts WHERE tenant_id = '11111111-1111-1111-1111-111111111111'
    AND code = '2.1.03.001';

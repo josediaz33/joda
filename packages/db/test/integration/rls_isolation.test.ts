@@ -88,4 +88,40 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
     ).rejects.toMatchObject({ code: "42501" });
     await api.query("ROLLBACK");
   });
+
+  // WP-B08 (packages/db/migrations/0014_rls_sweep.sql), motivado por la
+  // revisión cruzada de WP-C09: product_media no tenía tenant_id, así que
+  // quedaba fuera de TODO lo que este archivo prueba arriba — una FK a
+  // products no la protegía, porque los checks de integridad referencial
+  // de Postgres no evalúan RLS. `product_categories` (misma forma de
+  // tabla: solo IDs y una FK, sin tenant_id hasta este WP) es la prueba
+  // concreta de que el barrido cerró ese hueco de verdad, no solo que
+  // `pg_class.relrowsecurity` quedó en `true` — mismos tres casos que
+  // `products` arriba, sobre una tabla que antes de este WP no tenía
+  // ninguna protección.
+  it("product_categories (WP-B08): sin tenant_id en contexto, joda_api no ve filas de ningún tenant", async () => {
+    await api.query("BEGIN");
+    const { rowCount } = await api.query("SELECT * FROM app.product_categories");
+    await api.query("ROLLBACK");
+
+    expect(rowCount).toBe(0);
+  });
+
+  it("product_categories (WP-B08): con el tenant_id de otro tenant, joda_api no ve las filas del tenant real", async () => {
+    await api.query("BEGIN");
+    await api.query("SELECT set_config('app.tenant_id', $1, true)", [OTHER_TENANT_ID]);
+    const { rowCount } = await api.query("SELECT * FROM app.product_categories");
+    await api.query("ROLLBACK");
+
+    expect(rowCount).toBe(0);
+  });
+
+  it("product_categories (WP-B08): con su propio tenant_id, joda_api sí ve las filas de ese tenant (control positivo)", async () => {
+    await api.query("BEGIN");
+    await api.query("SELECT set_config('app.tenant_id', $1, true)", [REAL_TENANT_ID]);
+    const { rowCount } = await api.query("SELECT * FROM app.product_categories");
+    await api.query("ROLLBACK");
+
+    expect(rowCount).toBeGreaterThan(0);
+  });
 });

@@ -24,7 +24,7 @@ pnpm dev
 Verificación de que quedó bien:
 
 ```bash
-pnpm db:test        # 18/18 invariantes en verde
+pnpm db:test        # 22/22 invariantes en verde
 pnpm test:domain    # dominio en verde
 ```
 

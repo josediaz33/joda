@@ -215,6 +215,7 @@ export async function uploadProductMedia(
       }));
 
     const productMedia = await insertProductMediaRow(tx, {
+      tenantId: ctx.tenantId,
       productId: fields.productId,
       mediaId: media.id,
       variantId: fields.variantId ?? null,

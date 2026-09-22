@@ -16,8 +16,10 @@ model accessory_details {
   material                                             String?
   color                                                String?
   size_label                                           String?
+  tenant_id                                            String       @db.Uuid
   products_accessory_details_product_idToproducts      products     @relation("accessory_details_product_idToproducts", fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   products_accessory_details_product_id_kindToproducts products     @relation("accessory_details_product_id_kindToproducts", fields: [product_id, kind], references: [id, kind], onDelete: NoAction, onUpdate: NoAction)
+  tenants                                              tenants      @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "accessory_details_tenant_fk")
 
   @@schema("app")
   @@unique([product_id, kind])
@@ -131,7 +133,9 @@ model channel_listings {
   price_override_pyg BigInt?
   allocated_qty      Decimal?         @db.Decimal(14, 3)
   is_published       Boolean          @default(false)
+  tenant_id          String           @db.Uuid
   sales_channels     sales_channels   @relation(fields: [channel_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants            tenants          @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "channel_listings_tenant_fk")
   product_variants   product_variants @relation(fields: [variant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@unique([channel_id, variant_id])
@@ -171,7 +175,9 @@ model customer_addresses {
   department  String?
   country     String    @default("PY") @db.Char(2)
   is_default  Boolean   @default(false)
+  tenant_id   String    @db.Uuid
   customers   customers @relation(fields: [customer_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants     tenants   @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "customer_addresses_tenant_fk")
 
   @@schema("app")
 }
@@ -184,9 +190,11 @@ model customer_deposit_applications {
   amount_pyg        BigInt
   applied_at        DateTime          @default(now()) @db.Timestamptz(6)
   applied_by        String?           @db.Uuid
+  tenant_id         String            @db.Uuid
   staff_users       staff_users?      @relation(fields: [applied_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   customer_deposits customer_deposits @relation(fields: [deposit_id], references: [id], onUpdate: NoAction)
   sale_orders       sale_orders       @relation(fields: [sale_order_id], references: [id], onUpdate: NoAction)
+  tenants           tenants           @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "customer_deposit_applications_tenant_fk")
 
   @@schema("app")
 }
@@ -297,8 +305,10 @@ model fiscal_document_lines {
   gross_pyg          BigInt
   vat_pyg            BigInt            @default(0)
   position           Int               @default(0)
+  tenant_id          String            @db.Uuid
   fiscal_documents   fiscal_documents  @relation(fields: [fiscal_document_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   sale_order_lines   sale_order_lines? @relation(fields: [sale_order_line_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  tenants            tenants           @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fiscal_document_lines_tenant_fk")
 
   @@schema("app")
 }
@@ -351,7 +361,9 @@ model fiscal_events {
   status_before      fiscal_status?
   status_after       fiscal_status?
   occurred_at        DateTime         @default(now()) @db.Timestamptz(6)
+  tenant_id          String           @db.Uuid
   fiscal_documents   fiscal_documents @relation(fields: [fiscal_document_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants            tenants          @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "fiscal_events_tenant_fk")
 
   @@schema("app")
 }
@@ -369,9 +381,11 @@ model goods_receipt_lines {
   lot_id                                                                   String?              @db.Uuid
   batch_code                                                               String?
   expiry_at                                                                DateTime?            @db.Date
+  tenant_id                                                                String               @db.Uuid
   goods_receipts                                                           goods_receipts       @relation(fields: [goods_receipt_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   inventory_lots_goods_receipt_lines_lot_idToinventory_lots                inventory_lots?      @relation("goods_receipt_lines_lot_idToinventory_lots", fields: [lot_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
   purchase_order_lines                                                     purchase_order_lines @relation(fields: [purchase_order_line_id], references: [id], onUpdate: NoAction)
+  tenants                                                                  tenants              @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "goods_receipt_lines_tenant_fk")
   product_variants                                                         product_variants     @relation(fields: [variant_id], references: [id], onUpdate: NoAction)
   inventory_lots_inventory_lots_goods_receipt_line_idTogoods_receipt_lines inventory_lots[]     @relation("inventory_lots_goods_receipt_line_idTogoods_receipt_lines")
 
@@ -548,8 +562,10 @@ model journal_lines {
   fx_rate_to_pyg    Decimal?          @db.Decimal(18, 8)
   memo              String?
   position          Int               @default(0)
+  tenant_id         String            @db.Uuid
   chart_of_accounts chart_of_accounts @relation(fields: [account_id], references: [id], onUpdate: NoAction)
   journal_entries   journal_entries   @relation(fields: [entry_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants           tenants           @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "journal_lines_tenant_fk")
 
   @@index([account_id], map: "jl_account")
   @@index([entry_id, position], map: "jl_entry")
@@ -586,8 +602,10 @@ model movement_cost_allocations {
   qty                 Decimal             @db.Decimal(14, 3)
   unit_cost_pyg       BigInt
   total_cost_pyg      BigInt
+  tenant_id           String              @db.Uuid
   inventory_lots      inventory_lots      @relation(fields: [lot_id], references: [id], onUpdate: NoAction)
   inventory_movements inventory_movements @relation(fields: [movement_id], references: [id], onUpdate: NoAction)
+  tenants             tenants             @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "movement_cost_allocations_tenant_fk")
 
   @@index([movement_id], map: "mca_movement")
   @@schema("app")
@@ -654,8 +672,10 @@ model perfume_details {
   waste_factor                                       Decimal               @default(0.02000) @db.Decimal(6, 5)
   unusable_residue_ml                                Decimal               @default(2.000) @db.Decimal(8, 3)
   evaporation_ml_year                                Decimal               @default(0.000) @db.Decimal(8, 3)
+  tenant_id                                          String                @db.Uuid
   products_perfume_details_product_idToproducts      products              @relation("perfume_details_product_idToproducts", fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   products_perfume_details_product_id_kindToproducts products              @relation("perfume_details_product_id_kindToproducts", fields: [product_id, kind], references: [id, kind], onDelete: NoAction, onUpdate: NoAction)
+  tenants                                            tenants               @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "perfume_details_tenant_fk")
 
   @@schema("app")
   @@unique([product_id, kind])
@@ -688,8 +708,10 @@ model product_categories {
   product_id  String     @db.Uuid
   category_id String     @db.Uuid
   is_primary  Boolean    @default(false)
+  tenant_id   String     @db.Uuid
   categories  categories @relation(fields: [category_id], references: [id], onUpdate: NoAction)
   products    products   @relation(fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants     tenants    @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "product_categories_tenant_fk")
 
   @@id([product_id, category_id])
   @@schema("app")
@@ -701,8 +723,10 @@ model product_media {
   variant_id       String?           @db.Uuid
   position         Int               @default(0)
   alt_text         String?
+  tenant_id        String            @db.Uuid
   media            media             @relation(fields: [media_id], references: [id], onUpdate: NoAction)
   products         products          @relation(fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants          tenants           @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "product_media_tenant_fk")
   product_variants product_variants? @relation(fields: [variant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@id([product_id, media_id])
@@ -712,8 +736,10 @@ model product_media {
 model product_tags {
   product_id String   @db.Uuid
   tag_id     String   @db.Uuid
+  tenant_id  String   @db.Uuid
   products   products @relation(fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   tags       tags     @relation(fields: [tag_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants    tenants  @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "product_tags_tenant_fk")
 
   @@id([product_id, tag_id])
   @@schema("app")
@@ -813,8 +839,10 @@ model purchase_order_lines {
   unit_price_minor    BigInt
   destination         String?
   position            Int                   @default(0)
+  tenant_id           String                @db.Uuid
   goods_receipt_lines goods_receipt_lines[]
   purchase_orders     purchase_orders       @relation(fields: [purchase_order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants             tenants               @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "purchase_order_lines_tenant_fk")
   product_variants    product_variants      @relation(fields: [variant_id], references: [id], onUpdate: NoAction)
 
   @@index([purchase_order_id, position], map: "pol_order")
@@ -829,8 +857,10 @@ model purchase_order_transitions {
   actor_id          String?         @db.Uuid
   reason            String?
   occurred_at       DateTime        @default(now()) @db.Timestamptz(6)
+  tenant_id         String          @db.Uuid
   staff_users       staff_users?    @relation(fields: [actor_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   purchase_orders   purchase_orders @relation(fields: [purchase_order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants           tenants         @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "purchase_order_transitions_tenant_fk")
 
   @@schema("app")
 }
@@ -880,9 +910,11 @@ model return_items {
   disposition        rma_disposition?
   inspection_notes   String?
   refund_pyg         BigInt            @default(0)
+  tenant_id          String            @db.Uuid
   returns            returns           @relation(fields: [return_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   sale_order_lines   sale_order_lines  @relation(fields: [sale_order_line_id], references: [id], onUpdate: NoAction)
   serialized_units   serialized_units? @relation(fields: [serial_unit_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  tenants            tenants           @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "return_items_tenant_fk")
 
   @@schema("app")
 }
@@ -911,8 +943,10 @@ model returns {
 model role_permissions {
   role_id         String      @db.Uuid
   permission_code String
+  tenant_id       String      @db.Uuid
   permissions     permissions @relation(fields: [permission_code], references: [code], onDelete: Cascade, onUpdate: NoAction)
   roles           roles       @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants         tenants     @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "role_permissions_tenant_fk")
 
   @@id([role_id, permission_code])
   @@schema("app")
@@ -949,10 +983,12 @@ model sale_order_lines {
   vat_pyg                                                                BigInt                  @default(0)
   cogs_pyg                                                               BigInt                  @default(0)
   position                                                               Int                     @default(0)
+  tenant_id                                                              String                  @db.Uuid
   fiscal_document_lines                                                  fiscal_document_lines[]
   return_items                                                           return_items[]
   sale_orders                                                            sale_orders             @relation(fields: [sale_order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   serialized_units_sale_order_lines_serial_unit_idToserialized_units     serialized_units?       @relation("sale_order_lines_serial_unit_idToserialized_units", fields: [serial_unit_id], references: [id], onDelete: Restrict, onUpdate: NoAction)
+  tenants                                                                tenants                 @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "sale_order_lines_tenant_fk")
   product_variants                                                       product_variants        @relation(fields: [variant_id], references: [id], onUpdate: NoAction)
   serialized_units_serialized_units_sold_order_line_idTosale_order_lines serialized_units[]      @relation("serialized_units_sold_order_line_idTosale_order_lines")
 
@@ -969,7 +1005,9 @@ model sale_order_transitions {
   audience      actor_audience     @default(staff)
   reason        String?
   occurred_at   DateTime           @default(now()) @db.Timestamptz(6)
+  tenant_id     String             @db.Uuid
   sale_orders   sale_orders        @relation(fields: [sale_order_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants       tenants            @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "sale_order_transitions_tenant_fk")
 
   @@schema("app")
 }
@@ -1094,8 +1132,10 @@ model sourcing_scenario_lines {
   projected_price_pyg  BigInt             @default(0)
   projected_margin_pct Decimal?           @db.Decimal(7, 3)
   variant_label        String?
+  tenant_id            String             @db.Uuid
   sourcing_scenarios   sourcing_scenarios @relation(fields: [scenario_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   suppliers            suppliers?         @relation(fields: [supplier_id], references: [id], onUpdate: NoAction)
+  tenants              tenants            @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "sourcing_scenario_lines_tenant_fk")
   product_variants     product_variants   @relation(fields: [variant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@schema("app")
@@ -1123,9 +1163,11 @@ model staff_user_roles {
   role_id                                                 String       @db.Uuid
   granted_at                                              DateTime     @default(now()) @db.Timestamptz(6)
   granted_by                                              String?      @db.Uuid
+  tenant_id                                               String       @db.Uuid
   staff_users_staff_user_roles_granted_byTostaff_users    staff_users? @relation("staff_user_roles_granted_byTostaff_users", fields: [granted_by], references: [id], onDelete: NoAction, onUpdate: NoAction)
   roles                                                   roles        @relation(fields: [role_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   staff_users_staff_user_roles_staff_user_idTostaff_users staff_users  @relation("staff_user_roles_staff_user_idTostaff_users", fields: [staff_user_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants                                                 tenants      @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "staff_user_roles_tenant_fk")
 
   @@id([staff_user_id, role_id])
   @@schema("app")
@@ -1200,7 +1242,9 @@ model supplier_contacts {
   email       String?   @db.Citext
   phone       String?
   is_primary  Boolean   @default(false)
+  tenant_id   String    @db.Uuid
   suppliers   suppliers @relation(fields: [supplier_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenants     tenants   @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "supplier_contacts_tenant_fk")
 
   @@schema("app")
 }
@@ -1244,51 +1288,74 @@ model tags {
 }
 
 model tenants {
-  id                   String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  slug                 String                 @unique @db.Citext
-  legal_name           String
-  trade_name           String
-  ruc                  String?
-  base_currency        String                 @default("PYG") @db.Char(3)
-  timezone             String                 @default("America/Asuncion")
-  created_at           DateTime               @default(now()) @db.Timestamptz(6)
-  updated_at           DateTime               @default(now()) @db.Timestamptz(6)
-  accounting_periods   accounting_periods[]
-  bom_components       bom_components[]
-  brands               brands[]
-  categories           categories[]
-  chart_of_accounts    chart_of_accounts[]
-  customer_deposits    customer_deposits[]
-  customers            customers[]
-  decant_work_orders   decant_work_orders[]
-  fiscal_config        fiscal_config?
-  fiscal_documents     fiscal_documents[]
-  goods_receipts       goods_receipts[]
-  idempotency_keys     idempotency_keys[]
-  inventory_lots       inventory_lots[]
-  inventory_movements  inventory_movements[]
-  journal_entries      journal_entries[]
-  media                media[]
-  payment_events       payment_events[]
-  payments             payments[]
-  posting_rules        posting_rules[]
-  product_variants     product_variants[]
-  products             products[]
-  purchase_orders      purchase_orders[]
-  returns              returns[]
-  roles                roles[]
-  sale_orders          sale_orders[]
-  sales_channels       sales_channels[]
-  serialized_units     serialized_units[]
-  shipments            shipments[]
-  sourcing_scenarios   sourcing_scenarios[]
-  staff_refresh_tokens staff_refresh_tokens[]
-  staff_sessions       staff_sessions[]
-  staff_users          staff_users[]
-  stock_reservations   stock_reservations[]
-  suppliers            suppliers[]
-  tags                 tags[]
-  unposted_events      unposted_events[]
+  id                            String                          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  slug                          String                          @unique @db.Citext
+  legal_name                    String
+  trade_name                    String
+  ruc                           String?
+  base_currency                 String                          @default("PYG") @db.Char(3)
+  timezone                      String                          @default("America/Asuncion")
+  created_at                    DateTime                        @default(now()) @db.Timestamptz(6)
+  updated_at                    DateTime                        @default(now()) @db.Timestamptz(6)
+  accessory_details             accessory_details[]
+  accounting_periods            accounting_periods[]
+  bom_components                bom_components[]
+  brands                        brands[]
+  categories                    categories[]
+  channel_listings              channel_listings[]
+  chart_of_accounts             chart_of_accounts[]
+  customer_addresses            customer_addresses[]
+  customer_deposit_applications customer_deposit_applications[]
+  customer_deposits             customer_deposits[]
+  customers                     customers[]
+  decant_work_orders            decant_work_orders[]
+  fiscal_config                 fiscal_config?
+  fiscal_document_lines         fiscal_document_lines[]
+  fiscal_documents              fiscal_documents[]
+  fiscal_events                 fiscal_events[]
+  goods_receipt_lines           goods_receipt_lines[]
+  goods_receipts                goods_receipts[]
+  idempotency_keys              idempotency_keys[]
+  inventory_lots                inventory_lots[]
+  inventory_movements           inventory_movements[]
+  journal_entries               journal_entries[]
+  journal_lines                 journal_lines[]
+  media                         media[]
+  movement_cost_allocations     movement_cost_allocations[]
+  payment_events                payment_events[]
+  payments                      payments[]
+  perfume_details               perfume_details[]
+  posting_rules                 posting_rules[]
+  product_categories            product_categories[]
+  product_media                 product_media[]
+  product_tags                  product_tags[]
+  product_variants              product_variants[]
+  products                      products[]
+  purchase_order_lines          purchase_order_lines[]
+  purchase_order_transitions    purchase_order_transitions[]
+  purchase_orders               purchase_orders[]
+  return_items                  return_items[]
+  returns                       returns[]
+  role_permissions              role_permissions[]
+  roles                         roles[]
+  sale_order_lines              sale_order_lines[]
+  sale_order_transitions        sale_order_transitions[]
+  sale_orders                   sale_orders[]
+  sales_channels                sales_channels[]
+  serialized_units              serialized_units[]
+  shipments                     shipments[]
+  sourcing_scenario_lines       sourcing_scenario_lines[]
+  sourcing_scenarios            sourcing_scenarios[]
+  staff_refresh_tokens          staff_refresh_tokens[]
+  staff_sessions                staff_sessions[]
+  staff_user_roles              staff_user_roles[]
+  staff_users                   staff_users[]
+  stock_reservations            stock_reservations[]
+  supplier_contacts             supplier_contacts[]
+  suppliers                     suppliers[]
+  tags                          tags[]
+  unposted_events               unposted_events[]
+  watch_details                 watch_details[]
 
   @@schema("app")
 }
@@ -1323,8 +1390,10 @@ model watch_details {
   crystal                                          String?
   warranty_months                                  Int            @default(12)
   requires_serial                                  Boolean        @default(true)
+  tenant_id                                        String         @db.Uuid
   products_watch_details_product_idToproducts      products       @relation("watch_details_product_idToproducts", fields: [product_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
   products_watch_details_product_id_kindToproducts products       @relation("watch_details_product_id_kindToproducts", fields: [product_id, kind], references: [id, kind], onDelete: NoAction, onUpdate: NoAction)
+  tenants                                          tenants        @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction, map: "watch_details_tenant_fk")
 
   @@schema("app")
   @@unique([product_id, kind])

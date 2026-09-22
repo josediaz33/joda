@@ -2,7 +2,7 @@
 
 Referencia del esquema. La verdad ejecutable está en `packages/db/migrations/`; este documento explica **por qué** está así.
 
-Estado: validado contra PostgreSQL 16 — 61 tablas, 104 `CHECK`, 138 claves foráneas, 128 índices, 36 tablas con RLS, 18/18 invariantes verificados.
+Estado: validado contra PostgreSQL 16 — 63 tablas, 104 `CHECK`, 166 claves foráneas, 133 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 22/22 invariantes verificados.
 
 ---
 
@@ -251,6 +251,13 @@ Encima, políticas de permiso sobre lo sensible: `journal_entries`, `chart_of_ac
 
 **`FORCE` es necesario** porque sin él el dueño de la tabla eludiría las políticas. Y la API se conecta con `joda_api`, creado `NOBYPASSRLS`: si usara `service_role`, nada de esto se evaluaría.
 
+**Dos excepciones, sin `tenant_id` ni RLS, por diseño — no un olvido** (WP-B08, `packages/db/migrations/0014_rls_sweep.sql`):
+
+- `permissions` — catálogo global de códigos de permiso, el mismo para todos los tenants.
+- `tenants` — la tabla que define los tenants no puede tener su propio `tenant_id`. Tiene su propia política, `id = app.current_tenant_id()`.
+
+Cualquier otra tabla de `app.*` sin RLS es un descuido: `packages/db/tests/invariants.sql` (invariante 22) falla si aparece una. La motivación de este chequeo fue real, no hipotética — `product_media` tuvo exactamente este hueco durante todo WP-C09 (subida de imágenes de catálogo), detectado recién en la revisión cruzada: tenía una FK a `products`, pero ninguna FK de Postgres evalúa RLS, así que un `product_id` de otro tenant la pasaba igual. **La FK sola nunca alcanza para aislar por tenant** — cualquier tabla nueva que dependa del tenant solo por una FK transitiva necesita su propio `tenant_id`, punto.
+
 ---
 
 ## 8. Cómo agregar una vertical de producto
@@ -261,8 +268,13 @@ Ejemplo con "Accesorios" ya presente; para una nueva:
 -- 1. Extender el enum
 ALTER TYPE app.product_kind ADD VALUE 'candle';
 
--- 2. Tabla de detalles con la FK compuesta
+-- 2. Tabla de detalles con la FK compuesta Y su propio tenant_id — la FK a
+-- products NO alcanza para aislar por tenant (los checks de integridad
+-- referencial de Postgres no evalúan RLS; ver WP-B08,
+-- packages/db/migrations/0014_rls_sweep.sql, motivado por un producto de
+-- OTRO tenant que pasaba la FK de product_media sin que nada lo notara).
 CREATE TABLE app.candle_details (
+  tenant_id   uuid NOT NULL REFERENCES app.tenants(id) ON DELETE CASCADE,
   product_id  uuid PRIMARY KEY REFERENCES app.products(id) ON DELETE CASCADE,
   kind        app.product_kind NOT NULL DEFAULT 'candle' CHECK (kind = 'candle'),
   wax_type    text NOT NULL,
@@ -270,10 +282,22 @@ CREATE TABLE app.candle_details (
   FOREIGN KEY (product_id, kind) REFERENCES app.products(id, kind)
 );
 
--- 3. RLS
+-- 3. RLS — misma política que toda tabla con tenant_id (§7 de este
+-- documento). Una migración nueva no hereda el bucle automático de
+-- 0010_security_rls.sql (ya corrió); declarala explícita:
 ALTER TABLE app.candle_details ENABLE ROW LEVEL SECURITY;
--- (no lleva tenant_id: hereda el aislamiento por la FK a products)
+ALTER TABLE app.candle_details FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON app.candle_details
+  USING (tenant_id = app.current_tenant_id())
+  WITH CHECK (tenant_id = app.current_tenant_id());
 ```
+
+El service que inserte en `candle_details` también tiene que pasar
+`tenant_id` (el de `ctx`, igual que cualquier otro insert) — RLS protege la
+FILA, no evita por sí solo insertar una fila propia que referencia un
+`product_id` ajeno. Verificar que el producto exista PARA EL TENANT antes de
+insertar (`findProductRow` dentro de `withTenantTx`, mismo patrón que
+`createVariant`, WP-C08) sigue siendo responsabilidad del código, no de RLS.
 
 Después: esquema Zod en `packages/contracts`, mapper de facetas en `packages/domain/src/catalog/facets.ts`, formulario en el admin. **Ninguna tabla existente se modifica.**
 

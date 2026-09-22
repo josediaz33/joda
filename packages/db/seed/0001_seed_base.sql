@@ -124,32 +124,32 @@ BEGIN
   SELECT id INTO v_deposito FROM roles WHERE tenant_id = p_tenant AND code = 'deposito';
 
   -- Dueño: todo.
-  INSERT INTO role_permissions (role_id, permission_code)
-  SELECT v_owner, code FROM permissions ON CONFLICT DO NOTHING;
+  INSERT INTO role_permissions (tenant_id, role_id, permission_code)
+  SELECT p_tenant, v_owner, code FROM permissions ON CONFLICT DO NOTHING;
 
   -- Encargado: todo salvo gestión de usuarios.
-  INSERT INTO role_permissions (role_id, permission_code)
-  SELECT v_manager, code FROM permissions WHERE code <> 'settings.user:write'
+  INSERT INTO role_permissions (tenant_id, role_id, permission_code)
+  SELECT p_tenant, v_manager, code FROM permissions WHERE code <> 'settings.user:write'
   ON CONFLICT DO NOTHING;
 
   -- Vendedor: vende y consulta stock. SIN contabilidad ni sourcing:
   -- que alguien cargue una venta no implica que vea el flujo de caja
   -- ni lo que te cuesta cada frasco.
-  INSERT INTO role_permissions (role_id, permission_code) VALUES
-    (v_vendedor, 'catalog.product:read'),
-    (v_vendedor, 'sales.order:read'),
-    (v_vendedor, 'sales.order:write'),
-    (v_vendedor, 'accounting.deposit:write'),
-    (v_vendedor, 'fiscal.document:issue')
+  INSERT INTO role_permissions (tenant_id, role_id, permission_code) VALUES
+    (p_tenant, v_vendedor, 'catalog.product:read'),
+    (p_tenant, v_vendedor, 'sales.order:read'),
+    (p_tenant, v_vendedor, 'sales.order:write'),
+    (p_tenant, v_vendedor, 'accounting.deposit:write'),
+    (p_tenant, v_vendedor, 'fiscal.document:issue')
   ON CONFLICT DO NOTHING;
 
   -- Depósito: mueve mercadería, no ve precios de compra ni márgenes.
-  INSERT INTO role_permissions (role_id, permission_code) VALUES
-    (v_deposito, 'catalog.product:read'),
-    (v_deposito, 'inventory.stock:read'),
-    (v_deposito, 'inventory.stock:adjust'),
-    (v_deposito, 'inventory.decant:execute'),
-    (v_deposito, 'market.purchase_order:receive')
+  INSERT INTO role_permissions (tenant_id, role_id, permission_code) VALUES
+    (p_tenant, v_deposito, 'catalog.product:read'),
+    (p_tenant, v_deposito, 'inventory.stock:read'),
+    (p_tenant, v_deposito, 'inventory.stock:adjust'),
+    (p_tenant, v_deposito, 'inventory.decant:execute'),
+    (p_tenant, v_deposito, 'market.purchase_order:receive')
   ON CONFLICT DO NOTHING;
 END $$;
 

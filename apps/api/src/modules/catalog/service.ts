@@ -22,7 +22,7 @@ import {
 import { buildProductFacets, type ProductFacetInput } from "@joda/domain";
 import type { PrismaClient, Prisma } from "@joda/db";
 import { decodeCursor, encodeCursor } from "../../db/cursor.js";
-import { withTenantTx, type TenantTxContext } from "../../db/withTenantTx.js";
+import { withTenantTx, type TenantTx, type TenantTxContext } from "../../db/withTenantTx.js";
 import { appError, toTRPCError } from "../../middleware/errorMapper.js";
 import {
   toAdminBomComponent,
@@ -121,12 +121,42 @@ function categoryAssignments(
   }));
 }
 
+/**
+ * `product_categories`/`product_tags` tienen tenant_id propio desde WP-B08,
+ * pero eso no evita insertar una fila propia con un `category_id`/`tag_id`
+ * de OTRO tenant (revisión cruzada de WP-C09, mismo patrón que
+ * `product_media`) — sin esto, un `categoryId`/`tagId` ajeno pasaba la FK
+ * igual. `count()` corre dentro del mismo `withTenantTx`: RLS hace que un
+ * id ajeno no cuente, así que comparar contra el tamaño del SET (no el
+ * largo del array, un id repetido no debería exigir "dos") detecta
+ * cualquier id inexistente o de otro tenant, sin necesitar distinguir cuál.
+ */
+async function assertCategoryAndTagIdsExist(
+  tx: TenantTx,
+  categoryIds: readonly string[],
+  tagIds: readonly string[],
+): Promise<void> {
+  const uniqueCategoryIds = [...new Set(categoryIds)];
+  if (uniqueCategoryIds.length > 0) {
+    const found = await repo.countExistingCategoryIds(tx, uniqueCategoryIds);
+    if (found !== uniqueCategoryIds.length) throw toTRPCError(NOT_FOUND_ERROR);
+  }
+
+  const uniqueTagIds = [...new Set(tagIds)];
+  if (uniqueTagIds.length > 0) {
+    const found = await repo.countExistingTagIds(tx, uniqueTagIds);
+    if (found !== uniqueTagIds.length) throw toTRPCError(NOT_FOUND_ERROR);
+  }
+}
+
 export async function createProduct(
   db: PrismaClient,
   ctx: TenantTxContext,
   input: CreateProductInput,
 ): Promise<AdminProduct> {
   return withTenantTx(db, ctx, async (tx) => {
+    await assertCategoryAndTagIdsExist(tx, input.categoryIds, input.tagIds ?? []);
+
     const facets = buildProductFacets(toFacetInputFromCreate(input));
     const productId = await repo.insertProductRow(tx, {
       tenantId: ctx.tenantId,
@@ -141,22 +171,23 @@ export async function createProduct(
 
     switch (input.kind) {
       case "perfume":
-        await repo.insertPerfumeDetails(tx, productId, input.perfumeDetails);
+        await repo.insertPerfumeDetails(tx, ctx.tenantId, productId, input.perfumeDetails);
         break;
       case "watch":
-        await repo.insertWatchDetails(tx, productId, input.watchDetails);
+        await repo.insertWatchDetails(tx, ctx.tenantId, productId, input.watchDetails);
         break;
       case "accessory":
-        await repo.insertAccessoryDetails(tx, productId, input.accessoryDetails);
+        await repo.insertAccessoryDetails(tx, ctx.tenantId, productId, input.accessoryDetails);
         break;
     }
 
     await repo.replaceProductCategories(
       tx,
+      ctx.tenantId,
       productId,
       categoryAssignments(input.categoryIds, input.primaryCategoryId),
     );
-    await repo.replaceProductTags(tx, productId, input.tagIds ?? []);
+    await repo.replaceProductTags(tx, ctx.tenantId, productId, input.tagIds ?? []);
 
     const row = await repo.findProductRow(tx, { id: productId });
     if (!row)
@@ -192,6 +223,7 @@ export async function updateProduct(
     const existing = await repo.findProductRow(tx, { id: input.id });
     if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
     assertDetailsMatchKind(existing.kind as ProductKind, input);
+    await assertCategoryAndTagIdsExist(tx, input.categoryIds ?? [], input.tagIds ?? []);
 
     if (input.perfumeDetails) await repo.updatePerfumeDetails(tx, input.id, input.perfumeDetails);
     if (input.watchDetails) await repo.updateWatchDetails(tx, input.id, input.watchDetails);
@@ -201,11 +233,12 @@ export async function updateProduct(
     if (input.categoryIds) {
       await repo.replaceProductCategories(
         tx,
+        ctx.tenantId,
         input.id,
         categoryAssignments(input.categoryIds, input.primaryCategoryId),
       );
     }
-    if (input.tagIds) await repo.replaceProductTags(tx, input.id, input.tagIds);
+    if (input.tagIds) await repo.replaceProductTags(tx, ctx.tenantId, input.id, input.tagIds);
 
     // Recomputa facets a partir del detalle YA actualizado arriba — releer es
     // más simple y más correcto que reimplementar en JS el merge parcial que
