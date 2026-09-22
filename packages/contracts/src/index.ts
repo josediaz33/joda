@@ -4,4 +4,5 @@
 // de ese módulo en el bloque C (docs/backlog.md, nota sobre alcance de A11).
 export * from "./shared/index.js";
 export * from "./auth.js";
+export * from "./catalog.js";
 export * from "./security/permissions.js";

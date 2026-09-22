@@ -21,3 +21,16 @@ export const moneySchema = z
   .strict();
 
 export type MoneyDto = z.infer<typeof moneySchema>;
+
+// Importe en guaraníes puros — mismo regex que moneySchema.minor, sin el
+// envoltorio {minor, currency}: los campos `pyg` del esquema (product_variants
+// .price_pyg, por ejemplo — docs/data-model.md "Dinero | Dominio pyg (bigint)")
+// son de una sola moneda por definición, nunca extranjera. La forma es
+// idéntica a Money.toJSON().minor (packages/domain/src/shared/money.ts) para
+// que un caller que ya tiene un Money.pyg(...) pueda usar directamente
+// `.toJSON().minor` sin transformación.
+export const pygAmountSchema = z
+  .string()
+  .regex(/^-?\d+$/, "pyg debe ser un entero en formato string");
+
+export type PygAmount = z.infer<typeof pygAmountSchema>;

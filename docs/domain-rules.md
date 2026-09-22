@@ -170,6 +170,16 @@ Se generan dos filas en `movement_cost_allocations`. El COGS de la venta es 4.35
 
 ---
 
+## RN-CAT — Catálogo
+
+### RN-CAT-01 · El BOM solo se define sobre una variante fraccionada
+
+`bom_components.parent_variant_id` tiene que ser una variante `variant_type = 'decant'`. No es un `CHECK` de `packages/db` (`bom_components` no conoce el `variant_type` de la variante que referencia sin un `JOIN`) — lo hace cumplir la API, en `catalog.bom.create`, antes de insertar.
+
+**Por qué.** Un sellado o un granel no consumen insumos propios: el sellado se vende tal cual viene del proveedor, y el granel es el origen que un decant consume vía `source_variant_id` (RN-FRA-07), no un producto con su propio BOM. Confirmado como regla de negocio explícita al implementar WP-C08 (no estaba escrito hasta esta aclaración, mismo criterio que RN-LOT-02).
+
+---
+
 ## RN-LOT — Lotes y apertura de frascos
 
 ### RN-LOT-01 · Unidad de medida inmutable
