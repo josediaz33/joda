@@ -43,6 +43,14 @@ export interface AuditEntry {
  * NULL (docs/api-conventions.md §10, el `before: null` del ejemplo), así que
  * directamente se omite la clave cuando el valor es `null`: la columna no
  * tiene DEFAULT, así que Postgres la deja NULL igual.
+ *
+ * El ejemplo de docs/api-conventions.md §10 la escribe como `repo.audit(tx,
+ * {...})` — acá es una función libre, no un método de un objeto `repo`,
+ * porque ese objeto no existe en este código base (cada módulo de
+ * `apps/api/src/modules/*` exporta funciones sueltas desde su propio
+ * `repository.ts`, ver `modules/auth/repository.ts`). Cada módulo futuro
+ * importa `recordAuditEntry` igual que importa cualquier otra función de
+ * `apps/api/src/db/`, junto a `withTenantTx`.
  */
 export async function recordAuditEntry(tx: TenantTx, entry: AuditEntry): Promise<void> {
   await tx.audit_log.create({

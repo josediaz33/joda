@@ -5,6 +5,7 @@ import { jodaApiConnectionUrl, startTestDb, type TestDb } from "./testDb.js";
 import { withTenantTx } from "./withTenantTx.js";
 
 const TENANT_ID = "77777777-7777-4777-a777-777777777777";
+const OTHER_TENANT_ID = "55555555-5555-4555-a555-555555555555";
 const ACTOR = {
   userId: "88888888-8888-4888-a888-888888888888",
   tenantId: TENANT_ID,
@@ -112,6 +113,57 @@ describe("recordAuditEntry (docs/api-conventions.md §10, docs/security-spec.md 
       entity_id: entryId,
       after: { debit: "150000", credit: "150000" },
     });
+  });
+
+  // docs/testing-strategy.md §3.2: "obligatoria y explícita" — conectada como
+  // `joda_api` (nunca el superusuario del contenedor), sin tenant_id en
+  // contexto no ve nada, y con OTRO tenant en contexto tampoco. Es la prueba
+  // que detecta si alguien cambió la conexión a una credencial elevada y
+  // desactivó en silencio toda la capa de aislamiento (RLS `tenant_isolation`,
+  // packages/db/migrations/0010_security_rls.sql).
+  it("RLS aísla audit_log por tenant con el rol de aplicación (docs/testing-strategy.md §3.2)", async () => {
+    const action = "inventory.rls-isolation-test";
+
+    await withTenantTx(db, ACTOR, (tx) =>
+      recordAuditEntry(tx, {
+        tenantId: TENANT_ID,
+        actorId: ACTOR.userId,
+        audience: "staff",
+        action,
+        entity: "inventory_movements",
+        entityId: null,
+        before: null,
+        after: null,
+        ip: null,
+        userAgent: null,
+        requestId: null,
+      }),
+    );
+
+    // Sin tenant_id en contexto, `app.current_tenant_id()` es NULL — la
+    // política `tenant_id = app.current_tenant_id()` nunca es verdadera
+    // contra NULL, así que ni siquiera ve la fila que acaba de escribir el
+    // test anterior en esta misma conexión reciclada (jodaApiConnectionUrl,
+    // connection_limit=1).
+    const withoutTenantContext = await db.$transaction((tx) =>
+      tx.audit_log.findMany({ where: { action } }),
+    );
+    expect(withoutTenantContext).toHaveLength(0);
+
+    // Con un tenant DISTINTO en contexto, tampoco ve la fila de TENANT_ID.
+    const otherTenantRows = await withTenantTx(
+      db,
+      { userId: ACTOR.userId, tenantId: OTHER_TENANT_ID, audience: "staff" },
+      (tx) => tx.audit_log.findMany({ where: { action } }),
+    );
+    expect(otherTenantRows).toHaveLength(0);
+
+    // Contraste: con el tenant correcto sí la ve — la ausencia de arriba es
+    // aislamiento, no un bug que esconda la fila para cualquiera.
+    const ownTenantRows = await withTenantTx(db, ACTOR, (tx) =>
+      tx.audit_log.findMany({ where: { action } }),
+    );
+    expect(ownTenantRows).toHaveLength(1);
   });
 
   it("si la transacción hace rollback después de auditar, la fila no queda persistida — no es un paso aparte que pueda desincronizarse", async () => {
