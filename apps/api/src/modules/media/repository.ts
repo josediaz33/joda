@@ -9,6 +9,37 @@ export async function findMediaBySha256(tx: TenantTx, sha256: string): Promise<M
   return tx.media.findFirst({ where: { sha256 } });
 }
 
+/**
+ * `product_media` (packages/db/migrations/0003_catalog.sql) no tiene
+ * `tenant_id` — queda FUERA del loop que habilita RLS automáticamente en
+ * 0010_security_rls.sql (recorre columnas `tenant_id`, esta tabla no
+ * tiene ninguna) y la FK `product_id → products.id` no compensa eso: los
+ * checks de integridad referencial de Postgres evalúan con privilegio
+ * interno, sin pasar por RLS. Sin esta verificación, cualquier
+ * `productId` de OTRO tenant pasaría la FK igual (revisión cruzada del
+ * PR #48). `findFirst` corre dentro de `withTenantTx`: RLS en `products`
+ * SÍ tiene `tenant_id`, así que un producto de otro tenant es invisible
+ * acá — el mismo patrón que `findProductRow` en
+ * modules/catalog/repository.ts (WP-C08, `createVariant`).
+ */
+export async function productExistsForTenant(tx: TenantTx, productId: string): Promise<boolean> {
+  const row = await tx.products.findFirst({ where: { id: productId }, select: { id: true } });
+  return row !== null;
+}
+
+/** Mismo motivo que productExistsForTenant, más una regla de coherencia que el esquema tampoco fuerza: un `variant_id` en `product_media` que no sea de ESE producto no viola ninguna FK, pero no tiene sentido de negocio — "la foto es de esta variante" implica que la variante es de este producto. */
+export async function variantBelongsToProduct(
+  tx: TenantTx,
+  variantId: string,
+  productId: string,
+): Promise<boolean> {
+  const row = await tx.product_variants.findFirst({
+    where: { id: variantId, product_id: productId },
+    select: { id: true },
+  });
+  return row !== null;
+}
+
 export interface InsertMediaRowInput {
   readonly tenantId: string;
   readonly sha256: string;

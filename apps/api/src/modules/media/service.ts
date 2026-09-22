@@ -30,8 +30,15 @@ import type { Audience } from "../../trpc/context.js";
 import { withTenantTx, type TenantTxContext } from "../../db/withTenantTx.js";
 import { withIdempotentTx, type IdempotencyRequest } from "../../db/withIdempotentTx.js";
 import { appError } from "../../middleware/errorMapper.js";
+import { NOT_FOUND_ERROR } from "../../trpc/trpc.js";
 import { toAdminMedia } from "./mappers.js";
-import { findMediaBySha256, insertMediaRow, insertProductMediaRow } from "./repository.js";
+import {
+  findMediaBySha256,
+  insertMediaRow,
+  insertProductMediaRow,
+  productExistsForTenant,
+  variantBelongsToProduct,
+} from "./repository.js";
 
 const UNSUPPORTED_FILE_TYPE_ERROR = appError(
   "VALIDATION_UNSUPPORTED_FILE_TYPE",
@@ -158,9 +165,30 @@ export async function uploadProductMedia(
   idempotency: IdempotencyRequest | null,
   auditMeta: UploadAuditMeta,
 ): Promise<UploadProductMediaResult> {
-  const existingMedia = await withTenantTx(deps.db, ctx, (tx) =>
-    findMediaBySha256(tx, image.sha256),
-  );
+  // product_media no tiene tenant_id (packages/db/migrations/0003_catalog.sql)
+  // — queda fuera del aislamiento automático por RLS de
+  // 0010_security_rls.sql, y la FK product_id → products.id NO compensa
+  // eso: los checks de integridad referencial de Postgres no pasan por
+  // RLS. Sin esto, cualquier productId de otro tenant pasaría igual
+  // (hallazgo de la revisión cruzada del PR #48). `productExistsForTenant`
+  // corre dentro de este mismo withTenantTx: RLS en `products` (que SÍ
+  // tiene tenant_id) hace invisible un producto ajeno — mismo patrón que
+  // `findProductRow` en modules/catalog/service.ts (`createVariant`,
+  // WP-C08). Corre ANTES de generar derivados: no tiene sentido pagar el
+  // costo de sharp/storage para una petición que se va a rechazar igual.
+  const existingMedia = await withTenantTx(deps.db, ctx, async (tx) => {
+    const productExists = await productExistsForTenant(tx, fields.productId);
+    if (!productExists) throw NOT_FOUND_ERROR;
+
+    if (
+      fields.variantId &&
+      !(await variantBelongsToProduct(tx, fields.variantId, fields.productId))
+    ) {
+      throw NOT_FOUND_ERROR;
+    }
+
+    return findMediaBySha256(tx, image.sha256);
+  });
 
   if (existingMedia === null) {
     await persistOriginalAndDerivatives(deps.storage, image);

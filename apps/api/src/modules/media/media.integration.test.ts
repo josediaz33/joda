@@ -22,6 +22,8 @@ import type { AuthServiceDeps } from "../auth/service.js";
 // dedup por sha256, e idempotencia — las trampas explícitas de la Sesión 29
 // del playbook (docs/runbooks/prompts-playbook.md).
 const TENANT_ID = "77777777-7777-4777-a777-777777777777";
+const OTHER_TENANT_ID = "66666666-6666-4666-a666-666666666666";
+const OTHER_TENANT_PRODUCT_ID = "66666666-6666-4666-a666-666666666601";
 const STAFF_OWNER_ID = "99999999-9999-4999-a999-999999999992";
 const STAFF_OWNER_EMAIL = "owner-media@jodaparfums.com";
 const STAFF_PASSWORD = "correcta";
@@ -132,6 +134,24 @@ describe("WP-C09 · módulo medios (RF-CAT-08)", () => {
     await testDb.superuserClient.query(
       `INSERT INTO app.staff_user_roles (staff_user_id, role_id) VALUES ($1, $2)`,
       [STAFF_OWNER_ID, ownerRole.rows[0].id],
+    );
+
+    // Segundo tenant, con un producto propio insertado DIRECTO en la base
+    // (nunca a través de la sesión de STAFF_OWNER_ID, que es de TENANT_ID
+    // y no podría verlo por RLS ni para crearlo) — es el fixture del test
+    // de aislamiento cruzado de tenant más abajo (revisión cruzada del
+    // PR #48: product_media no tiene tenant_id propio, así que la
+    // protección tiene que venir de verificar el producto referenciado
+    // contra el tenant de la sesión ANTES de insertar).
+    await testDb.superuserClient.query(
+      `INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+       VALUES ($1, 'joda-c09-otro', 'Otro Tenant SRL', 'Otro Tenant')`,
+      [OTHER_TENANT_ID],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.products (id, tenant_id, kind, slug, name)
+       VALUES ($1, $2, 'perfume', 'producto-ajeno', 'Producto Ajeno')`,
+      [OTHER_TENANT_PRODUCT_ID, OTHER_TENANT_ID],
     );
 
     db = new PrismaClient({ datasourceUrl: jodaApiConnectionUrl(testDb.container) });
@@ -332,6 +352,72 @@ describe("WP-C09 · módulo medios (RF-CAT-08)", () => {
       headers: { "content-type": `multipart/form-data; boundary=${boundary}` },
       payload,
     });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().code).toBe("NOT_FOUND");
+  });
+
+  it("un productId de OTRO tenant se rechaza con 404, sin escribir nada en disco ni en la base (revisión cruzada del PR #48)", async () => {
+    const response = await uploadMedia(
+      { productId: OTHER_TENANT_PRODUCT_ID },
+      { filename: "foto.jpg", contentType: "image/jpeg", content: validJpeg },
+    );
+
+    expect(response.statusCode).toBe(404);
+    expect(response.json().code).toBe("NOT_FOUND");
+
+    const filesWritten = await readdir(mediaStorageDir).catch(() => []);
+    expect(filesWritten).toHaveLength(0);
+
+    const productMediaRowCount = await testDb.superuserClient.query(
+      `SELECT count(*)::int AS n FROM app.product_media WHERE product_id = $1`,
+      [OTHER_TENANT_PRODUCT_ID],
+    );
+    expect(productMediaRowCount.rows[0].n).toBe(0);
+  });
+
+  it("un variantId que existe pero pertenece a OTRO producto (mismo tenant) también se rechaza con 404", async () => {
+    const otherCategory = await mutateOk<{ id: string }>("catalog.category.create", {
+      slug: `otra-variante-${Date.now()}`,
+      name: "Otra para variante",
+    });
+    const otherOwnProduct = await mutateOk<{ id: string }>("catalog.product.create", {
+      kind: "perfume",
+      slug: `producto-hermano-${Date.now()}`,
+      name: "Producto Hermano",
+      categoryIds: [otherCategory.id],
+      primaryCategoryId: otherCategory.id,
+      perfumeDetails: {
+        concentration: "edp",
+        nominalVolumeMl: 100,
+        olfactoryFamily: "amaderado",
+        notesTop: [],
+        notesHeart: [],
+        notesBase: [],
+        isDecantable: true,
+        wasteFactor: 0.02,
+        unusableResidueMl: 2,
+        evaporationMlYear: 0.5,
+      },
+    });
+    const foreignVariant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: otherOwnProduct.id,
+      sku: `sku-hermano-${Date.now()}`,
+      variantType: "sealed",
+      uom: "unit",
+      sizeMl: 125,
+      pricePyg: "150000",
+    });
+
+    // `foreignVariant` es real y del mismo tenant — pero de OTRO producto
+    // que `productId`. product_media.variant_id no tiene ninguna FK que
+    // fuerce "la variante es de este producto" (packages/db/migrations/
+    // 0003_catalog.sql): la única barrera es variantBelongsToProduct
+    // (modules/media/repository.ts).
+    const response = await uploadMedia(
+      { productId, variantId: foreignVariant.id },
+      { filename: "foto.jpg", contentType: "image/jpeg", content: validJpeg },
+    );
 
     expect(response.statusCode).toBe(404);
     expect(response.json().code).toBe("NOT_FOUND");

@@ -97,11 +97,13 @@ async function main() {
   assertLocalDiskStorageAllowedInProduction(process.env.NODE_ENV);
   // Reusa SESSION_SECRET para firmar `storage.signedUrl()` — ninguna ruta de
   // este WP la invoca todavía (nada sirve contenido privado; las derivadas
-  // públicas de catálogo van sin firmar, mediaServer.ts). Cuando exista esa
-  // ruta (RF-CAT-09, borrador/publicado), separarla en su propia
-  // MEDIA_SIGNING_SECRET — mismo criterio que MFA_ENCRYPTION_KEY frente a
-  // SESSION_SECRET (WP-C04): un secreto por propósito, no compartido, en
-  // cuanto el propósito sea real.
+  // públicas de catálogo van sin firmar, mediaServer.ts). Cuando exista una
+  // ruta real que sirva contenido privado con URL firmada (revisión cruzada
+  // del PR #48: RF-CAT-09 es publicar/despublicar, no esto — todavía no hay
+  // un WP puntual para "servir borrador con URL firmada"), separar el
+  // secreto en su propia MEDIA_SIGNING_SECRET — mismo criterio que
+  // MFA_ENCRYPTION_KEY frente a SESSION_SECRET (WP-C04): un secreto por
+  // propósito, no compartido, en cuanto el propósito sea real.
   const storage = createLocalDiskStorage({
     rootDir: env.MEDIA_STORAGE_DIR,
     publicBaseUrl: env.MEDIA_PUBLIC_BASE_URL,
