@@ -24,16 +24,19 @@ import {
   createStaffSession,
   findRefreshTokenByHash,
   findStaffLoginByEmail,
+  getGrantedPermissionCodes,
   getStaffUserProfile,
   insertRefreshToken,
   revokeStaffSession,
   touchStaffSession,
   type StaffUserProfileRow,
 } from "./repository.js";
+import { getCachedPermissions, setCachedPermissions } from "./permissionCache.js";
 import {
   deleteCachedStaffSession,
   getCachedStaffSession,
   setCachedStaffSession,
+  type CachedStaffSession,
 } from "./sessionCache.js";
 
 // Orquestación de la sesión de personal (WP-C03, docs/security-spec.md §4).
@@ -254,6 +257,32 @@ export interface ResolvedStaffSession {
   readonly audience: "staff";
   readonly sessionId: string;
   readonly mfaStatus: StaffMfaStatus;
+  /** WP-C05: nunca se guarda dentro del caché de sesión de 15 min — tiene su propio TTL de 60 s (permissionCache.ts), más corto a propósito. */
+  readonly grantedPermissions: ReadonlySet<string>;
+}
+
+/**
+ * Resuelve el set de permisos del usuario, SIEMPRE con su propio caché de
+ * 60 s (permissionCache.ts) — nunca a partir del caché de sesión de 15 min,
+ * cuyo hit/miss no tiene relación con cuándo cambió un rol. Se llama en
+ * cada resolución de sesión (WP-C05, docs/security-spec.md §3.2), no solo
+ * cuando el procedimiento efectivamente exige un permiso: es el mismo costo
+ * que ya paga `mfaStatus` (WP-C04) por resolverse siempre, no por ruta.
+ */
+async function resolveGrantedPermissions(
+  deps: AuthServiceDeps,
+  session: { readonly userId: string; readonly tenantId: string },
+): Promise<ReadonlySet<string>> {
+  const cached = await getCachedPermissions(deps.redis, session.userId);
+  if (cached) return new Set(cached);
+
+  const codes = await withTenantTx(
+    deps.db,
+    { userId: session.userId, tenantId: session.tenantId, audience: "staff" },
+    (tx) => getGrantedPermissionCodes(tx, session.userId),
+  );
+  await setCachedPermissions(deps.redis, session.userId, codes);
+  return new Set(codes);
 }
 
 /**
@@ -287,7 +316,8 @@ export async function resolveRequestSession(
 ): Promise<ResolvedStaffSession | null> {
   const cached = await getCachedStaffSession(deps.redis, cookie.sessionId);
   if (cached) {
-    return { ...cached, sessionId: cookie.sessionId };
+    const grantedPermissions = await resolveGrantedPermissions(deps, cached);
+    return { ...cached, sessionId: cookie.sessionId, grantedPermissions };
   }
 
   const tokenHash = hashRefreshSecret(cookie.secret);
@@ -321,16 +351,24 @@ export async function resolveRequestSession(
     return null;
   }
 
-  const resolved: ResolvedStaffSession = {
+  // No se cachea `grantedPermissions` acá adentro: `cacheable` es
+  // exactamente la forma de CachedStaffSession (TTL 15 min). Mezclar los
+  // permisos en esa misma entrada les pegaría el TTL largo, contradiciendo
+  // los 60 s de permissionCache.ts.
+  const cacheable: CachedStaffSession = {
     userId: lookup.staffUserId,
     tenantId: lookup.tenantId,
     audience: "staff",
-    sessionId: lookup.sessionId,
     mfaStatus: resolveStaffMfaStatus({
       mfaEnrolled: lookup.mfaEnrolled,
       sessionVerifiedAt: lookup.sessionMfaVerifiedAt?.getTime() ?? null,
     }),
   };
-  await setCachedStaffSession(deps.redis, lookup.sessionId, resolved);
-  return resolved;
+  await setCachedStaffSession(deps.redis, lookup.sessionId, cacheable);
+
+  const grantedPermissions = await resolveGrantedPermissions(deps, {
+    userId: lookup.staffUserId,
+    tenantId: lookup.tenantId,
+  });
+  return { ...cacheable, sessionId: lookup.sessionId, grantedPermissions };
 }

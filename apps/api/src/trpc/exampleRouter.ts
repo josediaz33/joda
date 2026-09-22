@@ -12,7 +12,7 @@ import {
   paginationInputSchema,
 } from "@joda/contracts";
 import { z } from "zod";
-import { procedure, router } from "./trpc.js";
+import { router, staffProcedure } from "./trpc.js";
 
 export const pingItemSchema = z
   .object({
@@ -30,7 +30,15 @@ const PING_ITEM = {
 
 export const exampleRouter = router({
   ping: router({
-    list: procedure
+    // `permissionExempt`: scaffolding de transporte (WP-C01), no una acción
+    // de negocio real — no hay un permiso del catálogo que tenga sentido
+    // exigirle. mfa.integration.test.ts (WP-C04) lo usa como "cualquier
+    // procedimiento de negocio" para probar que el gate de MFA es
+    // estructural, con una sesión ya autenticada y sin ningún rol asignado
+    // — tiene que seguir respondiendo 200 una vez satisfecho el segundo
+    // factor, no empezar a devolver 404 por falta de permiso.
+    list: staffProcedure
+      .meta({ permissionExempt: true })
       .input(paginationInputSchema)
       .output(paginatedOutputSchema(pingItemSchema))
       .query(({ input }) => ({
@@ -46,7 +54,7 @@ export const exampleRouter = router({
     // esto prueba el circuito completo Fastify → tRPC → middleware →
     // errorFormatter sin necesitarla. No se monta ninguna lógica de negocio
     // acá.
-    failWithCheckViolation: procedure.mutation(() => {
+    failWithCheckViolation: staffProcedure.meta({ permissionExempt: true }).mutation(() => {
       throw Object.assign(new Error('new row for relation "x" violates check constraint'), {
         code: "23514",
       });
@@ -57,9 +65,19 @@ export const exampleRouter = router({
     // `errorFormatter` de trpc.ts enmascara CUALQUIER error no traducido con
     // un mensaje genérico en español, no solo los que reconoce PG_ERROR_MAP
     // (docs/api-conventions.md §4.4, "ni siquiera traducido a medias").
-    failWithBug: procedure.mutation(() => {
+    failWithBug: staffProcedure.meta({ permissionExempt: true }).mutation(() => {
       throw new Error("detalle interno que no debe llegar al cliente");
     }),
+
+    // Solo para el test de integración del middleware de permisos (WP-C05,
+    // apps/api/src/modules/auth/permission.integration.test.ts): un
+    // procedimiento cualquiera con `meta.permission` real, para poder probar
+    // granted/403/404 sin depender de que ya exista un módulo de negocio de
+    // verdad (bloque C, todavía casi todo pendiente en docs/backlog.md).
+    requiresPermission: staffProcedure
+      .meta({ permission: "catalog.product:read" })
+      .output(z.object({ ok: z.literal(true) }).strict())
+      .query(() => ({ ok: true as const })),
   }),
 });
 

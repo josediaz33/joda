@@ -9,7 +9,7 @@ import {
   staffSessionRefreshOutput,
 } from "@joda/contracts";
 import { appError, toTRPCError } from "../../middleware/errorMapper.js";
-import { procedure, router } from "../../trpc/trpc.js";
+import { router, staffProcedure } from "../../trpc/trpc.js";
 import { LOCKOUT_WINDOW_SECONDS } from "./bruteForceGuard.js";
 import {
   clearStaffSessionCookie,
@@ -29,15 +29,10 @@ import {
 import type { RequestContext } from "../../trpc/context.js";
 
 // auth.session.{login,refresh,logout} (WP-C03, docs/api-conventions.md §2:
-// módulo "auth", recurso "session"). Ninguno declara `meta.permission`
-// (docs/api-conventions.md §9) — no por descuido, sino porque los tres son
-// el mecanismo POR EL QUE se obtiene una sesión, no una acción que requiera
-// una ya existente. El mismo matiz que dejó abierto la revisión cruzada de
-// WP-C01 para `example.ping` (docs/backlog.md): quien implemente WP-C05
-// tiene que decidir si el chequeo "todo procedimiento declara permiso"
-// exceptúa este router entero o si login/refresh/logout necesitan su propio
-// tipo de procedimiento (`publicProcedure`/`sessionProcedure`) que quede
-// afuera de esa regla por construcción.
+// módulo "auth", recurso "session"). Los tres declaran `permissionExempt:
+// true` (WP-C05, trpc/trpc.ts) — no por descuido, sino porque son el
+// mecanismo POR EL QUE se obtiene una sesión, no una acción que requiera una
+// ya existente: exigirles un permiso de negocio sería circular.
 const GENERIC_LOGIN_ERROR = appError(
   "UNAUTHENTICATED_INVALID_CREDENTIALS",
   401,
@@ -135,7 +130,8 @@ function requireDeps(deps: AuthServiceDeps | null): AuthServiceDeps {
 export function createAuthRouter(deps: AuthServiceDeps | null) {
   return router({
     session: router({
-      login: procedure
+      login: staffProcedure
+        .meta({ permissionExempt: true })
         .input(staffLoginInput)
         .output(staffSessionProfile)
         .mutation(async ({ input, ctx }) => {
@@ -157,8 +153,8 @@ export function createAuthRouter(deps: AuthServiceDeps | null) {
       // efectivamente llegó firmado (modules/auth/cookie.ts). `mfaExempt`:
       // una sesión con el segundo factor pendiente sigue necesitando poder
       // refrescar su token de 8 h mientras completa la inscripción/desafío.
-      refresh: procedure
-        .meta({ mfaExempt: true })
+      refresh: staffProcedure
+        .meta({ mfaExempt: true, permissionExempt: true })
         .output(staffSessionRefreshOutput)
         .mutation(async ({ ctx }) => {
           const cookie = readStaffSessionCookie(ctx.req);
@@ -181,8 +177,8 @@ export function createAuthRouter(deps: AuthServiceDeps | null) {
       // reintentando un logout que ya se aplicó no debería ver un 401).
       // `mfaExempt`: salir tiene que funcionar sin importar en qué estado de
       // MFA haya quedado atascada la sesión.
-      logout: procedure
-        .meta({ mfaExempt: true })
+      logout: staffProcedure
+        .meta({ mfaExempt: true, permissionExempt: true })
         .output(staffLogoutOutput)
         .mutation(async ({ ctx }) => {
           const activeSession =
@@ -199,12 +195,12 @@ export function createAuthRouter(deps: AuthServiceDeps | null) {
     // auth.mfa.{enroll,confirmEnroll,verify} (WP-C04, docs/api-conventions.md
     // §2: módulo "auth", recurso "mfa"). Los tres declaran `mfaExempt: true`
     // a propósito: SON el mecanismo por el que una sesión sale de
-    // `pending_enrollment`/`pending_verification` — igual que
-    // auth.session.login no necesita el permiso que WP-C05 va a exigirle a
-    // todo lo demás.
+    // `pending_enrollment`/`pending_verification` — y `permissionExempt:
+    // true` (WP-C05) por la misma razón que auth.session.login: completar el
+    // segundo factor no es una acción de negocio con un permiso propio.
     mfa: router({
-      enroll: procedure
-        .meta({ mfaExempt: true })
+      enroll: staffProcedure
+        .meta({ mfaExempt: true, permissionExempt: true })
         .output(mfaEnrollOutput)
         .mutation(async ({ ctx }) => {
           const session = requireActiveSession(ctx);
@@ -213,8 +209,8 @@ export function createAuthRouter(deps: AuthServiceDeps | null) {
           return result.value;
         }),
 
-      confirmEnroll: procedure
-        .meta({ mfaExempt: true })
+      confirmEnroll: staffProcedure
+        .meta({ mfaExempt: true, permissionExempt: true })
         .input(mfaConfirmEnrollInput)
         .output(mfaActionOutput)
         .mutation(async ({ ctx, input }) => {
@@ -239,8 +235,8 @@ export function createAuthRouter(deps: AuthServiceDeps | null) {
           return result.value;
         }),
 
-      verify: procedure
-        .meta({ mfaExempt: true })
+      verify: staffProcedure
+        .meta({ mfaExempt: true, permissionExempt: true })
         .input(mfaVerifyInput)
         .output(mfaActionOutput)
         .mutation(async ({ ctx, input }) => {

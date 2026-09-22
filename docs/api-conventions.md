@@ -104,21 +104,22 @@ export const moneySchema = z.object({
 
 ### 4.2 Códigos por familia
 
-| Prefijo           | Situación                                                      | HTTP |
-| ----------------- | -------------------------------------------------------------- | ---- |
-| `VALIDATION_*`    | Entrada inválida                                               | 400  |
-| `UNAUTHENTICATED` | Sin sesión                                                     | 401  |
-| `NOT_FOUND`       | Recurso inexistente **o sin permiso en rutas administrativas** | 404  |
-| `CONFLICT_*`      | Estado incompatible (stock, transición, concurrencia)          | 409  |
-| `RATE_LIMITED`    | Límite excedido                                                | 429  |
-| `EXTERNAL_*`      | Falla de proveedor externo                                     | 502  |
-| `INTERNAL`        | Bug                                                            | 500  |
+| Prefijo           | Situación                                                              | HTTP |
+| ----------------- | ---------------------------------------------------------------------- | ---- |
+| `VALIDATION_*`    | Entrada inválida                                                       | 400  |
+| `UNAUTHENTICATED` | Sin sesión                                                             | 401  |
+| `NOT_FOUND`       | Recurso inexistente **o sin permiso en rutas administrativas**         | 404  |
+| `FORBIDDEN_*`     | Con sesión y acceso al módulo, pero no a la acción exacta (§4.3, §9.2) | 403  |
+| `CONFLICT_*`      | Estado incompatible (stock, transición, concurrencia)                  | 409  |
+| `RATE_LIMITED`    | Límite excedido                                                        | 429  |
+| `EXTERNAL_*`      | Falla de proveedor externo                                             | 502  |
+| `INTERNAL`        | Bug                                                                    | 500  |
 
 ### 4.3 La regla del 404
 
 **Las rutas administrativas responden 404, no 403, ante falta de permiso.** Un 403 confirma que el endpoint existe y que hay algo que proteger.
 
-Excepción: dentro de una sesión de staff válida, si el usuario tiene acceso al módulo pero no a la acción concreta, sí corresponde 403 — ya sabe que el módulo existe y necesita un mensaje útil.
+Excepción: dentro de una sesión de staff válida, si el usuario tiene acceso al módulo pero no a la acción concreta, sí corresponde 403 — ya sabe que el módulo existe y necesita un mensaje útil. Qué cuenta exactamente como "el mismo módulo" está definido en §9.2, no acá.
 
 ### 4.4 Traducción de errores de base
 
@@ -294,13 +295,23 @@ export const salesRouter = router({
 
 ### 9.1 Segundo factor (WP-C04)
 
-Antes de que exista `meta.permission`, ya existe una barrera más temprana: `enforceMfaGate` (`apps/api/src/trpc/trpc.ts`) bloquea TODO procedimiento, de CUALQUIER módulo, mientras una sesión de personal tenga el segundo factor pendiente (`docs/security-spec.md` §4.3) — sin que el router de ese módulo tenga que hacer nada. Un procedimiento nuevo no necesita declarar nada para quedar cubierto; la excepción es explícita:
+Hay una barrera más temprana que `meta.permission`: `enforceMfaGate` (`apps/api/src/trpc/trpc.ts`) bloquea TODO procedimiento, de CUALQUIER módulo, mientras una sesión de personal tenga el segundo factor pendiente (`docs/security-spec.md` §4.3) — sin que el router de ese módulo tenga que hacer nada. Un procedimiento nuevo no necesita declarar nada para quedar cubierto; la excepción es explícita:
 
 ```ts
-enroll: procedure.meta({ mfaExempt: true }).mutation(...)
+enroll: staffProcedure.meta({ mfaExempt: true, permissionExempt: true }).mutation(...)
 ```
 
-`mfaExempt: true` es solo para el puñado de procedimientos que SON el mecanismo por el que una sesión sale de ese estado: `auth.session.refresh`/`logout` y `auth.mfa.*`. Ningún procedimiento de negocio debería necesitarlo.
+`mfaExempt: true` es solo para el puñado de procedimientos que SON el mecanismo por el que una sesión sale de ese estado: `auth.session.refresh`/`logout` y `auth.mfa.*`. Ningún procedimiento de negocio debería necesitarlo. Esos mismos procedimientos también declaran `permissionExempt: true` (WP-C05, §9 arriba): son el mecanismo de autenticación en sí, no una acción de negocio con un permiso propio — exigirles uno sería circular.
+
+### 9.2 Qué es un "módulo" para la excepción del 403
+
+La regla del 404 (§4.3) tiene una excepción: con sesión de personal válida, si el usuario tiene algún permiso del mismo **módulo** que el requerido pero no la acción exacta, corresponde 403, no 404 — ya sabe que el módulo existe. "Módulo" acá es el código de permiso completo **sin su último segmento** (todo antes de los `:`), no el primer segmento del catálogo de §2. Dos permisos son del mismo módulo si y solo si esa porción coincide carácter por carácter:
+
+- `sales.order:read` y `sales.order:write` → mismo módulo (`sales.order`) → 403 si falta uno y sobra el otro.
+- `market.purchase_order:read` y `market.purchase_order:approve` → mismo módulo (`market.purchase_order`) → 403.
+- `market.purchase_order:read` y `market.supplier:read` → módulos distintos (`market.purchase_order` ≠ `market.supplier`), aunque la matriz de §2.1 los agrupe visualmente bajo `market.*` → 404, no 403. La matriz agrupa para que la tabla se lea más corto; no redefine qué es un módulo para esta excepción.
+
+Implementado en `packages/domain/src/security/authorization.ts` (`decidePermissionAccess`), con esta forma exacta cubierta por test.
 
 ---
 

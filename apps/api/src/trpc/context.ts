@@ -30,6 +30,12 @@ export type Audience = "staff" | "customer" | "system";
 //   `trpc/trpc.ts` (`enforceMfaGate`) es el único lugar que lo lee para
 //   decidir si bloquea el procedimiento — ningún caso de uso de negocio
 //   debería tener que consultarlo.
+// - `grantedPermissions` (WP-C05, docs/security-spec.md §3.2) es `null` en
+//   los mismos casos que `mfaStatus` (sin sesión de personal) y, con
+//   sesión, el set de códigos que `modules/auth/service.ts`
+//   (`resolveRequestSession`) resuelve con SU PROPIO caché de Redis de 60 s
+//   (permissionCache.ts) — nunca a partir del caché de sesión de 15 min.
+//   `trpc/trpc.ts` (`enforcePermissionGate`) es el único lugar que lo lee.
 // - `req`/`res` son la petición/respuesta cruda de Fastify: auth.session.*
 //   (modules/auth/router.ts) los necesita para leer y escribir la cookie.
 //   Ningún caso de uso de negocio debería necesitar tocarlos — reciben
@@ -41,6 +47,7 @@ export interface RequestContext {
   audience: Audience | null;
   sessionId: string | null;
   mfaStatus: StaffMfaStatus | null;
+  grantedPermissions: ReadonlySet<string> | null;
   req: FastifyRequest;
   res: FastifyReply;
 }
@@ -66,6 +73,7 @@ export function buildCreateContext(deps: AuthServiceDeps | null) {
       audience: null,
       sessionId: null,
       mfaStatus: null,
+      grantedPermissions: null,
       req,
       res,
     };
@@ -85,6 +93,7 @@ export function buildCreateContext(deps: AuthServiceDeps | null) {
       audience: session.audience,
       sessionId: session.sessionId,
       mfaStatus: session.mfaStatus,
+      grantedPermissions: session.grantedPermissions,
     };
   };
 }
