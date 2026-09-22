@@ -20,6 +20,7 @@
     "eslint-config-prettier": "catalog:",
     "eslint-plugin-boundaries": "catalog:",
     "pg": "8.16.3",
+    "tough-cookie": "catalog:",
     "tsx": "4.23.13",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:",
@@ -27,12 +28,16 @@
   },
   "dependencies": {
     "@fastify/cookie": "catalog:",
+    "@fastify/multipart": "catalog:",
+    "@fastify/static": "catalog:",
     "@joda/contracts": "workspace:*",
     "@joda/db": "workspace:*",
     "@joda/domain": "workspace:*",
     "@trpc/server": "11.19.0",
     "fastify": "5.12.5",
+    "file-type": "catalog:",
     "ioredis": "catalog:",
+    "sharp": "catalog:",
     "zod": "4.6.5"
   }
 }

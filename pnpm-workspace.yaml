@@ -23,3 +23,8 @@ catalog:
   "@testcontainers/redis": 12.1.0
   ioredis: 6.0.0
   "@fastify/cookie": 11.1.2
+  "@fastify/multipart": 10.1.2
+  "@fastify/static": 10.1.4
+  sharp: 0.35.4
+  file-type: 22.1.1
+  tough-cookie: 6.0.2

@@ -3,15 +3,27 @@
 // el primer módulo de negocio real — WP-C03 (auth) es el primero.
 import fastifyCookie from "@fastify/cookie";
 import { fastifyTRPCPlugin } from "@trpc/server/adapters/fastify";
+import type { ObjectStorage } from "@joda/domain";
 import Fastify from "fastify";
 import { createRedisClient } from "./adapters/redisClient.js";
 import { createSupabasePasswordProvider } from "./adapters/staffAuth/supabasePasswordProvider.js";
+import {
+  assertLocalDiskStorageAllowedInProduction,
+  createLocalDiskStorage,
+} from "./adapters/storage/localDiskStorage.js";
 import { systemClock } from "./adapters/systemClock.js";
 import { loadEnv } from "./config/env.js";
 import { assertRlsNotBypassed, createPrismaClient } from "./db/client.js";
 import type { AuthServiceDeps } from "./modules/auth/service.js";
+import { registerMediaHttpRoutes } from "./modules/media/httpRoutes.js";
+import { buildMediaServer } from "./mediaServer.js";
 import { buildCreateContext } from "./trpc/context.js";
 import { createAppRouter, type AppRouter } from "./trpc/router.js";
+
+export interface MediaServerConfig {
+  readonly storage: ObjectStorage | null;
+  readonly mediaPublicBaseUrl: string | null;
+}
 
 /**
  * `authDeps`/`sessionCookieSecret` en `null` es el camino de
@@ -20,11 +32,15 @@ import { createAppRouter, type AppRouter } from "./trpc/router.js";
  * `AuthServiceDeps` a propósito — ningún caso de uso de modules/auth/service.ts
  * lo necesita (firmar la cookie es responsabilidad del plugin de Fastify,
  * apps/api/src/modules/auth/cookie.ts nunca ve el secreto directo), solo
- * hace falta acá, al registrar `@fastify/cookie`.
+ * hace falta acá, al registrar `@fastify/cookie`. `mediaConfig` sigue el
+ * mismo criterio (WP-C09): sin almacenamiento configurado, el proceso
+ * arranca igual — solo la ruta de subida de medios devuelve un 500 claro
+ * si alguien la usa (modules/media/httpRoutes.ts, `requireStorage`).
  */
 export function buildServer(
   authDeps: AuthServiceDeps | null = null,
   sessionCookieSecret: string | null = null,
+  mediaConfig: MediaServerConfig = { storage: null, mediaPublicBaseUrl: null },
 ) {
   const app = Fastify({ logger: true });
 
@@ -41,6 +57,13 @@ export function buildServer(
       router: createAppRouter(authDeps),
       createContext: buildCreateContext(authDeps),
     },
+  });
+
+  registerMediaHttpRoutes(app, {
+    db: authDeps?.db ?? null,
+    authDeps,
+    storage: mediaConfig.storage,
+    mediaPublicBaseUrl: mediaConfig.mediaPublicBaseUrl,
   });
 
   return app;
@@ -69,11 +92,38 @@ async function main() {
     mfaEncryptionKey: Buffer.from(env.MFA_ENCRYPTION_KEY, "hex"),
   };
 
-  const app = buildServer(authDeps, env.SESSION_SECRET);
+  // WP-C09: mismo criterio que assertRlsNotBypassed — un adaptador que no
+  // debería llegar a producción no arranca el proceso en silencio.
+  assertLocalDiskStorageAllowedInProduction(process.env.NODE_ENV);
+  // Reusa SESSION_SECRET para firmar `storage.signedUrl()` — ninguna ruta de
+  // este WP la invoca todavía (nada sirve contenido privado; las derivadas
+  // públicas de catálogo van sin firmar, mediaServer.ts). Cuando exista esa
+  // ruta (RF-CAT-09, borrador/publicado), separarla en su propia
+  // MEDIA_SIGNING_SECRET — mismo criterio que MFA_ENCRYPTION_KEY frente a
+  // SESSION_SECRET (WP-C04): un secreto por propósito, no compartido, en
+  // cuanto el propósito sea real.
+  const storage = createLocalDiskStorage({
+    rootDir: env.MEDIA_STORAGE_DIR,
+    publicBaseUrl: env.MEDIA_PUBLIC_BASE_URL,
+    signingSecret: env.SESSION_SECRET,
+  });
+
+  const app = buildServer(authDeps, env.SESSION_SECRET, {
+    storage,
+    mediaPublicBaseUrl: env.MEDIA_PUBLIC_BASE_URL,
+  });
+
+  // Segundo proceso Fastify, en el HOST de MEDIA_PUBLIC_BASE_URL — nunca el
+  // mismo host que `app` (env.ts ya lo validó al cargar `env`).
+  // docs/security-spec.md §5: "servidos desde dominio distinto al del
+  // admin". mediaServer.ts documenta por qué.
+  const mediaServer = buildMediaServer(env.MEDIA_STORAGE_DIR);
+  const mediaPort = Number(new URL(env.MEDIA_PUBLIC_BASE_URL).port || 80);
 
   try {
     await assertRlsNotBypassed(db);
     await app.listen({ port: env.PORT ?? 3333, host: "0.0.0.0" });
+    await mediaServer.listen({ port: mediaPort, host: "0.0.0.0" });
   } catch (error) {
     app.log.error(error);
     process.exit(1);

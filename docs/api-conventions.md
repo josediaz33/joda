@@ -8,6 +8,8 @@ Reglas para `apps/api`. Toda ruta nueva las cumple.
 
 **tRPC** para el backoffice y el storefront (tipado extremo a extremo desde `packages/contracts`). **REST** solo para lo que necesita ser consumido por terceros: webhooks entrantes y, eventualmente, integraciones.
 
+**Excepción documentada (WP-C09):** la carga de archivos (`modules/media/httpRoutes.ts`) tampoco es tRPC, pero no es "consumida por terceros" — es un caso distinto: tRPC transporta JSON, y un archivo es binario. `POST /media/products` es una ruta Fastify plana, registrada fuera de `/trpc` y fuera de `rest/webhooks/` (esa carpeta es para proveedores externos, no para esto). Para no quedar fuera de las garantías que sí tendría como procedimiento tRPC, reimplementa a mano — reusando las mismas piezas, no reescribiéndolas — todo lo demás que un procedimiento cumpliría: `meta.permission` (§9), el gate de segundo factor (§9.1), `Idempotency-Key` (§5) y el mapeo de errores de Postgres (§4.4). Si alguna vez se necesita un segundo endpoint binario, este es el patrón a seguir — no un tercero paralelo.
+
 ```
 apps/api/src/
 ├── modules/
@@ -15,9 +17,11 @@ apps/api/src/
 │       ├── router.ts       procedimientos tRPC — sin lógica
 │       ├── service.ts      casos de uso — orquesta, no calcula
 │       ├── repository.ts   acceso a datos — sin reglas de negocio
-│       └── mappers.ts      fila de base ↔ tipo de dominio
+│       ├── mappers.ts      fila de base ↔ tipo de dominio
+│       └── httpRoutes.ts   SOLO si el módulo necesita transporte binario (media/, WP-C09) — el resto no tiene este archivo
 ├── rest/
 │   └── webhooks/           endpoints REST para proveedores externos
+├── mediaServer.ts          segundo proceso Fastify, host distinto (docs/security-spec.md §5)
 ├── middleware/
 └── adapters/
 ```

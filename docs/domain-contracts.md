@@ -66,7 +66,8 @@ packages/domain/src/
 │   └── ports.ts             Clock, IdGenerator
 ├── catalog/
 │   ├── variant.ts           reglas de coherencia de variantes
-│   └── facets.ts            proyección de facetas desde detalles tipados
+│   ├── facets.ts            proyección de facetas desde detalles tipados
+│   └── media.ts             anchos/formatos de derivados, keys por hash (WP-C09)
 ├── inventory/
 │   ├── allocation.ts        selección de lotes por política
 │   ├── costing.ts           capas de costo, FIFO, promedio ponderado
@@ -99,7 +100,7 @@ packages/domain/src/
     ├── staffAuth.ts         StaffAuthProvider (WP-C03, primer puerto implementado)
     ├── fiscal.ts            FiscalProvider
     ├── payments.ts          PaymentProvider
-    └── storage.ts           ObjectStorage
+    └── storage.ts           ObjectStorage (WP-C09; adaptador real hoy: disco local — apps/api/src/adapters/storage/)
 ```
 
 ---

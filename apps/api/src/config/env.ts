@@ -54,6 +54,33 @@ const envSchema = z.object({
         "para cifrar el secreto TOTP de personal (docs/security-spec.md §4.3).",
     ),
   PORT: z.coerce.number().int().positive().optional(),
+  // WP-C09 (docs/security-spec.md §5, fila "Carga de archivos": "servidos
+  // desde dominio distinto al del admin"). `APP_URL` es el origen público
+  // de ESTE proceso — el que emite la cookie de sesión `__Host-joda_a`
+  // (modules/auth/cookie.ts): sin `Domain` explícito, esa cookie es
+  // host-only y un navegador jamás la manda a otro nombre de host, ni
+  // siquiera a un puerto distinto del mismo host (por diseño: RFC 6265, las
+  // cookies no se aíslan por puerto). Por eso la comparación de abajo es
+  // por HOSTNAME, no por origen completo.
+  APP_URL: z
+    .string()
+    .url(
+      "APP_URL es obligatoria: es el origen donde este proceso emite la cookie de sesión de " +
+        "personal (docs/security-spec.md §4.1), y MEDIA_PUBLIC_BASE_URL se valida contra su host.",
+    ),
+  MEDIA_STORAGE_DIR: z
+    .string()
+    .min(
+      1,
+      "MEDIA_STORAGE_DIR es obligatoria: raíz en disco del adaptador ObjectStorage de " +
+        "desarrollo (packages/domain/src/ports/storage.ts, WP-C09).",
+    ),
+  MEDIA_PUBLIC_BASE_URL: z
+    .string()
+    .url(
+      "MEDIA_PUBLIC_BASE_URL es obligatoria: origen público desde el que se sirven los " +
+        "derivados de catálogo (docs/security-spec.md §5).",
+    ),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -70,5 +97,20 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env): Env {
       .join(" ");
     throw new Error(`Configuración de entorno inválida: ${details}`);
   }
+
+  // No expresable como `.superRefine` sobre el propio schema: `z.string().url()`
+  // ya garantiza que ambos parsean como URL antes de que `new URL(...)` corra
+  // acá sin riesgo de tirar por un valor mal formado.
+  const appHost = new URL(result.data.APP_URL).hostname;
+  const mediaHost = new URL(result.data.MEDIA_PUBLIC_BASE_URL).hostname;
+  if (appHost === mediaHost) {
+    throw new Error(
+      "Configuración de entorno inválida: MEDIA_PUBLIC_BASE_URL tiene que resolver a un host " +
+        `distinto de APP_URL (ambos resuelven a "${appHost}") — docs/security-spec.md §5: servir ` +
+        "medios desde el mismo host que el admin anula el aislamiento de la cookie de sesión, " +
+        "aunque el puerto sea distinto.",
+    );
+  }
+
   return result.data;
 }
