@@ -75,18 +75,15 @@ const IDEMPOTENCY_KEY_REUSE_ERROR = appError(
  * reintento con la misma clave vuelve a encontrar "no existe" y reprocesa,
  * en vez de quedar en un estado que ni reintenta ni avanza.
  *
- * LÍMITE CONOCIDO, sin resolver acá (alcance del criterio de aceptación de
- * WP-C06: reintento SECUENCIAL, no concurrencia real): el SELECT de abajo no
- * toma ningún lock — dos requests con la misma clave, exactamente
- * simultáneas, pueden pasar las dos el `existingRow === null` antes de que
- * cualquiera confirme, y las dos ejecutar `fn`. La segunda en llegar al
- * INSERT choca contra el `UNIQUE (tenant_id, scope, key)` y recibe un
- * `23505` genérico (`CONFLICT_DUPLICATE`, `middleware/errorMapper.ts`), no
- * el `CONFLICT_IDEMPOTENCY_KEY_REUSE` con la respuesta ya guardada. Cerrarlo
- * de verdad pide serializar con `pg_advisory_xact_lock` (u otro mecanismo de
- * lock) sobre `(tenant_id, scope, key)` antes del SELECT — deliberadamente
- * no incluido acá; si un módulo real necesita esa garantía bajo concurrencia
- * real, es trabajo para ese WP.
+ * CONCURRENCIA: dos requests con la misma clave, exactamente simultáneas,
+ * podrían pasar las dos por el SELECT viendo "no existe" y ejecutar `fn` las
+ * dos — la segunda, al llegar al INSERT, chocaría contra el
+ * `UNIQUE (tenant_id, scope, key)` con un `23505` genérico en vez del `409`
+ * con la respuesta ya guardada. `pg_advisory_xact_lock`, más abajo, cierra
+ * esa carrera: serializa por `(tenant_id, scope, key)` ANTES del SELECT,
+ * transaction-scoped (se libera solo al COMMIT/ROLLBACK de esta misma
+ * transacción), así que la segunda transacción queda bloqueada ahí hasta
+ * que la primera termina, y recién entonces ve la fila ya committeada.
  */
 export async function withIdempotentTx<T>(
   db: PrismaClient,
@@ -99,6 +96,18 @@ export async function withIdempotentTx<T>(
       const { result, statusCode } = await fn(tx);
       return { result, statusCode, replayed: false };
     }
+
+    // `hashtextextended(texto, semilla)` da un `bigint` directo — el único
+    // tipo que acepta `pg_advisory_xact_lock`. La "semilla" (segundo
+    // argumento, `0`) es la sal del hash, no un TTL ni nada temporal: dos
+    // llamadas con el mismo texto y la misma semilla siempre dan la misma
+    // clave de lock. `hashtextextended`/`pg_advisory_xact_lock` son
+    // funciones de `pg_catalog`, siempre resolubles sin importar el
+    // `search_path` de la conexión (a diferencia de `citext`,
+    // packages/db/README.md hallazgo 9 — esa vive en `public` y necesita
+    // `USAGE` explícito).
+    const lockKey = `${ctx.tenantId}:${idempotency.scope}:${idempotency.key}`;
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
 
     const existingRow = await tx.idempotency_keys.findUnique({
       where: {

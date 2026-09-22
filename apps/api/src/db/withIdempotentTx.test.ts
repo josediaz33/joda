@@ -29,7 +29,16 @@ describe("withIdempotentTx (docs/api-conventions.md §5, WP-C06)", () => {
        VALUES ($1, 'joda-c06', 'JODA Parfums SRL', 'JODA Parfums')`,
       [TENANT_ID],
     );
-    db = new PrismaClient({ datasourceUrl: jodaApiConnectionUrl(testDb.container) });
+    // `connection_limit: 5` (no el default de 1 que usa withTenantTx.test.ts,
+    // que deliberadamente fuerza una única conexión física): el test de
+    // concurrencia de abajo necesita dos transacciones abiertas al mismo
+    // tiempo de verdad, cada una en su propia conexión — con solo una, la
+    // segunda ni siquiera podría empezar hasta que la primera termine, y el
+    // lock no tendría nada que probar. Ningún otro test de este archivo
+    // depende de una única conexión compartida.
+    db = new PrismaClient({
+      datasourceUrl: jodaApiConnectionUrl(testDb.container, { connection_limit: "5" }),
+    });
   }, 60_000);
 
   afterAll(async () => {
@@ -141,5 +150,58 @@ describe("withIdempotentTx (docs/api-conventions.md §5, WP-C06)", () => {
 
     expect(retried).toEqual({ result: { recovered: true }, statusCode: 200, replayed: false });
     expect(effectCalls).toBe(2);
+  });
+
+  it("docs/runbooks/prompts-playbook.md revisión cruzada de WP-C06 · dos llamadas concurrentes con la misma clave → el advisory lock las serializa, fn corre una sola vez", async () => {
+    const idempotency: IdempotencyRequest = {
+      scope: "api",
+      key: "concurrente",
+      requestHash: "hash-concurrente",
+    };
+    let effectCalls = 0;
+
+    let releaseFirstEffect: () => void = () => {};
+    const firstEffectCanFinish = new Promise<void>((resolve) => {
+      releaseFirstEffect = resolve;
+    });
+    let signalFirstEffectStarted: () => void = () => {};
+    const firstEffectStarted = new Promise<void>((resolve) => {
+      signalFirstEffectStarted = resolve;
+    });
+
+    // La primera llamada entra a fn y se queda ahí, con su transacción (y el
+    // advisory lock que tomó antes del SELECT) todavía abiertos.
+    const firstCall = withIdempotentTx(db, ACTOR, idempotency, async () => {
+      effectCalls += 1;
+      signalFirstEffectStarted();
+      await firstEffectCanFinish;
+      return { result: { orderId: "concurrente-1" }, statusCode: 200 };
+    });
+    await firstEffectStarted;
+
+    // La segunda arranca mientras la primera sigue adentro de fn: si el lock
+    // no sirviera, esta también entraría a fn ahora mismo. En vez de eso
+    // queda bloqueada en pg_advisory_xact_lock hasta que la primera termine.
+    const secondCall = withIdempotentTx(db, ACTOR, idempotency, async () => {
+      effectCalls += 1;
+      return { result: { orderId: "concurrente-2" }, statusCode: 200 };
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(effectCalls).toBe(1);
+
+    releaseFirstEffect();
+    const [first, second] = await Promise.all([firstCall, secondCall]);
+
+    expect(first).toEqual({
+      result: { orderId: "concurrente-1" },
+      statusCode: 200,
+      replayed: false,
+    });
+    expect(second).toEqual({
+      result: { orderId: "concurrente-1" },
+      statusCode: 200,
+      replayed: true,
+    });
+    expect(effectCalls).toBe(1);
   });
 });
