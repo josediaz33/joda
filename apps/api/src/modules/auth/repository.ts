@@ -232,3 +232,23 @@ export async function markSessionMfaVerified(
     data: { mfa_verified_at: input.verifiedAt },
   });
 }
+
+// ---------------------------------------------------------------------
+// Permisos (WP-C05, docs/security-spec.md §2). Corre DENTRO de
+// withTenantTx, igual que las lecturas de MFA de arriba: la sesión ya está
+// resuelta, así que RLS evalúa `roles.tenant_isolation` normalmente al
+// atravesar esa relación — `role_permissions`/`staff_user_roles` no tienen
+// `tenant_id` propio (packages/db/migrations/0002_identity_rbac.sql), así
+// que el aislamiento de tenant de esta consulta depende de tocar `roles`.
+// ---------------------------------------------------------------------
+export async function getGrantedPermissionCodes(
+  tx: TenantTx,
+  staffUserId: string,
+): Promise<readonly string[]> {
+  const rows = await tx.role_permissions.findMany({
+    where: { roles: { staff_user_roles: { some: { staff_user_id: staffUserId } } } },
+    select: { permission_code: true },
+    distinct: ["permission_code"],
+  });
+  return rows.map((row) => row.permission_code);
+}

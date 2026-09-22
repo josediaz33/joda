@@ -2,3 +2,4 @@
 // que no son "el negocio de perfumería" pero sí son cálculo puro (WP-C03).
 export * from "./refreshToken.js";
 export * from "./totp.js";
+export * from "./authorization.js";
