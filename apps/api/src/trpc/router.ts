@@ -1,6 +1,6 @@
 import { createAuthRouter } from "../modules/auth/router.js";
 import type { AuthServiceDeps } from "../modules/auth/service.js";
-import { exampleRouter } from "./exampleRouter.js";
+import { createExampleRouter } from "./exampleRouter.js";
 import { router } from "./trpc.js";
 
 // Los módulos de negocio (catálogo, inventario, ventas, ...) se agregan acá
@@ -8,10 +8,12 @@ import { router } from "./trpc.js";
 // primero: es una función, no un objeto estático, porque createAuthRouter
 // necesita el Postgres/Redis/StaffAuthProvider reales de apps/api/src/index.ts
 // (AppRouter, el TYPE, sí se puede derivar sin invocar la función con
-// argumentos reales — ver `ReturnType` abajo).
+// argumentos reales — ver `ReturnType` abajo). `example` (WP-C06) también
+// pasó a ser factory: su procedimiento `irreversibleEffect` necesita el
+// mismo `db` que `authDeps`, no uno propio.
 export function createAppRouter(authDeps: AuthServiceDeps | null) {
   return router({
-    example: exampleRouter,
+    example: createExampleRouter(authDeps?.db ?? null),
     auth: createAuthRouter(authDeps),
   });
 }

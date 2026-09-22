@@ -1,0 +1,176 @@
+import type { Prisma, PrismaClient } from "@joda/db";
+import { decideIdempotencyOutcome } from "@joda/domain";
+import { appError, toTRPCError } from "../middleware/errorMapper.js";
+import { withTenantTx, type TenantTx, type TenantTxContext } from "./withTenantTx.js";
+
+/**
+ * `(tenant_id, scope, key)` identifica la operación (docs/api-conventions.md
+ * §5) — `scope` distingue de qué mecanismo viene la clave (`"api"` para
+ * mutaciones de tRPC, distinto de `payment_events` de webhooks, §5.1, que ni
+ * siquiera usa esta tabla). `requestHash` es lo que detecta el reuso de
+ * clave con un cuerpo distinto.
+ *
+ * El comentario de `packages/db/migrations/0002_identity_rbac.sql` que crea
+ * `idempotency_keys` la describe para "webhooks de pago, mutaciones offline
+ * del admin" — quedó desactualizado frente a docs/api-conventions.md §5.1
+ * (los webhooks usan `payment_events`, no esta tabla) y no se corrige acá
+ * porque es una migración ya aplicada (`.claude/rules/database.md`: nunca se
+ * edita una, ni siquiera un comentario). Esta tabla es para `scope: "api"`
+ * (mutaciones de tRPC) y para el outbox offline del admin cuando exista
+ * (docs/engineering-principles.md, "Patrón de bandeja de salida") — nunca
+ * para webhooks.
+ */
+export interface IdempotencyRequest {
+  readonly scope: string;
+  readonly key: string;
+  readonly requestHash: string;
+}
+
+/**
+ * `result` viaja tal cual a la columna `jsonb` de `idempotency_keys`
+ * (`response: result as Prisma.InputJsonValue` más abajo, sin validar en
+ * runtime) — tiene que ser ya JSON-seguro cuando `fn` lo devuelve, la MISMA
+ * forma que el `.output()` Zod del procedimiento espera. En particular,
+ * dinero: `docs/api-conventions.md` §3 exige que los importes viajen como
+ * `string` en la frontera, nunca como `number` ni como `bigint` de
+ * `packages/domain` — pasar un `Money`/`bigint` sin convertir acá revienta
+ * la serialización a `jsonb` (o, peor, la deja pasar y corrompe el replay).
+ * Conversión que le toca al `service` que arma `result`, no a esta función.
+ */
+export interface IdempotentEffectResult<T> {
+  readonly result: T;
+  readonly statusCode: number;
+}
+
+export interface WithIdempotentTxResult<T> {
+  readonly result: T;
+  readonly statusCode: number;
+  /** `true` si la respuesta vino de `idempotency_keys` — `fn` NO se ejecutó. */
+  readonly replayed: boolean;
+}
+
+const IDEMPOTENCY_KEY_REUSE_ERROR = appError(
+  "CONFLICT_IDEMPOTENCY_KEY_REUSE",
+  409,
+  "Ya se usó esta clave de idempotencia con un contenido distinto.",
+);
+
+/**
+ * Envoltorio de `withTenantTx` (WP-C02) para mutaciones con efecto
+ * irreversible (docs/api-conventions.md §5). No es un middleware global: el
+ * llamador decide si pasa `idempotency` o `null` — sin clave, corre `fn` sin
+ * más, exactamente como `withTenantTx` solo (trampa explícita de la Sesión
+ * 26 del playbook: "no es un middleware global sobre toda mutación").
+ *
+ * A propósito, y a diferencia de `enforcePermissionGate` (WP-C05,
+ * `trpc/trpc.ts`), NO hay ningún gate que obligue a un procedimiento nuevo a
+ * llamar esto — nada falla en el arranque si un mutador irreversible se
+ * escribe contra `withTenantTx` directo y se olvida de la idempotencia. Cada
+ * módulo de negocio que agregue una mutación de este tipo tiene que
+ * acordarse solo, con su propio WP como el lugar donde se revisa.
+ *
+ * El registro en `idempotency_keys` se inserta DENTRO de esta misma
+ * transacción, después de que `fn` corrió: si `fn` (o el INSERT) falla, todo
+ * el `$transaction` de Prisma hace rollback y la clave no queda quemada — un
+ * reintento con la misma clave vuelve a encontrar "no existe" y reprocesa,
+ * en vez de quedar en un estado que ni reintenta ni avanza.
+ *
+ * CONCURRENCIA: dos requests con la misma clave, exactamente simultáneas,
+ * podrían pasar las dos por el SELECT viendo "no existe" y ejecutar `fn` las
+ * dos — la segunda, al llegar al INSERT, chocaría contra el
+ * `UNIQUE (tenant_id, scope, key)` con un `23505` genérico en vez del `409`
+ * con la respuesta ya guardada. `pg_advisory_xact_lock`, más abajo, cierra
+ * esa carrera: serializa por `(tenant_id, scope, key)` ANTES del SELECT,
+ * transaction-scoped (se libera solo al COMMIT/ROLLBACK de esta misma
+ * transacción), así que la segunda transacción queda bloqueada ahí hasta
+ * que la primera termina, y recién entonces ve la fila ya committeada.
+ *
+ * Ese bloqueo cuenta contra el `timeout` de la transacción interactiva de
+ * Prisma (5 s por defecto, sin configurar acá ni en `withTenantTx`): si dos
+ * requests con la misma clave llegan de verdad simultáneas y la primera
+ * tarda en efecto lo que docs/api-conventions.md §8.3 ya prohíbe (llamar a
+ * un proveedor externo dentro de la transacción, esperar por la red), la
+ * segunda puede agotar el timeout esperando el lock y fallar con un error
+ * de Prisma (`P2028`) en vez de esperar y replicar. No es un caso nuevo que
+ * este archivo deba resolver — es la misma disciplina de "una transacción
+ * no debe esperar por la red" que ya exige §8.3, ahora con una razón más
+ * para cumplirla.
+ */
+export async function withIdempotentTx<T>(
+  db: PrismaClient,
+  ctx: TenantTxContext,
+  idempotency: IdempotencyRequest | null,
+  fn: (tx: TenantTx) => Promise<IdempotentEffectResult<T>>,
+): Promise<WithIdempotentTxResult<T>> {
+  return withTenantTx(db, ctx, async (tx) => {
+    if (idempotency === null) {
+      const { result, statusCode } = await fn(tx);
+      return { result, statusCode, replayed: false };
+    }
+
+    // `hashtextextended(texto, semilla)` da un `bigint` directo — el único
+    // tipo que acepta `pg_advisory_xact_lock`. La "semilla" (segundo
+    // argumento, `0`) es la sal del hash, no un TTL ni nada temporal: dos
+    // llamadas con el mismo texto y la misma semilla siempre dan la misma
+    // clave de lock. `hashtextextended`/`pg_advisory_xact_lock` son
+    // funciones de `pg_catalog`, siempre resolubles sin importar el
+    // `search_path` de la conexión (a diferencia de `citext`,
+    // packages/db/README.md hallazgo 9 — esa vive en `public` y necesita
+    // `USAGE` explícito).
+    //
+    // `JSON.stringify`, no `${a}:${b}:${c}`: un `key` con un ":" adentro (el
+    // cliente lo controla, `idempotency_keys.key` es `text` sin más
+    // restricción) correría el borde entre `scope` y `key` y podría hacer
+    // colisionar dos tuplas `(tenant_id, scope, key)` distintas en la misma
+    // clave de lock — solo un problema de contención entre pedidos ajenos
+    // (el SELECT/INSERT de abajo sigue distinguiéndolos bien, por columnas
+    // separadas), pero innecesario de arriesgar cuando serializar es gratis.
+    const lockKey = JSON.stringify([ctx.tenantId, idempotency.scope, idempotency.key]);
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+
+    const existingRow = await tx.idempotency_keys.findUnique({
+      where: {
+        tenant_id_scope_key: {
+          tenant_id: ctx.tenantId,
+          scope: idempotency.scope,
+          key: idempotency.key,
+        },
+      },
+      select: { request_hash: true, response: true, status_code: true },
+    });
+
+    const outcome = decideIdempotencyOutcome<T>({
+      existing: existingRow
+        ? {
+            requestHash: existingRow.request_hash,
+            response: existingRow.response as T,
+            statusCode: existingRow.status_code ?? 0,
+          }
+        : null,
+      requestHash: idempotency.requestHash,
+    });
+
+    if (outcome.kind === "conflict") throw toTRPCError(IDEMPOTENCY_KEY_REUSE_ERROR);
+    if (outcome.kind === "replay") {
+      return { result: outcome.response, statusCode: outcome.statusCode, replayed: true };
+    }
+
+    const { result, statusCode } = await fn(tx);
+    await tx.idempotency_keys.create({
+      data: {
+        tenant_id: ctx.tenantId,
+        scope: idempotency.scope,
+        key: idempotency.key,
+        request_hash: idempotency.requestHash,
+        response: result as Prisma.InputJsonValue,
+        status_code: statusCode,
+        // `completed_at` es metadata de observabilidad, no algo que
+        // `decideIdempotencyOutcome` lea o decida — a diferencia de
+        // `expiresAt` en modules/auth (docs/testing-strategy.md), no hace
+        // falta inyectar un Clock solo para este valor.
+        completed_at: new Date(),
+      },
+    });
+    return { result, statusCode, replayed: false };
+  });
+}
