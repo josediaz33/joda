@@ -9,9 +9,10 @@ import type {
 import { buildProductFacets, type ProductFacetInput } from "@joda/domain";
 import type { BomComponentRow, CategoryRow, ProductRow, TagRow, VariantRow } from "./repository.js";
 
-// Fila de base → DTO (docs/api-conventions.md §1.1, capa `mappers.ts`). Nada
-// de reglas de negocio acá — solo conversión de tipo: Decimal → number,
-// BigInt → string (pygAmountSchema), Date → ISO string.
+// Fila de base → DTO (docs/api-conventions.md §1, árbol de `modules/<dominio>/`
+// — `mappers.ts` es "fila de base ↔ tipo de dominio"). Nada de reglas de
+// negocio acá — solo conversión de tipo: Decimal → number, BigInt → string
+// (pygAmountSchema), Date → ISO string.
 function toDecimalNumber(value: { toNumber(): number } | null): number | null {
   return value === null ? null : value.toNumber();
 }
