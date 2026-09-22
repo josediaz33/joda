@@ -8,18 +8,28 @@ import type { TenantTx } from "./withTenantTx.js";
  * MISMO nombre que el procedimiento tRPC que la originó ("sales.order.confirm",
  * nunca una descripción libre): es lo que permite cruzar `audit_log` con
  * métricas de uso más adelante. `before`/`after` tienen que llegar ya
- * JSON-seguros — igual que `result` en withIdempotentTx.ts, sin ningún
- * `Money`/`bigint` de packages/domain sin convertir a `string` antes de acá.
+ * JSON-seguros — `Prisma.InputJsonValue` (a diferencia de `unknown`) rechaza
+ * en tiempo de compilación un `bigint` (el `Money` de packages/domain) suelto
+ * en cualquier nivel de anidamiento: convertilo a `string` antes de llamar
+ * acá, no adentro.
  */
 export interface AuditEntry {
+  /** Tiene que coincidir con el `tenantId` del `ctx` de la `withTenantTx` que envuelve esta llamada — RLS (`tenant_isolation`) lo hace cumplir igual: pasar otro valor tira, no queda mal atribuido en silencio. */
   readonly tenantId: string;
+  /**
+   * Tiene que coincidir con el `userId`/`audience` del `ctx` de la
+   * `withTenantTx` que envuelve esta llamada — a diferencia de `tenantId`,
+   * NADA lo hace cumplir (ni RLS ni una constraint): un valor que no
+   * corresponda queda mal atribuido en `audit_log` en silencio, sin que
+   * nada lo rechace. Responsabilidad del caller, no de esta función.
+   */
   readonly actorId: string | null;
   readonly audience: Audience;
   readonly action: string;
   readonly entity: string;
   readonly entityId: string | null;
-  readonly before: unknown;
-  readonly after: unknown;
+  readonly before: Prisma.InputJsonValue | null;
+  readonly after: Prisma.InputJsonValue | null;
   readonly ip: string | null;
   readonly userAgent: string | null;
   readonly requestId: string | null;
@@ -53,6 +63,7 @@ export interface AuditEntry {
  * `apps/api/src/db/`, junto a `withTenantTx`.
  */
 export async function recordAuditEntry(tx: TenantTx, entry: AuditEntry): Promise<void> {
+  const { before, after } = entry;
   await tx.audit_log.create({
     data: {
       tenant_id: entry.tenantId,
@@ -61,8 +72,8 @@ export async function recordAuditEntry(tx: TenantTx, entry: AuditEntry): Promise
       action: entry.action,
       entity: entry.entity,
       entity_id: entry.entityId,
-      ...(entry.before !== null && { before: entry.before as Prisma.InputJsonValue }),
-      ...(entry.after !== null && { after: entry.after as Prisma.InputJsonValue }),
+      ...(before !== null && { before }),
+      ...(after !== null && { after }),
       ip: entry.ip,
       user_agent: entry.userAgent,
       request_id: entry.requestId,
