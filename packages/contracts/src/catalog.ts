@@ -322,7 +322,12 @@ export const removeBomComponentOutput = z.object({ ok: z.literal(true) }).strict
 // tres verticales. `parentId` no se edita después de creada (re-parentar
 // implica recalcular el `path` materializado de todos los descendientes,
 // fuera del alcance de RF-CAT-03 — "administrar... orden y visibilidad", no
-// "mover"): para cambiar de padre, se archiva y se crea de nuevo.
+// "mover"). No hay un mecanismo de reemplazo dentro de este WP: `categories`
+// no tiene columna de estado (solo `is_visible`) y su router
+// (apps/api/src/modules/catalog/router.ts) no declara `archive` ni `delete`
+// — "crear una nueva y migrar productos a mano" es la única salida hoy, no
+// un flujo soportado por el sistema. Si reparentar termina haciendo falta,
+// es un WP propio (recalcular `path` en cascada sobre los descendientes).
 // ---------------------------------------------------------------------
 export const adminCategorySchema = z
   .object({
@@ -393,6 +398,21 @@ export const listTagsOutput = paginatedOutputSchema(adminTagSchema);
 // cada vertical llega al público — sin unión discriminada por kind del lado
 // público, porque el storefront no necesita el detalle tipado, solo mostrar
 // lo que packages/domain/src/catalog/facets.ts ya proyectó.
+//
+// publicProductSchema/publicVariantSchema NO TIENEN NINGÚN CONSUMIDOR
+// TODAVÍA — no hay un `publicProcedure` de catálogo en
+// apps/api/src/modules/catalog/router.ts (`publicProcedure` en sí no existe
+// como infraestructura en apps/api; solo `staffProcedure`, WP-C05) y el
+// storefront real (bloque G, posterior al corte) va a leer las vistas
+// `v_catalog_*` directamente con `joda_readonly`
+// (packages/db/migrations/0010_security_rls.sql), no tRPC — ver
+// docs/data-model.md §7 y AGENTS.md § "Solo apps/api escribe en la base...
+// el storefront lee vistas estables". Esto es andamiaje DELIBERADO: el
+// criterio de WP-C08 (docs/backlog.md) pide el contrato público con su test
+// de claves prohibidas, no un endpoint — para que cuando exista un
+// consumidor real (por tRPC o para describir la forma que esas vistas
+// tienen que respetar) la garantía de "nunca cost/landed/supplier/margin/
+// fx_rate" ya esté verificada, no se agregue recién en ese momento.
 // ---------------------------------------------------------------------
 export const publicProductSchema = z
   .object({
@@ -428,9 +448,11 @@ const adminProductBase = z.object({
 
 // costSummary/supplierRefs del ejemplo de docs/api-conventions.md §7 no
 // aparecen acá TODAVÍA: el costo real vive en inventory_lots /
-// movement_cost_allocations (bloque C, WP-C10 en adelante, no C08) — no hay
-// dato real que exponer hasta que ese módulo exista. adminProduct.test.ts
-// (claves prohibidas) sigue protegiendo publicProduct para cuando sí lo haya.
+// movement_cost_allocations, y el primer procedimiento que lo expone por API
+// es WP-C10 ("RF-INV-05: consultar el historial de movimientos de un lote,
+// con su costo", docs/especificacion-software.md §2.2) — no C08, no hay dato
+// real que exponer hasta que ese WP puntual exista. catalog.test.ts (claves
+// prohibidas) sigue protegiendo publicProduct para cuando sí lo haya.
 export const adminProductSchema = z.discriminatedUnion("kind", [
   adminProductBase
     .extend({ kind: z.literal("perfume"), perfumeDetails: adminPerfumeDetailsSchema })

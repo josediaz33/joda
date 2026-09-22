@@ -176,7 +176,11 @@ Se generan dos filas en `movement_cost_allocations`. El COGS de la venta es 4.35
 
 `bom_components.parent_variant_id` tiene que ser una variante `variant_type = 'decant'`. No es un `CHECK` de `packages/db` (`bom_components` no conoce el `variant_type` de la variante que referencia sin un `JOIN`) — lo hace cumplir la API, en `catalog.bom.create`, antes de insertar.
 
-**Por qué.** Un sellado o un granel no consumen insumos propios: el sellado se vende tal cual viene del proveedor, y el granel es el origen que un decant consume vía `source_variant_id` (RN-FRA-07), no un producto con su propio BOM. Confirmado como regla de negocio explícita al implementar WP-C08 (no estaba escrito hasta esta aclaración, mismo criterio que RN-LOT-02).
+**Por qué.** Un sellado o un granel no consumen insumos propios: el sellado se vende tal cual viene del proveedor, y el granel es el origen que un decant consume vía `source_variant_id` (RN-FRA-07), no un producto con su propio BOM.
+
+**Procedencia.** No es una regla que esta sesión haya confirmado con el dueño del negocio — viene explícita como trampa de la Sesión 28 de `docs/runbooks/prompts-playbook.md` ("El BOM (RF-CAT-07) es de una variante FRACCIONADA — no confundir con las variantes sellado/granel sin BOM") al encargar WP-C08, y no estaba escrita en ningún otro documento hasta esta aclaración. Corregido acá tras la revisión cruzada de WP-C08, que señaló que la redacción anterior ("confirmado... al implementar") sugería una confirmación de negocio que no ocurrió.
+
+**Zona gris sin resolver.** La regla de arriba restringe el `variant_type` del PADRE (`parent_variant_id`), no el del `component_variant_id` — hoy nada impide vincular como insumo, por ejemplo, otra variante `sealed`. Ni RF-CAT-07 ni ningún documento existente declaran una restricción sobre el tipo del componente, así que `catalog.bom.create` (WP-C08) no la valida. Señalado en la revisión cruzada de WP-C08 como algo a preguntar, no a asumir.
 
 ---
 

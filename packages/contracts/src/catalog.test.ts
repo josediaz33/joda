@@ -36,12 +36,30 @@ interface IntrospectableSchema {
   readonly unwrap?: () => unknown;
 }
 
+// Único lugar donde el recorrido admite terminar sin bajar más: hojas SIN
+// claves propias, confirmadas una por una. Cualquier `def.type` que no esté
+// ni acá ni en el switch de abajo hace que collectSchemaKeys explote — a
+// propósito (ver el comentario de la función): si una migración de Zod
+// renombra un tipo interno que el recorrido no reconoce, la alternativa
+// (tratarlo como hoja por default) dejaría el test de claves prohibidas en
+// verde sin haber recorrido nada, exactamente el falso negativo que este
+// archivo existe para evitar.
+const RECOGNIZED_LEAF_TYPES = new Set([
+  "record", // jsonb sin forma fija (facets/seo) — sin claves propias que recorrer
+  "enum",
+  "string",
+  "number",
+  "boolean",
+  "literal",
+]);
+
 /**
  * Recorre la FORMA del esquema (no una instancia parseada) para que un campo
  * opcional que un ejemplo de test no llegue a poblar no se escape sin
  * revisar. Cubre los constructores que usan los esquemas de este archivo —
- * object/array/nullable/optional/record/union — no es un recorrido genérico
- * de todo Zod.
+ * object/array/nullable/optional/union, más las hojas de RECOGNIZED_LEAF_TYPES
+ * — no es un recorrido genérico de todo Zod, y falla fuerte (no en silencio)
+ * ante cualquier otro `def.type`.
  */
 function collectSchemaKeys(schema: unknown, keys: Set<string> = new Set()): Set<string> {
   const { def, shape, unwrap } = schema as IntrospectableSchema;
@@ -64,8 +82,14 @@ function collectSchemaKeys(schema: unknown, keys: Set<string> = new Set()): Set<
       for (const option of def.options ?? []) collectSchemaKeys(option, keys);
       break;
     default:
-      // record (jsonb sin forma fija), enum, string, number, boolean,
-      // literal: sin claves propias que recorrer.
+      if (!RECOGNIZED_LEAF_TYPES.has(def.type)) {
+        throw new Error(
+          `collectSchemaKeys: def.type "${def.type}" no reconocido. Puede ser un tipo de Zod nuevo ` +
+            `que este recorrido todavía no sabe atravesar (revisar si tiene claves propias que ` +
+            `recorrer) o una hoja legítima que falta agregar a RECOGNIZED_LEAF_TYPES — de cualquier ` +
+            `forma, NO ignorarlo: eso es lo que dejaba pasar claves prohibidas sin detectarlas.`,
+        );
+      }
       break;
   }
 
