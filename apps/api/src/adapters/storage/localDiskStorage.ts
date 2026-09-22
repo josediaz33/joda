@@ -1,12 +1,11 @@
 // Adaptador de desarrollo de ObjectStorage (packages/domain/src/ports/storage.ts,
 // WP-C09). Escribe en disco bajo MEDIA_STORAGE_DIR — el destino real de
-// producción es Supabase Storage (decisión posterior a la que originalmente
-// apuntaba a Cloudflare R2; se formaliza en un ADR aparte, fuera de esta
-// rama). Ningún WP construyó todavía ese adaptador, así que
-// assertLocalDiskStorageAllowedInProduction() más abajo es lo que impide que
-// este, el único que existe hoy, termine sirviendo en producción por default
-// silencioso — mismo criterio que assertRlsNotBypassed (apps/api/src/db/client.ts,
-// WP-C02).
+// producción es Supabase Storage (ADR-025, que reemplazó la referencia
+// original a Cloudflare R2 de ADR-004). Ningún WP construyó todavía ese
+// adaptador, así que assertLocalDiskStorageAllowedInProduction() más abajo
+// es lo que impide que este, el único que existe hoy, termine sirviendo en
+// producción por default silencioso — mismo criterio que assertRlsNotBypassed
+// (apps/api/src/db/client.ts, WP-C02).
 import { createHmac } from "node:crypto";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, normalize, relative, sep } from "node:path";
@@ -90,8 +89,8 @@ export function assertLocalDiskStorageAllowedInProduction(nodeEnv: string | unde
     throw new Error(
       "El adaptador de almacenamiento en disco local no puede usarse con NODE_ENV=production " +
         "(apps/api/src/adapters/storage/localDiskStorage.ts, WP-C09): no sobrevive un redeploy " +
-        "ni escala a más de un proceso. El adaptador de producción (Supabase Storage) todavía " +
-        "no existe — ver el ADR pendiente sobre el reemplazo de Cloudflare R2.",
+        "ni escala a más de un proceso. El adaptador de producción (Supabase Storage, ADR-025) " +
+        "todavía no existe.",
     );
   }
 }
