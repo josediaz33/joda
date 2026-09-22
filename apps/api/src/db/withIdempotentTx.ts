@@ -84,6 +84,17 @@ const IDEMPOTENCY_KEY_REUSE_ERROR = appError(
  * transaction-scoped (se libera solo al COMMIT/ROLLBACK de esta misma
  * transacción), así que la segunda transacción queda bloqueada ahí hasta
  * que la primera termina, y recién entonces ve la fila ya committeada.
+ *
+ * Ese bloqueo cuenta contra el `timeout` de la transacción interactiva de
+ * Prisma (5 s por defecto, sin configurar acá ni en `withTenantTx`): si dos
+ * requests con la misma clave llegan de verdad simultáneas y la primera
+ * tarda en efecto lo que docs/api-conventions.md §8.3 ya prohíbe (llamar a
+ * un proveedor externo dentro de la transacción, esperar por la red), la
+ * segunda puede agotar el timeout esperando el lock y fallar con un error
+ * de Prisma (`P2028`) en vez de esperar y replicar. No es un caso nuevo que
+ * este archivo deba resolver — es la misma disciplina de "una transacción
+ * no debe esperar por la red" que ya exige §8.3, ahora con una razón más
+ * para cumplirla.
  */
 export async function withIdempotentTx<T>(
   db: PrismaClient,
@@ -106,7 +117,15 @@ export async function withIdempotentTx<T>(
     // `search_path` de la conexión (a diferencia de `citext`,
     // packages/db/README.md hallazgo 9 — esa vive en `public` y necesita
     // `USAGE` explícito).
-    const lockKey = `${ctx.tenantId}:${idempotency.scope}:${idempotency.key}`;
+    //
+    // `JSON.stringify`, no `${a}:${b}:${c}`: un `key` con un ":" adentro (el
+    // cliente lo controla, `idempotency_keys.key` es `text` sin más
+    // restricción) correría el borde entre `scope` y `key` y podría hacer
+    // colisionar dos tuplas `(tenant_id, scope, key)` distintas en la misma
+    // clave de lock — solo un problema de contención entre pedidos ajenos
+    // (el SELECT/INSERT de abajo sigue distinguiéndolos bien, por columnas
+    // separadas), pero innecesario de arriesgar cuando serializar es gratis.
+    const lockKey = JSON.stringify([ctx.tenantId, idempotency.scope, idempotency.key]);
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
 
     const existingRow = await tx.idempotency_keys.findUnique({
