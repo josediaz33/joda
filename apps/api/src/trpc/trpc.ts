@@ -102,13 +102,16 @@ const catchPgErrors = t.middleware(async ({ next }) => {
 // o no, una sola vez, para TODO procedimiento futuro, no ruta por ruta (la
 // trampa explícita de la Sesión 24 del playbook: modelar esto como un
 // estado de sesión, no como una excepción atrapada en cada handler).
-const MFA_ENROLLMENT_REQUIRED_ERROR = appError(
+// Exportados (no solo `const` de módulo) porque modules/media/httpRoutes.ts
+// (WP-C09, docs/api-conventions.md §1, excepción documentada) reimplementa
+// este mismo gate fuera de tRPC — mismos mensajes, sin duplicar el texto.
+export const MFA_ENROLLMENT_REQUIRED_ERROR = appError(
   "UNAUTHENTICATED_MFA_ENROLLMENT_REQUIRED",
   401,
   "Tenés que inscribir un segundo factor antes de continuar.",
 );
 
-const MFA_VERIFICATION_REQUIRED_ERROR = appError(
+export const MFA_VERIFICATION_REQUIRED_ERROR = appError(
   "UNAUTHENTICATED_MFA_VERIFICATION_REQUIRED",
   401,
   "Ingresá el código de tu segundo factor antes de continuar.",
@@ -144,8 +147,9 @@ const enforceMfaGate = t.middleware(({ ctx, meta, next }) => {
 // producción" (docs/api-conventions.md §9) es lo que prueba
 // `router.permissions.test.ts` recorriendo el router entero; este 500 es la
 // red de más abajo, por si ese test no corrió.
-const NOT_FOUND_ERROR = appError("NOT_FOUND", 404, "No encontrado.");
-const FORBIDDEN_ERROR = appError(
+// Exportados por el mismo motivo que los dos de arriba — modules/media/httpRoutes.ts.
+export const NOT_FOUND_ERROR = appError("NOT_FOUND", 404, "No encontrado.");
+export const FORBIDDEN_ERROR = appError(
   "FORBIDDEN_INSUFFICIENT_PERMISSION",
   403,
   "No tenés permiso para realizar esta acción.",

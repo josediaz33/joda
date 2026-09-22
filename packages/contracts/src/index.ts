@@ -5,4 +5,5 @@
 export * from "./shared/index.js";
 export * from "./auth.js";
 export * from "./catalog.js";
+export * from "./media.js";
 export * from "./security/permissions.js";

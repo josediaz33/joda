@@ -24,3 +24,8 @@ packages/db/prisma/.reference-dump.sql
 # corrida; red de seguridad si un test cortado a la mitad lo deja tirado.
 packages/domain/src/__boundary-check.generated.ts
 packages/domain/src/__boundary-check.generated.test.ts
+
+# Raíz de MEDIA_STORAGE_DIR (WP-C09, adaptador de disco local de
+# ObjectStorage) — imágenes subidas en desarrollo, nunca contenido a
+# versionar.
+.data/

@@ -60,12 +60,19 @@ export interface RequestContext {
  * no levanta Postgres ni Redis) resuelve todo request como no autenticado,
  * sin tocar ninguno de los dos — ningún procedimiento que no sea de
  * auth.session.* lo necesita para existir.
+ *
+ * El parámetro pide solo `req`/`res` (`Pick`, no el
+ * `CreateFastifyContextOptions` completo que exige tRPC — ese también trae
+ * `info`, que esta función nunca lee) para que modules/media/httpRoutes.ts
+ * (WP-C09, docs/api-conventions.md §1, excepción documentada) pueda
+ * resolver la misma sesión de personal por fuera de tRPC, con un `{req,
+ * res}` de Fastify plano.
  */
 export function buildCreateContext(deps: AuthServiceDeps | null) {
   return async function createContext({
     req,
     res,
-  }: CreateFastifyContextOptions): Promise<RequestContext> {
+  }: Pick<CreateFastifyContextOptions, "req" | "res">): Promise<RequestContext> {
     const base: RequestContext = {
       requestId: req.id,
       userId: null,

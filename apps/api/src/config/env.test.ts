@@ -38,6 +38,9 @@ const VALID_SESSION_ENV = {
   SUPABASE_URL: "https://example.supabase.co",
   SUPABASE_ANON_KEY: "anon-key",
   MFA_ENCRYPTION_KEY: "0".repeat(64),
+  APP_URL: "http://localhost:3333",
+  MEDIA_STORAGE_DIR: "./.data/media",
+  MEDIA_PUBLIC_BASE_URL: "http://media.localhost:3334",
 };
 
 describe("loadEnv exige REDIS_URL, SESSION_SECRET, SUPABASE_URL y SUPABASE_ANON_KEY (docs/security-spec.md §4)", () => {
@@ -94,5 +97,61 @@ describe("loadEnv exige MFA_ENCRYPTION_KEY — 64 caracteres hex, 32 bytes de AE
     const env = loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV });
 
     expect(env.MFA_ENCRYPTION_KEY).toBe(VALID_SESSION_ENV.MFA_ENCRYPTION_KEY);
+  });
+});
+
+// WP-C09, docs/security-spec.md §5 ("Carga de archivos": "servidos desde
+// dominio distinto al del admin"). MEDIA_PUBLIC_BASE_URL con el MISMO host
+// que APP_URL parece cumplir la regla (dos orígenes técnicamente distintos
+// si el puerto difiere) y no la cumple: las cookies no se aíslan por
+// puerto (RFC 6265) — solo por host. loadEnv lo rechaza al arrancar, no en
+// el primer request que filtre la cookie.
+describe("loadEnv exige APP_URL, MEDIA_STORAGE_DIR, MEDIA_PUBLIC_BASE_URL, y que sus hosts difieran (docs/security-spec.md §5)", () => {
+  const DATABASE_URL_API = "postgresql://joda_api:joda_api@localhost:55432/joda";
+
+  it("rechaza un entorno sin APP_URL", () => {
+    expect(() => loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV, APP_URL: undefined })).toThrow(
+      /APP_URL/,
+    );
+  });
+
+  it("rechaza un APP_URL que no es una URL válida", () => {
+    expect(() =>
+      loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV, APP_URL: "no-es-una-url" }),
+    ).toThrow(/APP_URL/);
+  });
+
+  it("rechaza un entorno sin MEDIA_STORAGE_DIR", () => {
+    expect(() =>
+      loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV, MEDIA_STORAGE_DIR: undefined }),
+    ).toThrow(/MEDIA_STORAGE_DIR/);
+  });
+
+  it("rechaza un entorno sin MEDIA_PUBLIC_BASE_URL", () => {
+    expect(() =>
+      loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV, MEDIA_PUBLIC_BASE_URL: undefined }),
+    ).toThrow(/MEDIA_PUBLIC_BASE_URL/);
+  });
+
+  it("rechaza MEDIA_PUBLIC_BASE_URL con el mismo host que APP_URL, aunque el puerto difiera", () => {
+    expect(() =>
+      loadEnv({
+        DATABASE_URL_API,
+        ...VALID_SESSION_ENV,
+        APP_URL: "http://localhost:3333",
+        MEDIA_PUBLIC_BASE_URL: "http://localhost:3334",
+      }),
+    ).toThrow(/host distinto/);
+  });
+
+  it("acepta hosts distintos incluso con el mismo puerto", () => {
+    const env = loadEnv({
+      DATABASE_URL_API,
+      ...VALID_SESSION_ENV,
+      APP_URL: "http://localhost:3333",
+      MEDIA_PUBLIC_BASE_URL: "http://media.localhost:3333",
+    });
+
+    expect(env.MEDIA_PUBLIC_BASE_URL).toBe("http://media.localhost:3333");
   });
 });
