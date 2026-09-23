@@ -5,7 +5,7 @@ Esquema completo del ecosistema ERP + E-commerce, **ejecutado y verificado contr
 ## Qué hay acá
 
 ```
-migrations/    10 archivos, aplicados en orden. SQL-first.
+migrations/    14 archivos, aplicados en orden. SQL-first.
 seed/          permisos, roles, plan de cuentas, reglas de posteo
 tests/         flujo de negocio real + suite de invariantes
 prisma/        schema.prisma (se genera por introspección, ver abajo)
@@ -19,14 +19,54 @@ Todo lo que sigue se ejecutó, no se estimó:
 | -------------------------- | ----------------- |
 | Tablas                     | 63                |
 | Vistas                     | 6                 |
-| Enums / dominios           | 28 / 5            |
-| CHECK constraints          | 104               |
-| Claves foráneas            | 138               |
-| Índices                    | 128               |
+| Enums / dominios           | 29 / 5            |
+| CHECK constraints          | 106               |
+| Claves foráneas            | 166               |
+| Índices                    | 133               |
 | Triggers (no internos)     | 25                |
-| Tablas con RLS activo      | 36                |
-| Políticas RLS              | 45                |
+| Tablas con RLS activo      | 62                |
+| Políticas RLS              | 71                |
 | **Pruebas de invariantes** | **22 / 22 pasan** |
+
+Verificado el 2026-09-23 contra la base recién migrada (`pnpm db:reset`, PostgreSQL 16), con estas consultas — así la próxima actualización es correr esto y pegar los números, no recalcular a ojo:
+
+```sql
+-- Tablas / Índices con RLS activo (relkind='r', esquema app)
+SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+ WHERE n.nspname='app' AND c.relkind='r';                          -- Tablas
+SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+ WHERE n.nspname='app' AND c.relkind='r' AND c.relrowsecurity;     -- Tablas con RLS activo
+
+-- Vistas (relkind='v'), en los dos esquemas donde existen
+SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+ WHERE c.relkind='v' AND n.nspname IN ('app','public');
+
+-- Enums (typtype='e') / dominios (typtype='d'), esquema app
+SELECT count(*) FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace
+ WHERE n.nspname='app' AND t.typtype='e';                          -- Enums
+SELECT count(*) FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace
+ WHERE n.nspname='app' AND t.typtype='d';                          -- Dominios
+
+-- CHECK (contype='c') / FK (contype='f'), esquema app
+SELECT count(*) FROM pg_constraint co JOIN pg_namespace n ON n.oid=co.connamespace
+ WHERE n.nspname='app' AND co.contype='c';                         -- CHECK constraints
+SELECT count(*) FROM pg_constraint co JOIN pg_namespace n ON n.oid=co.connamespace
+ WHERE n.nspname='app' AND co.contype='f';                         -- Claves foráneas
+
+-- Índices, esquema app
+SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid
+ JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname='app';
+
+-- Triggers no internos, esquema app
+SELECT count(*) FROM pg_trigger tg JOIN pg_class c ON c.oid=tg.tgrelid
+ JOIN pg_namespace n ON n.oid=c.relnamespace
+ WHERE n.nspname='app' AND NOT tg.tgisinternal;
+
+-- Políticas RLS (pg_policy no filtra por schema en la vista de catálogo simple)
+SELECT count(*) FROM pg_policy;
+
+-- Pruebas de invariantes: pnpm db:test, línea final "N / N invariantes en verde"
+```
 
 El flujo de negocio de `tests/smoke_business_flow.sql` corre de punta a punta: compra en USD con flete → recepción → apertura de frasco → fraccionamiento con merma real → venta → asiento contable. Cierra con deriva cero entre el ledger y la proyección de saldos.
 
@@ -53,7 +93,7 @@ igual en Windows sin cliente de Postgres y en CI (`.github/workflows/ci.yml`,
 job `db`, con un servicio `postgres:16`). `db:test` no se conforma con que no
 haya un error de SQL: `invariants.sql` atrapa sus propias excepciones y las
 registra en una tabla en vez de relanzarlas, así que el runner falla si el
-conteo de invariantes en verde no es exactamente 18, y en
+conteo de invariantes en verde no es exactamente 22, y en
 `smoke_business_flow.sql` verifica en código que `v_balance_drift` da cero
 filas y que el asiento de la venta cuadra.
 
