@@ -16,6 +16,20 @@ export async function findStockAvailability(
   return tx.v_stock_available.findFirst({ where: { variant_id: variantId } });
 }
 
+/**
+ * `v_stock_available` no tiene fila para una variante sin ningún lote
+ * todavía — el mismo `null` que da una variante inexistente o de otro
+ * tenant (RLS filtra esta segunda, tenant_isolation estándar). Sin este
+ * chequeo, `getStockAvailability` no podía distinguir "variante real, sin
+ * stock" (0 legítimo) de "variantId con typo o ajeno" (debería ser 404,
+ * docs/api-conventions.md §4.2: "recurso inexistente → NOT_FOUND") —
+ * hallazgo de la revisión cruzada de WP-C10.
+ */
+export async function variantExists(tx: TenantTx, variantId: string): Promise<boolean> {
+  const count = await tx.product_variants.count({ where: { id: variantId } });
+  return count > 0;
+}
+
 export async function findLotWithBalance(
   tx: TenantTx,
   id: string,

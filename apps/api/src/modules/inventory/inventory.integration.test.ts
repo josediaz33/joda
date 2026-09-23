@@ -294,6 +294,18 @@ describe("WP-C10 · módulo inventario (RF-INV-03…05)", () => {
     expect(availability).toEqual({ variantId, onHand: 0, reserved: 0, available: 0 });
   });
 
+  it("RF-INV-03 · una variante inexistente (o de otro tenant) da 404, no un saldo cero (revisión cruzada)", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/trpc/inventory.stock.available?input=${encodeURIComponent(
+        JSON.stringify({ variantId: "00000000-0000-4000-a000-000000000000" }),
+      )}`,
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
   it("RF-INV-03 · el saldo disponible refleja la recepción inicial del lote", async () => {
     const variantId = await createSealedVariant();
     await seedSealedLot(variantId, { qtyInitial: 100, unitCostPyg: 50_000 });

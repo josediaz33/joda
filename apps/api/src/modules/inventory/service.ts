@@ -39,6 +39,7 @@ export async function getStockAvailability(
 ): Promise<StockAvailability> {
   const session = requireStaffContext(ctx);
   return withTenantTx(db, session, async (tx) => {
+    if (!(await repo.variantExists(tx, input.variantId))) throw toTRPCError(NOT_FOUND_ERROR);
     const row = await repo.findStockAvailability(tx, input.variantId);
     return toStockAvailability(input.variantId, row);
   });
