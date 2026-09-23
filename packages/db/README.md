@@ -17,7 +17,7 @@ Todo lo que sigue se ejecutó, no se estimó:
 
 |                            |                   |
 | -------------------------- | ----------------- |
-| Tablas                     | 61                |
+| Tablas                     | 63                |
 | Vistas                     | 6                 |
 | Enums / dominios           | 28 / 5            |
 | CHECK constraints          | 104               |
@@ -26,7 +26,7 @@ Todo lo que sigue se ejecutó, no se estimó:
 | Triggers (no internos)     | 25                |
 | Tablas con RLS activo      | 36                |
 | Políticas RLS              | 45                |
-| **Pruebas de invariantes** | **18 / 18 pasan** |
+| **Pruebas de invariantes** | **22 / 22 pasan** |
 
 El flujo de negocio de `tests/smoke_business_flow.sql` corre de punta a punta: compra en USD con flete → recepción → apertura de frasco → fraccionamiento con merma real → venta → asiento contable. Cierra con deriva cero entre el ledger y la proyección de saldos.
 

@@ -273,6 +273,14 @@ Patrón para operaciones con efecto externo:
 3. Transacción: confirmar o revertir según el resultado
 ```
 
+### 8.4 Verificación de pertenencia de ids relacionados
+
+Todo id de entidad relacionada que llegue desde el cliente y se use en un `INSERT` o `UPDATE` debe leerse primero **bajo RLS**, dentro de la misma transacción, para verificar que pertenece al tenant de la sesión — antes de escribir, no después.
+
+Las comprobaciones de integridad referencial de PostgreSQL corren con privilegio interno y **NO evalúan RLS**: una FK al padre no protege nada. Que la columna destino tenga su propia FK `NOT NULL REFERENCES` no alcanza — un `categoryId` o un `productId` de otro tenant pasa esa FK igual, sea cual sea el rol conectado. RLS en la fila que se está insertando protege que ESA fila sea legible/escribible por el tenant correcto; no evita insertarla apuntando por FK a un id ajeno.
+
+El patrón correcto está en `apps/api/src/modules/catalog/service.ts` (`assertCategoryAndTagIdsExist`, `findProductRow`): un `SELECT ... count()`/`findX` tenant-scoped, dentro de `withTenantTx`, antes del `INSERT`/`UPDATE` que usa ese id. Este fue exactamente el hueco que motivó WP-B08: `product_media` insertaba con `productId` del cliente sin esta verificación (encontrado en la revisión cruzada de WP-C09), y luego apareció el mismo patrón sin corregir en `categoryId`/`tagId` de `catalog.service.ts` (corregido en el mismo PR de WP-B08) y en `brandId`/`sourceVariantId` del mismo archivo (sin corregir, anotado como WP-C08b). Cada columna nueva que referencia otra tabla con `tenant_id` propio necesita este chequeo — no es opcional para "las columnas obvias".
+
 ---
 
 ## 9. Autorización

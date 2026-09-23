@@ -35,6 +35,16 @@ caché en Redis, no viajan en el JWT.
 `repository` accede a datos · `packages/domain` calcula.
 **Leer, decidir, escribir.** Nunca consultar la base dentro de un bucle.
 
+## Verificación de pertenencia
+
+Todo id de entidad relacionada que llegue desde el cliente y se use en un
+`INSERT`/`UPDATE` se lee primero **bajo RLS**, dentro de la transacción, para
+confirmar que pertenece al tenant de la sesión. Las comprobaciones de
+integridad referencial de Postgres corren con privilegio interno y **no
+evalúan RLS**: una FK al padre no protege nada. Patrón correcto:
+`assertCategoryAndTagIdsExist`/`findProductRow` en
+`apps/api/src/modules/catalog/service.ts` (docs/api-conventions.md §8.4).
+
 ## Concurrencia
 
 Bloqueo de lotes en **orden ascendente de `lot_id`**, en una sola sentencia. Sin

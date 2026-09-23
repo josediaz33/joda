@@ -265,12 +265,17 @@ END $$;
 -- Ningún código de aplicación consulta `tenants` hoy (login resuelve el
 -- tenant vía `staff_users`, nunca vía esta tabla — ver el comentario de
 -- `findStaffLoginByEmail`, apps/api/src/modules/auth/repository.ts). Si
--- algún día hace falta leer `tenants` ANTES de que exista contexto de
--- tenant (por ejemplo, onboarding de un tenant nuevo), el patrón ya
--- existe: una función `SECURITY DEFINER` como `app.find_staff_login_by_email`
--- (packages/db/migrations/0011_staff_sessions.sql), que evalúa con el
--- privilegio de quien la definió, no de `joda_api` — no relajar esta
--- política para resolver ese caso.
+-- algún día hace falta crear el primer tenant (onboarding), este WITH
+-- CHECK no es un huevo-y-gallina: verificado a mano conectado como
+-- `joda_api` (revisión cruzada de este PR) que alcanza con generar el
+-- uuid en la APLICACIÓN y hacer
+-- set_config('app.tenant_id', <ese mismo uuid>, true) ANTES del INSERT —
+-- el mismo patrón que `withTenantTx` ya usa para cualquier otra tabla.
+-- Depender del DEFAULT `gen_random_uuid()` de la columna `id` NO
+-- funciona: el WITH CHECK compara contra el id que Postgres todavía no
+-- generó en ese momento, y el INSERT es rechazado. No hace falta ninguna
+-- función `SECURITY DEFINER` para este caso — no crear una solo para
+-- resolverlo.
 -- ---------------------------------------------------------------------
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenants FORCE ROW LEVEL SECURITY;

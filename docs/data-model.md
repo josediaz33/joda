@@ -2,7 +2,7 @@
 
 Referencia del esquema. La verdad ejecutable está en `packages/db/migrations/`; este documento explica **por qué** está así.
 
-Estado: validado contra PostgreSQL 16 — 63 tablas, 104 `CHECK`, 166 claves foráneas, 133 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 22/22 invariantes verificados.
+Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 133 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 22/22 invariantes verificados.
 
 ---
 
@@ -19,6 +19,8 @@ Estado: validado contra PostgreSQL 16 — 63 tablas, 104 `CHECK`, 166 claves for
 | Fechas          | `timestamptz` siempre. Almacenamiento en UTC.                                                                                                  |
 | Enums           | Tipos nativos de PostgreSQL, no tablas de catálogo, cuando el conjunto es cerrado y lo conoce el código.                                       |
 | Auditoría       | `created_at`, `updated_at` en entidades mutables. Las append-only solo `occurred_at`.                                                          |
+
+**"Toda tabla de negocio" incluye las tablas de unión y de líneas**, aunque el tenant se pueda derivar del padre por FK. Las comprobaciones de integridad referencial de Postgres corren con privilegio interno y NO evalúan RLS, así que una FK al padre no protege nada. El bucle de `0010_security_rls.sql` habilita RLS donde existe la columna `tenant_id`: una tabla sin esa columna queda desprotegida en silencio. Es lo que pasó con 25 tablas hasta WP-B08 (§7 y §11 de `packages/db/README.md` tienen el detalle completo).
 
 ---
 
