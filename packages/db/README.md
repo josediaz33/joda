@@ -5,7 +5,7 @@ Esquema completo del ecosistema ERP + E-commerce, **ejecutado y verificado contr
 ## Qué hay acá
 
 ```
-migrations/    10 archivos, aplicados en orden. SQL-first.
+migrations/    14 archivos, aplicados en orden. SQL-first.
 seed/          permisos, roles, plan de cuentas, reglas de posteo
 tests/         flujo de negocio real + suite de invariantes
 prisma/        schema.prisma (se genera por introspección, ver abajo)
