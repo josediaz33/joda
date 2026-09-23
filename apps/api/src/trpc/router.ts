@@ -1,5 +1,6 @@
 import { uuidGenerator } from "../adapters/uuidGenerator.js";
 import { createCatalogRouter } from "../modules/catalog/router.js";
+import { createMarketRouter } from "../modules/market/router.js";
 import { createAuthRouter } from "../modules/auth/router.js";
 import type { AuthServiceDeps } from "../modules/auth/service.js";
 import { createInventoryRouter } from "../modules/inventory/router.js";
@@ -26,6 +27,7 @@ export function createAppRouter(authDeps: AuthServiceDeps | null) {
       authDeps?.db ?? null,
       authDeps ? { clock: authDeps.clock, idGenerator: uuidGenerator } : null,
     ),
+    market: createMarketRouter(authDeps?.db ?? null),
   });
 }
 
