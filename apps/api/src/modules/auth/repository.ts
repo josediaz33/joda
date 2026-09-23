@@ -236,10 +236,13 @@ export async function markSessionMfaVerified(
 // ---------------------------------------------------------------------
 // Permisos (WP-C05, docs/security-spec.md §2). Corre DENTRO de
 // withTenantTx, igual que las lecturas de MFA de arriba: la sesión ya está
-// resuelta, así que RLS evalúa `roles.tenant_isolation` normalmente al
-// atravesar esa relación — `role_permissions`/`staff_user_roles` no tienen
-// `tenant_id` propio (packages/db/migrations/0002_identity_rbac.sql), así
-// que el aislamiento de tenant de esta consulta depende de tocar `roles`.
+// resuelta, así que RLS evalúa tenant_isolation normalmente.
+// `role_permissions`/`staff_user_roles` tienen su propio `tenant_id` desde
+// WP-B08 (packages/db/migrations/0014_rls_sweep.sql) — hasta ahí dependían
+// solo de la FK a `roles` (0002_identity_rbac.sql), que no evalúa RLS. Acá
+// no cambia nada en la práctica (`staffUserId` siempre sale de la sesión ya
+// validada, nunca de un id ajeno sin verificar), pero la fila ahora está
+// protegida igual si algún día deja de ser así.
 // ---------------------------------------------------------------------
 export async function getGrantedPermissionCodes(
   tx: TenantTx,

@@ -10,17 +10,18 @@ export async function findMediaBySha256(tx: TenantTx, sha256: string): Promise<M
 }
 
 /**
- * `product_media` (packages/db/migrations/0003_catalog.sql) no tiene
- * `tenant_id` — queda FUERA del loop que habilita RLS automáticamente en
- * 0010_security_rls.sql (recorre columnas `tenant_id`, esta tabla no
- * tiene ninguna) y la FK `product_id → products.id` no compensa eso: los
+ * `product_media` tiene su propio `tenant_id` desde WP-B08
+ * (packages/db/migrations/0014_rls_sweep.sql) — hasta ahí, la FK
+ * `product_id → products.id` era la única protección, y no alcanzaba: los
  * checks de integridad referencial de Postgres evalúan con privilegio
- * interno, sin pasar por RLS. Sin esta verificación, cualquier
- * `productId` de OTRO tenant pasaría la FK igual (revisión cruzada del
- * PR #48). `findFirst` corre dentro de `withTenantTx`: RLS en `products`
- * SÍ tiene `tenant_id`, así que un producto de otro tenant es invisible
- * acá — el mismo patrón que `findProductRow` en
- * modules/catalog/repository.ts (WP-C08, `createVariant`).
+ * interno, sin pasar por RLS. Esta verificación sigue haciendo falta
+ * IGUAL con `tenant_id` en la tabla: RLS evita que la FILA sea
+ * legible/escribible fuera del tenant que la creó, pero no evita insertar
+ * una fila propia que referencia un `productId` ajeno por FK (revisión
+ * cruzada del PR #48). `findFirst` corre dentro de `withTenantTx`: RLS en
+ * `products` hace que un producto de otro tenant sea invisible acá — el
+ * mismo patrón que `findProductRow` en modules/catalog/repository.ts
+ * (WP-C08, `createVariant`).
  */
 export async function productExistsForTenant(tx: TenantTx, productId: string): Promise<boolean> {
   const row = await tx.products.findFirst({ where: { id: productId }, select: { id: true } });
@@ -69,6 +70,7 @@ export async function insertMediaRow(tx: TenantTx, input: InsertMediaRowInput): 
 }
 
 export interface InsertProductMediaRowInput {
+  readonly tenantId: string;
   readonly productId: string;
   readonly mediaId: string;
   readonly variantId: string | null;
@@ -82,6 +84,7 @@ export async function insertProductMediaRow(
 ): Promise<ProductMediaRow> {
   return tx.product_media.create({
     data: {
+      tenant_id: input.tenantId,
       product_id: input.productId,
       media_id: input.mediaId,
       variant_id: input.variantId,

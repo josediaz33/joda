@@ -137,8 +137,8 @@ describe("WP-C05 · middleware de permisos (example.ping.requiresPermission, cat
       [TENANT_ID],
     );
     await testDb.superuserClient.query(
-      `INSERT INTO app.staff_user_roles (staff_user_id, role_id) VALUES ($1, $2), ($3, $2)`,
-      [STAFF_VENDEDOR_ID, vendedorRole.rows[0].id, STAFF_CACHE_ID],
+      `INSERT INTO app.staff_user_roles (tenant_id, staff_user_id, role_id) VALUES ($1, $2, $3), ($1, $4, $3)`,
+      [TENANT_ID, STAFF_VENDEDOR_ID, vendedorRole.rows[0].id, STAFF_CACHE_ID],
     );
 
     // Rol a medida, SOLO con catalog.product:write (sin :read) — no hay
@@ -151,12 +151,12 @@ describe("WP-C05 · middleware de permisos (example.ping.requiresPermission, cat
       [TENANT_ID],
     );
     await testDb.superuserClient.query(
-      `INSERT INTO app.role_permissions (role_id, permission_code) VALUES ($1, 'catalog.product:write')`,
-      [writeOnlyRole.rows[0].id],
+      `INSERT INTO app.role_permissions (tenant_id, role_id, permission_code) VALUES ($1, $2, 'catalog.product:write')`,
+      [TENANT_ID, writeOnlyRole.rows[0].id],
     );
     await testDb.superuserClient.query(
-      `INSERT INTO app.staff_user_roles (staff_user_id, role_id) VALUES ($1, $2)`,
-      [STAFF_SOLO_ESCRITURA_ID, writeOnlyRole.rows[0].id],
+      `INSERT INTO app.staff_user_roles (tenant_id, staff_user_id, role_id) VALUES ($1, $2, $3)`,
+      [TENANT_ID, STAFF_SOLO_ESCRITURA_ID, writeOnlyRole.rows[0].id],
     );
 
     db = new PrismaClient({ datasourceUrl: jodaApiConnectionUrl(testDb.container) });

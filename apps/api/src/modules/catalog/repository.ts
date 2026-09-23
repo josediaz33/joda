@@ -113,9 +113,34 @@ export async function updateProductRow(
   });
 }
 
+/**
+ * `product_categories`/`product_tags` tienen su propio `tenant_id` desde
+ * WP-B08, pero eso protege la FILA (que sea legible/escribible solo bajo
+ * el tenant que la creó) — no evita por sí solo insertar una fila propia
+ * que apunta por FK a un `category_id`/`tag_id` de OTRO tenant (los checks
+ * de integridad referencial de Postgres no evalúan RLS, mismo motivo que
+ * `product_media`, revisión cruzada de WP-C09). `count()` corre dentro de
+ * `withTenantTx`: RLS en `categories`/`tags` hace que una fila ajena no
+ * cuente, así que comparar contra el tamaño del set (no el largo del
+ * array — un id repetido en el input no debería exigir "dos" existentes)
+ * detecta cualquier id que no exista O no sea del tenant, sin distinguir
+ * cuál de las dos cosas fue.
+ */
+export async function countExistingCategoryIds(
+  tx: TenantTx,
+  ids: readonly string[],
+): Promise<number> {
+  return tx.categories.count({ where: { id: { in: [...ids] } } });
+}
+
+export async function countExistingTagIds(tx: TenantTx, ids: readonly string[]): Promise<number> {
+  return tx.tags.count({ where: { id: { in: [...ids] } } });
+}
+
 /** Reemplaza TODA la asignación de categorías del producto — el caller siempre manda la lista completa (docs/api-conventions.md, no hay PATCH parcial de una relación N:N con un índice único parcial de por medio). */
 export async function replaceProductCategories(
   tx: TenantTx,
+  tenantId: string,
   productId: string,
   assignments: readonly { readonly categoryId: string; readonly isPrimary: boolean }[],
 ): Promise<void> {
@@ -123,6 +148,7 @@ export async function replaceProductCategories(
   if (assignments.length === 0) return;
   await tx.product_categories.createMany({
     data: assignments.map((assignment) => ({
+      tenant_id: tenantId,
       product_id: productId,
       category_id: assignment.categoryId,
       is_primary: assignment.isPrimary,
@@ -132,20 +158,23 @@ export async function replaceProductCategories(
 
 export async function replaceProductTags(
   tx: TenantTx,
+  tenantId: string,
   productId: string,
   tagIds: readonly string[],
 ): Promise<void> {
   await tx.product_tags.deleteMany({ where: { product_id: productId } });
   if (tagIds.length === 0) return;
   await tx.product_tags.createMany({
-    data: tagIds.map((tagId) => ({ product_id: productId, tag_id: tagId })),
+    data: tagIds.map((tagId) => ({ tenant_id: tenantId, product_id: productId, tag_id: tagId })),
   });
 }
 
 // ---------------------------------------------------------------------
-// Detalle por vertical — un insert/update por tabla CTI (ADR-005). Sin
-// `tenant_id`: hereda el aislamiento por la FK compuesta a `products`
-// (docs/data-model.md §8).
+// Detalle por vertical — un insert/update por tabla CTI (ADR-005).
+// `tenant_id` propio desde WP-B08 (packages/db/migrations/0014_rls_sweep.sql,
+// revisión cruzada de WP-C09): antes de eso dependía solo de la FK compuesta
+// a `products`, que no evalúa RLS — mismo patrón de vulnerabilidad que
+// product_media.
 // ---------------------------------------------------------------------
 export interface PerfumeDetailsData {
   readonly concentration: string;
@@ -162,11 +191,13 @@ export interface PerfumeDetailsData {
 
 export async function insertPerfumeDetails(
   tx: TenantTx,
+  tenantId: string,
   productId: string,
   data: PerfumeDetailsData,
 ): Promise<void> {
   await tx.perfume_details.create({
     data: {
+      tenant_id: tenantId,
       product_id: productId,
       kind: "perfume",
       concentration: data.concentration as Prisma.perfume_detailsCreateInput["concentration"],
@@ -219,11 +250,13 @@ export interface WatchDetailsData {
 
 export async function insertWatchDetails(
   tx: TenantTx,
+  tenantId: string,
   productId: string,
   data: WatchDetailsData,
 ): Promise<void> {
   await tx.watch_details.create({
     data: {
+      tenant_id: tenantId,
       product_id: productId,
       kind: "watch",
       movement: data.movement as Prisma.watch_detailsCreateInput["movement"],
@@ -266,11 +299,13 @@ export interface AccessoryDetailsData {
 
 export async function insertAccessoryDetails(
   tx: TenantTx,
+  tenantId: string,
   productId: string,
   data: AccessoryDetailsData,
 ): Promise<void> {
   await tx.accessory_details.create({
     data: {
+      tenant_id: tenantId,
       product_id: productId,
       kind: "accessory",
       material: data.material,

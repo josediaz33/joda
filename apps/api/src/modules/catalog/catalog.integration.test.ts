@@ -91,8 +91,8 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       [TENANT_ID],
     );
     await testDb.superuserClient.query(
-      `INSERT INTO app.staff_user_roles (staff_user_id, role_id) VALUES ($1, $2)`,
-      [STAFF_OWNER_ID, ownerRole.rows[0].id],
+      `INSERT INTO app.staff_user_roles (tenant_id, staff_user_id, role_id) VALUES ($1, $2, $3)`,
+      [TENANT_ID, STAFF_OWNER_ID, ownerRole.rows[0].id],
     );
 
     db = new PrismaClient({ datasourceUrl: jodaApiConnectionUrl(testDb.container) });

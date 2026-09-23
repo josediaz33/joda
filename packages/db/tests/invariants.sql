@@ -20,6 +20,21 @@ BEGIN
   END;
 END $$;
 
+-- WP-B08: a diferencia de expect_fail (que INTENTA algo inválido y espera
+-- el rechazo), esto verifica una PROPIEDAD del esquema directamente — no
+-- hay ninguna operación que "intentar". Misma tabla `results`, mismo
+-- conteo, para no duplicar el mecanismo de reporte.
+CREATE OR REPLACE FUNCTION pg_temp.expect_true(
+  p_n int, p_nombre text, p_condition boolean
+) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  IF p_condition THEN
+    INSERT INTO results VALUES (p_n, p_nombre, 'verdadero', 'OK — condición cumplida');
+  ELSE
+    INSERT INTO results VALUES (p_n, p_nombre, 'verdadero', 'FALLO — condición no se cumplió');
+  END IF;
+END $$;
+
 -- 1 ─ El ledger no se edita
 SELECT pg_temp.expect_fail(1, 'UPDATE sobre inventory_movements',
   $$UPDATE app.inventory_movements SET qty = 999 WHERE id = 1$$);
@@ -70,12 +85,12 @@ SELECT pg_temp.expect_fail(7, 'Asiento con debe <> haber',
               '11111111-1111-1111-1111-111111111111',
               'ffffffff-0000-0000-0000-000000000001', 99, current_date,
               'draft', 'Asiento descuadrado a propósito');
-      INSERT INTO app.journal_lines (entry_id, account_id, debit_pyg, credit_pyg)
-      SELECT 'f0000000-0000-0000-0000-0000000000ff', id, 100000, 0
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-0000000000ff', id, 100000, 0
         FROM app.chart_of_accounts WHERE code = '1.1.01.001'
          AND tenant_id = '11111111-1111-1111-1111-111111111111';
-      INSERT INTO app.journal_lines (entry_id, account_id, debit_pyg, credit_pyg)
-      SELECT 'f0000000-0000-0000-0000-0000000000ff', id, 0, 70000
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-0000000000ff', id, 0, 70000
         FROM app.chart_of_accounts WHERE code = '4.1.01.001'
          AND tenant_id = '11111111-1111-1111-1111-111111111111';
       SET CONSTRAINTS app.trg_journal_balanced IMMEDIATE;
@@ -84,8 +99,8 @@ SELECT pg_temp.expect_fail(7, 'Asiento con debe <> haber',
 
 -- 8 ─ Una línea contable no puede ser débito y crédito a la vez
 SELECT pg_temp.expect_fail(8, 'Línea con debe y haber simultáneos',
-  $$INSERT INTO app.journal_lines (entry_id, account_id, debit_pyg, credit_pyg)
-    SELECT 'f0000000-0000-0000-0000-000000000001', id, 5000, 5000
+  $$INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+    SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-000000000001', id, 5000, 5000
       FROM app.chart_of_accounts WHERE code = '1.1.01.001'
        AND tenant_id = '11111111-1111-1111-1111-111111111111'$$);
 
@@ -109,8 +124,9 @@ SELECT pg_temp.expect_fail(11, 'perfume_details sobre un producto watch',
       VALUES ('44444444-0000-0000-0000-00000000bbbb',
               '11111111-1111-1111-1111-111111111111', 'watch', 'seiko-skx', 'Seiko SKX', 'draft');
       INSERT INTO app.perfume_details
-        (product_id, concentration, nominal_volume_ml, olfactory_family)
-      VALUES ('44444444-0000-0000-0000-00000000bbbb', 'edp', 100, 'Acuática');
+        (tenant_id, product_id, concentration, nominal_volume_ml, olfactory_family)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '44444444-0000-0000-0000-00000000bbbb', 'edp', 100, 'Acuática');
     END $x$
   $$);
 
@@ -138,8 +154,9 @@ SELECT pg_temp.expect_fail(13, 'Asignación de costo que no cuadra',
               '55555555-0000-0000-0000-000000000002', -1, 'ml', 'sale', 11972)
       RETURNING id INTO v_mov;
       INSERT INTO app.movement_cost_allocations
-        (movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
-      VALUES (v_mov, '99999999-0000-0000-0000-000000000002', 1, 5000, 5000);
+        (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              v_mov, '99999999-0000-0000-0000-000000000002', 1, 5000, 5000);
       SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE;
     END $x$
   $$);
@@ -202,6 +219,26 @@ SELECT pg_temp.expect_fail(21, 'staff_users con mfa_enrolled = true y mfa_secret
   $$UPDATE app.staff_users
        SET mfa_secret_encrypted = NULL
      WHERE id = '22222222-2222-2222-2222-222222222222'$$);
+
+-- 22 ─ Toda tabla de app.* tiene RLS habilitado, salvo las dos excepciones
+-- documentadas (WP-B08, packages/db/migrations/0014_rls_sweep.sql). Motivado
+-- por el hallazgo de la revisión cruzada de WP-C09: product_media no tenía
+-- tenant_id, quedó fuera del aislamiento por RLS durante todo ese WP, y
+-- nadie lo notó hasta la revisión — esto es lo que hace que no se repita
+-- por olvido. `tenants`/`permissions` son las únicas dos justificadas por
+-- escrito (ver el encabezado de esa migración); una tabla nueva sin RLS y
+-- sin agregarse a esa lista hace fallar esto, a propósito.
+SELECT pg_temp.expect_true(22,
+  'Toda tabla de app.* tiene RLS, salvo tenants/permissions (justificadas)',
+  NOT EXISTS (
+    SELECT 1
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'app'
+       AND c.relkind = 'r'
+       AND NOT c.relrowsecurity
+       AND c.relname NOT IN ('tenants', 'permissions')
+  ));
 
 \echo ''
 \echo '=============================================================='

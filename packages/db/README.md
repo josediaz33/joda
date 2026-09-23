@@ -17,7 +17,7 @@ Todo lo que sigue se ejecutó, no se estimó:
 
 |                            |                   |
 | -------------------------- | ----------------- |
-| Tablas                     | 61                |
+| Tablas                     | 63                |
 | Vistas                     | 6                 |
 | Enums / dominios           | 28 / 5            |
 | CHECK constraints          | 104               |
@@ -26,7 +26,7 @@ Todo lo que sigue se ejecutó, no se estimó:
 | Triggers (no internos)     | 25                |
 | Tablas con RLS activo      | 36                |
 | Políticas RLS              | 45                |
-| **Pruebas de invariantes** | **18 / 18 pasan** |
+| **Pruebas de invariantes** | **22 / 22 pasan** |
 
 El flujo de negocio de `tests/smoke_business_flow.sql` corre de punta a punta: compra en USD con flete → recepción → apertura de frasco → fraccionamiento con merma real → venta → asiento contable. Cierra con deriva cero entre el ledger y la proyección de saldos.
 
@@ -228,6 +228,14 @@ La salida no es dar `USAGE ON SCHEMA public TO joda_api` (ampliar el acceso de l
 El primer intento fue `CREATE OR REPLACE FUNCTION ... RETURNS TABLE (...)` con la lista de columnas ampliada. Postgres lo rechaza: `cannot change return type of existing function` — `CREATE OR REPLACE` solo tolera cambiar el cuerpo, nunca la firma de salida, ni siquiera para agregar columnas al final. Es el mismo problema que forzó el `DROP FUNCTION` + `CREATE FUNCTION` de `0012_fix_staff_login_lookup_param_type.sql` para cambiar un parámetro de `citext` a `text` — ahí cambiaba la entrada, acá la salida, pero la regla de Postgres es la misma: cualquier cambio de firma (entrada o salida) exige borrar la función vieja primero.
 
 `REVOKE ALL ... FROM PUBLIC` y `GRANT EXECUTE ... TO joda_api` tampoco sobreviven al `DROP` — hay que repetir las dos sentencias después del `CREATE`, si no la función nueva queda ejecutable por `PUBLIC` (el default de Postgres para toda función nueva) hasta el próximo deploy que lo note.
+
+### 11. Una FK no aísla por tenant — ni siquiera cuando el padre sí tiene RLS (WP-B08)
+
+La revisión cruzada de WP-C09 encontró que `product_media` no tenía `tenant_id`: `0010_security_rls.sql` habilita RLS recorriendo columnas `tenant_id`, y esa tabla no tenía ninguna, así que no entró al bucle. La intuición de que la FK `product_id → products.id` "hereda" el aislamiento de `products` (que sí tiene RLS) es falsa: los checks de integridad referencial de Postgres se evalúan con privilegio interno, sin pasar por las políticas de RLS de la sesión — un `product_id` de otro tenant pasa la FK igual, sea cual sea el rol conectado.
+
+`0014_rls_sweep.sql` (WP-B08) barrió las 25 tablas de `app.*` que estaban en esa misma situación: 23 recibieron `tenant_id` propio (retrocompletado desde el padre correspondiente vía `UPDATE ... FROM`, después `NOT NULL` + FK a `tenants`) y entraron al mismo bucle de RLS; dos quedaron exentas por diseño (`tenants`, que no puede tener su propio `tenant_id`, y `permissions`, catálogo global). `packages/db/tests/invariants.sql` (invariante 22) verifica que no quede ninguna otra: falla si aparece una tabla de `app.*` sin RLS y sin estar en esa lista de dos.
+
+**Consecuencia para código de aplicación que ya insertaba en alguna de esas 23 tablas** (WP-C08, catálogo: `perfume_details`/`accessory_details`/`product_categories`/`product_tags`; WP-C09, `product_media`): esos `INSERT` pasaron a fallar por `NOT NULL` en `tenant_id` hasta que se les agregó el valor explícito — Prisma no lo infiere solo. Y **RLS en la tabla hija no reemplaza verificar la pertenencia del padre**: seguía haciendo falta un `findX` tenant-scoped antes de insertar (mismo patrón que `findProductRow` de `createVariant`, WP-C08) para las columnas que aceptan un id de OTRA tabla protegida — `categoryId`/`tagId` en catálogo, `productId`/`variantId` en medios —, porque RLS en la fila hija solo protege que ESA fila sea legible/escribible por el tenant correcto, no evita insertarla apuntando por FK a un id ajeno.
 
 ---
 
