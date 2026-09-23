@@ -161,7 +161,7 @@ SET CONSTRAINTS app.trg_journal_balanced IMMEDIATE;
 
 ## 5. Nivel 4 — Dataset dorado
 
-`packages/domain/test/golden/`: alrededor de veinte operaciones reales del negocio, con los resultados **calculados a mano** y verificados contra la operación histórica del ERP v2.
+`packages/domain/test/golden/`: alrededor de veinte operaciones del negocio, con los resultados verificados a mano — nunca generados corriendo el código que se quiere probar. Cada caso declara su procedencia en `origen` (`case.ts`, WP-A10/WP-A10b), sin término medio: un **ejemplo trabajado de `docs/domain-rules.md`** (el número ya estaba redactado al escribir la regla — sirve para detectar que un refactor cambió un cálculo, no confirma la operación real) o una **operación real**, verificada contra el export del ERP v2 (WP-D01) o una planilla de costos — la única que de verdad confirma el costeo contra cómo opera JODA.
 
 ```
 golden/
@@ -184,6 +184,7 @@ Cada archivo tiene entrada, salida esperada y una nota que explica de dónde sal
 {
   "id": "03-fraccionamiento-10ml",
   "regla": "RN-FRA-04",
+  "origen": "operación real",
   "nota": "Frasco Layton 125ml, USD 190 + 15 flete, dólar 7300. Verificado contra planilla de costos de agosto 2026.",
   "input": { "...": "..." },
   "expected": { "cogs": "131210", "liquid": "119720", "waste": "4190", "supplies": "7300" }

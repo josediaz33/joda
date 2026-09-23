@@ -331,9 +331,14 @@ El momento único en que la operación pasa del sistema actual (Dexie, en el nav
 
 ### Dataset dorado
 
-Conjunto de unas veinte operaciones reales del negocio —compras con flete, aperturas de frasco, fraccionamientos, ventas mixtas— con sus resultados **calculados a mano** y verificados contra la operación histórica. Vive en `packages/domain/test/golden/` y corre en cada PR.
+Conjunto de unas veinte operaciones del negocio —compras con flete, aperturas de frasco, fraccionamientos, ventas mixtas— con sus resultados verificados a mano, no generados corriendo el código que se quiere probar. Vive en `packages/domain/test/golden/` y corre en cada PR.
 
-Es lo que permite refactorizar el costeo sin miedo: si los veinte casos siguen dando lo mismo después de reescribir el módulo, el refactor es correcto. Un valor esperado nunca se actualiza para "hacer pasar el test"; cambiarlo requiere justificación explícita en el PR.
+Cada caso declara su procedencia en el campo `origen` (dos valores posibles, sin término medio — `packages/domain/test/golden/case.ts`):
+
+- **Ejemplo trabajado de `docs/domain-rules.md`**: el número ya estaba redactado en la documentación al escribir la regla. Detecta que un refactor cambió un cálculo, pero no confirma que el cálculo coincide con cómo opera JODA — el ejemplo se redactó al documentar, no salió de una venta o compra real.
+- **Operación real**: sale del export del ERP v2 (WP-D01) o de una planilla de costos, con el valor esperado calculado a mano contra la operación histórica. Es la única procedencia que de verdad confirma el costeo (WP-A10b).
+
+Es lo que permite refactorizar el costeo sin miedo: si los casos siguen dando lo mismo después de reescribir el módulo, el refactor es correcto. Un valor esperado nunca se actualiza para "hacer pasar el test", ni se genera ejecutando el código bajo prueba; cambiarlo requiere justificación explícita en el PR.
 
 ### Reconciliación
 
