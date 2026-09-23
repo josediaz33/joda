@@ -16,6 +16,14 @@ import { appError, toTRPCError } from "../../middleware/errorMapper.js";
 import { toPurchaseOrder, toSupplier } from "./mappers.js";
 import * as repo from "./repository.js";
 
+export interface MarketContext extends TenantTxContext {
+  readonly auditMeta: {
+    readonly ip: string | null;
+    readonly userAgent: string | null;
+    readonly requestId: string | null;
+  };
+}
+
 const NOT_FOUND = appError("NOT_FOUND", 404, "No encontrado.");
 const invalidCursor = appError(
   "VALIDATION_INVALID_CURSOR",
@@ -40,7 +48,7 @@ function page<Row extends { id: string }, Dto>(rows: Row[], limit: number, map: 
 
 async function audit(
   tx: TenantTx,
-  ctx: TenantTxContext,
+  ctx: MarketContext,
   action: string,
   entity: string,
   entityId: string,
@@ -56,10 +64,23 @@ async function audit(
     entityId,
     before,
     after,
-    ip: null,
-    userAgent: null,
-    requestId: null,
+    ip: ctx.auditMeta.ip,
+    userAgent: ctx.auditMeta.userAgent,
+    requestId: ctx.auditMeta.requestId,
   });
+}
+
+function supplierAuditState(row: repo.SupplierRow) {
+  return {
+    code: row.code,
+    name: row.name,
+    country: row.country,
+    defaultCurrency: row.default_currency,
+    paymentTermsDays: row.payment_terms_days,
+    leadTimeDays: row.lead_time_days,
+    isActive: row.is_active,
+    notes: row.notes,
+  };
 }
 
 export async function listSuppliers(
@@ -71,7 +92,12 @@ export async function listSuppliers(
   const cursor = cursorId(input.cursor);
   return withTenantTx(db, ctx, async (tx) =>
     page(
-      await repo.listSuppliers(tx, { cursor, limit, isActive: input.isActive }),
+      await repo.listSuppliers(tx, {
+        tenantId: ctx.tenantId,
+        cursor,
+        limit,
+        isActive: input.isActive,
+      }),
       limit,
       toSupplier,
     ),
@@ -84,7 +110,7 @@ export async function getSupplier(
   id: string,
 ): Promise<SupplierDto> {
   return withTenantTx(db, ctx, async (tx) => {
-    const row = await repo.findSupplier(tx, id);
+    const row = await repo.findSupplier(tx, ctx.tenantId, id);
     if (!row) throw toTRPCError(NOT_FOUND);
     return toSupplier(row);
   });
@@ -92,7 +118,7 @@ export async function getSupplier(
 
 export async function createSupplier(
   db: PrismaClient,
-  ctx: TenantTxContext,
+  ctx: MarketContext,
   input: CreateSupplierInput,
 ): Promise<SupplierDto> {
   return withTenantTx(db, ctx, async (tx) => {
@@ -106,26 +132,28 @@ export async function createSupplier(
       lead_time_days: input.leadTimeDays ?? null,
       notes: input.notes ?? null,
     });
-    await audit(tx, ctx, "market.supplier.create", "suppliers", row.id, null, {
-      code: row.code,
-      name: row.name,
-      defaultCurrency: row.default_currency,
-      paymentTermsDays: row.payment_terms_days,
-      leadTimeDays: row.lead_time_days,
-    });
+    await audit(
+      tx,
+      ctx,
+      "market.supplier.create",
+      "suppliers",
+      row.id,
+      null,
+      supplierAuditState(row),
+    );
     return toSupplier(row);
   });
 }
 
 export async function updateSupplier(
   db: PrismaClient,
-  ctx: TenantTxContext,
+  ctx: MarketContext,
   input: UpdateSupplierInput,
 ): Promise<SupplierDto> {
   return withTenantTx(db, ctx, async (tx) => {
-    const before = await repo.findSupplier(tx, input.id);
+    const before = await repo.findSupplier(tx, ctx.tenantId, input.id);
     if (!before) throw toTRPCError(NOT_FOUND);
-    const row = await repo.updateSupplier(tx, input.id, {
+    const row = await repo.updateSupplier(tx, ctx.tenantId, input.id, {
       code: input.code,
       name: input.name,
       country: input.country,
@@ -141,22 +169,8 @@ export async function updateSupplier(
       "market.supplier.update",
       "suppliers",
       row.id,
-      {
-        code: before.code,
-        name: before.name,
-        defaultCurrency: before.default_currency,
-        paymentTermsDays: before.payment_terms_days,
-        leadTimeDays: before.lead_time_days,
-        isActive: before.is_active,
-      },
-      {
-        code: row.code,
-        name: row.name,
-        defaultCurrency: row.default_currency,
-        paymentTermsDays: row.payment_terms_days,
-        leadTimeDays: row.lead_time_days,
-        isActive: row.is_active,
-      },
+      supplierAuditState(before),
+      supplierAuditState(row),
     );
     return toSupplier(row);
   });
@@ -172,6 +186,7 @@ export async function listOrders(
   return withTenantTx(db, ctx, async (tx) =>
     page(
       await repo.listOrders(tx, {
+        tenantId: ctx.tenantId,
         cursor,
         limit,
         supplierId: input.supplierId,
@@ -189,7 +204,7 @@ export async function getOrder(
   id: string,
 ): Promise<PurchaseOrderDto> {
   return withTenantTx(db, ctx, async (tx) => {
-    const row = await repo.findOrder(tx, id);
+    const row = await repo.findOrder(tx, ctx.tenantId, id);
     if (!row) throw toTRPCError(NOT_FOUND);
     return toPurchaseOrder(row);
   });
@@ -197,16 +212,16 @@ export async function getOrder(
 
 export async function createOrder(
   db: PrismaClient,
-  ctx: TenantTxContext,
+  ctx: MarketContext,
   input: CreatePurchaseOrderInput,
 ): Promise<PurchaseOrderDto> {
   return withTenantTx(db, ctx, async (tx) => {
-    const supplier = await repo.findSupplier(tx, input.supplierId);
+    const supplier = await repo.findSupplier(tx, ctx.tenantId, input.supplierId);
     if (!supplier || !supplier.is_active)
       throw toTRPCError(
         appError("VALIDATION_SUPPLIER_UNAVAILABLE", 400, "El proveedor no está disponible."),
       );
-    const variants = await repo.findVariants(tx, [
+    const variants = await repo.findVariants(tx, ctx.tenantId, [
       ...new Set(input.lines.map((line) => line.variantId)),
     ]);
     if (variants.length !== new Set(input.lines.map((line) => line.variantId)).size) {
@@ -269,7 +284,7 @@ export async function createOrder(
       currency: input.currency,
       lineCount: input.lines.length,
     });
-    const row = await repo.findOrder(tx, id);
+    const row = await repo.findOrder(tx, ctx.tenantId, id);
     if (!row) throw new Error("orden recién creada no se pudo releer");
     return toPurchaseOrder(row);
   });
@@ -277,7 +292,7 @@ export async function createOrder(
 
 export async function transitionOrder(
   db: PrismaClient,
-  ctx: TenantTxContext,
+  ctx: MarketContext,
   input:
     TransitionPurchaseOrderInput | { id: string; toStatus: "approved"; reason?: string | null },
   action:
@@ -285,8 +300,8 @@ export async function transitionOrder(
     | "market.purchaseOrder.approve" = "market.purchaseOrder.transition",
 ): Promise<PurchaseOrderDto> {
   return withTenantTx(db, ctx, async (tx) => {
-    await repo.lockOrder(tx, input.id);
-    const before = await repo.findOrder(tx, input.id);
+    await repo.lockOrder(tx, ctx.tenantId, input.id);
+    const before = await repo.findOrder(tx, ctx.tenantId, input.id);
     if (!before) throw toTRPCError(NOT_FOUND);
     const result = transitionPurchaseOrder(before.status, input.toStatus);
     if (!result.ok) {
@@ -299,7 +314,7 @@ export async function transitionOrder(
         ),
       );
     }
-    await repo.updateOrderStatus(tx, input.id, {
+    const updated = await repo.updateOrderStatus(tx, ctx.tenantId, input.id, {
       status: result.value,
       ...(result.value === "approved" && { approved_by: ctx.userId, approved_at: new Date() }),
     });
@@ -317,10 +332,18 @@ export async function transitionOrder(
       action,
       "purchase_orders",
       input.id,
-      { status: before.status },
-      { status: result.value },
+      {
+        status: before.status,
+        approvedBy: before.approved_by,
+        approvedAt: before.approved_at?.toISOString() ?? null,
+      },
+      {
+        status: updated.status,
+        approvedBy: updated.approved_by,
+        approvedAt: updated.approved_at?.toISOString() ?? null,
+      },
     );
-    const row = await repo.findOrder(tx, input.id);
+    const row = await repo.findOrder(tx, ctx.tenantId, input.id);
     if (!row) throw new Error("orden actualizada no se pudo releer");
     return toPurchaseOrder(row);
   });

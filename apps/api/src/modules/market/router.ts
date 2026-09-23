@@ -17,7 +17,6 @@ import type { PrismaClient } from "@joda/db";
 import { appError, toTRPCError } from "../../middleware/errorMapper.js";
 import { router, staffProcedure } from "../../trpc/trpc.js";
 import type { RequestContext } from "../../trpc/context.js";
-import type { TenantTxContext } from "../../db/withTenantTx.js";
 import * as service from "./service.js";
 
 function requireDb(db: PrismaClient | null): PrismaClient {
@@ -27,9 +26,18 @@ function requireDb(db: PrismaClient | null): PrismaClient {
     );
   return db;
 }
-function staff(ctx: RequestContext): TenantTxContext {
+function staff(ctx: RequestContext): service.MarketContext {
   if (ctx.audience === "staff" && ctx.userId && ctx.tenantId)
-    return { userId: ctx.userId, tenantId: ctx.tenantId, audience: "staff" };
+    return {
+      userId: ctx.userId,
+      tenantId: ctx.tenantId,
+      audience: "staff",
+      auditMeta: {
+        ip: ctx.req.ip,
+        userAgent: ctx.req.headers["user-agent"] ?? null,
+        requestId: ctx.requestId,
+      },
+    };
   throw toTRPCError(
     appError("UNAUTHENTICATED_SESSION_EXPIRED", 401, "Necesitás una sesión de personal."),
   );
