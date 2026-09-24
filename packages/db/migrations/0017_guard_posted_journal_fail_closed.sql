@@ -22,7 +22,10 @@
 --      .claude/rules/database.md).
 --   3. Tenant: con SECURITY DEFINER el trigger ve asientos de TODOS los
 --      tenants, y la FK `entry_id` no evalúa RLS (lección de B08). Se exige
---      que el `tenant_id` de la línea coincida con el del asiento.
+--      que el `tenant_id` de la línea coincida con el del asiento, dentro
+--      de la misma búsqueda: un asiento de otro tenant da el mismo rechazo
+--      que uno inexistente, sin nombrar su tenant (el mensaje de error no
+--      puede devolver lo que solo esta función ve).
 --   4. UPDATE verifica el asiento de OLD y, si `entry_id` cambia, también
 --      el de NEW. La versión anterior miraba solo
 --      `COALESCE(NEW.entry_id, OLD.entry_id)`: en un UPDATE eso es NEW, así
@@ -37,8 +40,9 @@
 -- CONSECUENCIA DELIBERADA del punto 2. Un DELETE sobre `journal_entries`
 -- borra sus líneas por `ON DELETE CASCADE`, y en ese momento el asiento ya
 -- no existe: el trigger no lo encuentra y rechaza. O sea que un asiento con
--- líneas ya no se puede borrar de un solo golpe, ni siquiera un borrador
--- (tampoco un tenant, que cascada hasta acá). Para borrar un borrador hay
+-- líneas ya no se puede borrar de un solo golpe, ni siquiera un borrador.
+-- (Borrar un tenant también cascadea hasta acá, pero hoy lo frena antes
+-- `staff_users_tenant_id_fkey`, que no es ON DELETE CASCADE.) Para borrar un borrador hay
 -- que borrar primero sus líneas (el asiento todavía existe y está en
 -- 'draft', pasa) y después el asiento. Nada lo hace hoy: `joda_api` no
 -- tiene DELETE sobre `journal_entries` (0010), y ni el seed ni los tests
@@ -52,7 +56,6 @@ DECLARE
   v_entry_id    uuid;
   v_line_tenant uuid;
   v_status      app.journal_status;
-  v_tenant_id   uuid;
 BEGIN
   -- Asiento de la fila tal como estaba (UPDATE/DELETE), y además el de
   -- destino si un UPDATE mueve la línea a otro asiento.
@@ -61,20 +64,20 @@ BEGIN
     UNION
     SELECT NEW.entry_id, NEW.tenant_id WHERE TG_OP = 'UPDATE'
   LOOP
-    SELECT e.status, e.tenant_id INTO v_status, v_tenant_id
+    -- "No existe" y "existe pero es de otro tenant" dan el MISMO rechazo,
+    -- con el mismo mensaje: esta función ve asientos de todos los tenants,
+    -- y distinguir los dos casos (o nombrar el tenant del asiento) le
+    -- confirmaría a quien la dispara que un asiento ajeno existe — y de
+    -- qué tenant es. Hallazgo de la segunda revisión cruzada de B10.
+    SELECT e.status INTO v_status
       FROM app.journal_entries e
-     WHERE e.id = v_entry_id;
+     WHERE e.id = v_entry_id
+       AND e.tenant_id = v_line_tenant;
 
     IF NOT FOUND THEN
       RAISE EXCEPTION
-        'Asiento % no encontrado: no se puede verificar que la línea sea editable', v_entry_id
-        USING ERRCODE = 'restrict_violation';
-    END IF;
-
-    IF v_tenant_id IS DISTINCT FROM v_line_tenant THEN
-      RAISE EXCEPTION
-        'La línea (tenant %) no pertenece al tenant del asiento % (tenant %)',
-        v_line_tenant, v_entry_id, v_tenant_id
+        'Asiento % no encontrado en el tenant de la línea: no se puede verificar que sea editable',
+        v_entry_id
         USING ERRCODE = 'restrict_violation';
     END IF;
 
