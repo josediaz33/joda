@@ -240,6 +240,33 @@ SELECT pg_temp.expect_true(22,
        AND c.relname NOT IN ('tenants', 'permissions')
   ));
 
+-- 23 ─ Toda tabla de app.* con RLS tiene una política `tenant_isolation`
+-- declarada AS RESTRICTIVE, salvo las mismas dos excepciones del 22 (WP-B10,
+-- packages/db/migrations/0016_rls_tenant_isolation_restrictive.sql). Las
+-- permisivas `tenant_access*` de esa migración son `USING (true)`: seguras
+-- SOLO porque la restrictiva las recorta con AND. Una tabla nueva que copie
+-- la permisiva sin la restrictiva — o una `tenant_isolation` creada
+-- PERMISSIVE, el default de Postgres, que es exactamente el defecto que
+-- corrigió B10 — queda abierta, y esto falla a propósito.
+SELECT pg_temp.expect_true(23,
+  'Toda tabla de app.* con RLS tiene tenant_isolation RESTRICTIVE, salvo tenants/permissions',
+  NOT EXISTS (
+    SELECT 1
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'app'
+       AND c.relkind = 'r'
+       AND c.relrowsecurity
+       AND c.relname NOT IN ('tenants', 'permissions')
+       AND NOT EXISTS (
+         SELECT 1
+           FROM pg_policy p
+          WHERE p.polrelid = c.oid
+            AND p.polname = 'tenant_isolation'
+            AND NOT p.polpermissive
+            AND p.polcmd = '*')
+  ));
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'
