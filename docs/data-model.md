@@ -2,7 +2,7 @@
 
 Referencia del esquema. La verdad ejecutable está en `packages/db/migrations/`; este documento explica **por qué** está así.
 
-Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 133 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 22/22 invariantes verificados.
+Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 133 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 26/26 invariantes verificados.
 
 ---
 
@@ -162,7 +162,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 verificados en `packages/db/tests/invariants.sql`. **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 26: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -197,6 +197,26 @@ CREATE CONSTRAINT TRIGGER trg_journal_balanced
 ```
 
 Para testearlas hay que forzar la evaluación: `SET CONSTRAINTS app.trg_journal_balanced IMMEDIATE;`
+
+### 4.2 Todo trigger que impone un invariante falla cerrado
+
+**Si no puede leer lo que necesita para decidir, rechaza.** Nunca compara contra un valor que podría ser NULL por falta de visibilidad. Se escribe con `IF NOT FOUND THEN RAISE`, no con una comparación que se evalúe a falso:
+
+```sql
+-- MAL: si RLS oculta el asiento, v_status queda NULL, la comparación da
+-- NULL (no TRUE) y el trigger deja pasar.
+SELECT status INTO v_status FROM app.journal_entries WHERE id = ...;
+IF v_status = 'posted' THEN RAISE ...; END IF;
+
+-- BIEN: no encontrar el asiento es motivo de rechazo.
+SELECT status INTO v_status FROM app.journal_entries WHERE id = ...;
+IF NOT FOUND THEN RAISE ...; END IF;
+IF v_status = 'posted' THEN RAISE ...; END IF;
+```
+
+No es hipotético. WP-B10 hizo que `journal_entries` exija `accounting.journal:read` para leer. `guard_posted_journal` corría con los permisos de quien edita, y un vendedor sin ese permiso pudo editar y borrar líneas de un asiento contabilizado. Corregido en `0017_guard_posted_journal_fail_closed.sql`.
+
+Además, una función que impone un invariante verifica integridad, no expone datos: va `SECURITY DEFINER` con `SET search_path = app, pg_temp` (`pg_temp` al final, nombres calificados con `app.`). Si una tabla referenciada tiene `tenant_id`, la función verifica que coincida con el de la fila que dispara el trigger: como `SECURITY DEFINER` ve todos los tenants y una FK no evalúa RLS, nadie más lo haría. Convertir las funciones de invariantes restantes queda en WP-B09.
 
 ---
 
@@ -239,17 +259,24 @@ Los índices parciales importan: `lots_variant_fifo` solo cubre lotes con estado
 
 ## 7. Seguridad a nivel de fila
 
-Toda tabla con `tenant_id` tiene RLS habilitado **y forzado**, con una política de aislamiento generada en bucle:
+Toda tabla con `tenant_id` tiene RLS habilitado **y forzado**, con una política de aislamiento **RESTRICTIVE** más una permisiva base (WP-B10, `0016_rls_tenant_isolation_restrictive.sql`):
 
 ```sql
 ALTER TABLE app.<tabla> ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.<tabla> FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON app.<tabla>
+CREATE POLICY tenant_isolation ON app.<tabla> AS RESTRICTIVE
   USING (tenant_id = app.current_tenant_id())
   WITH CHECK (tenant_id = app.current_tenant_id());
+-- Permisiva base requerida por Postgres, que deniega todo si no hay
+-- ninguna permisiva. El filtrado lo hace tenant_isolation, que es
+-- RESTRICTIVE. Nunca uses esta política sin la restrictiva.
+CREATE POLICY tenant_access ON app.<tabla>
+  USING (true) WITH CHECK (true);
 ```
 
-Encima, políticas de permiso sobre lo sensible: `journal_entries`, `chart_of_accounts`, `customer_deposits`, `sourcing_scenarios`, `suppliers`, `purchase_orders`, `inventory_lots`.
+Encima, políticas de permiso sobre lo sensible: `journal_entries`, `chart_of_accounts`, `customer_deposits`, `sourcing_scenarios`, `suppliers`, `purchase_orders`, `inventory_lots`. En esas tablas no hay `tenant_access` para los comandos que cubre la política de permiso: ahí la permisiva es la de permiso, así que el resultado es tenant **Y** permiso.
+
+**Por qué RESTRICTIVE.** Las políticas permisivas se combinan con OR. Hasta WP-B10, `tenant_isolation` era permisiva (el default de Postgres), así que en las siete tablas de arriba alcanzaba con tener el permiso para leer filas de **cualquier** tenant. Una restrictiva se combina con AND contra todas las demás. El invariante 23 falla si aparece una tabla con RLS sin `tenant_isolation` RESTRICTIVE.
 
 **`FORCE` es necesario** porque sin él el dueño de la tabla eludiría las políticas. Y la API se conecta con `joda_api`, creado `NOBYPASSRLS`: si usara `service_role`, nada de esto se evaluaría.
 

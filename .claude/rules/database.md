@@ -29,6 +29,19 @@ aislamiento RLS. Sin excepciones.
 Solo invariantes. Nunca lógica de negocio. La base hace cumplir lo que debe
 seguir siendo cierto; la aplicación calcula decisiones.
 
+**Todo trigger que impone un invariante FALLA CERRADO:** si no puede leer lo
+que necesita para decidir, rechaza. Nunca compara contra un valor que podría
+ser NULL por falta de visibilidad. Se escribe con `IF NOT FOUND THEN RAISE`,
+no con una comparación que se evalúe a falso. Ejemplo y motivo en
+`docs/data-model.md` §4.2 (`guard_posted_journal`, WP-B10).
+
+## RLS
+
+`tenant_isolation` va `AS RESTRICTIVE`, con una permisiva base `tenant_access`
+`USING (true)` al lado. Esa permisiva nunca va sin la restrictiva: sola, abre
+la tabla entera. El invariante 23 lo verifica. Detalle en
+`docs/data-model.md` §7.
+
 ## Expand/contract
 
 Nunca `DROP COLUMN` en el mismo despliegue que deja de usarla.

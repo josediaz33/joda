@@ -261,6 +261,52 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
     await api.query("ROLLBACK");
   });
 
+  // RN-CTB-06 (docs/domain-rules.md): un asiento contabilizado no se
+  // modifica. Hallazgo de la revisión cruzada de B10: con 0016,
+  // `guard_posted_journal` (SECURITY INVOKER) ya no veía el asiento para un
+  // staff sin accounting.journal:read, leía status NULL y dejaba pasar la
+  // edición — falla ABIERTA. 0017 lo pasa a SECURITY DEFINER y falla
+  // cerrado. El vendedor puede tocar journal_lines (la tabla no tiene
+  // política de permiso, solo tenant); el que tiene que frenarlo es el
+  // trigger.
+  const POSTED_ENTRY_ID = "f0000000-0000-0000-0000-000000000001";
+
+  it("journal_lines (WP-B10, RN-CTB-06): el vendedor, sin accounting.journal:read, no puede editar una línea de un asiento contabilizado", async () => {
+    await api.query("BEGIN");
+    await api.query(
+      `SELECT set_config('app.user_id', $1, true),
+              set_config('app.tenant_id', $2, true),
+              set_config('app.audience', 'staff', true)`,
+      [REAL_SELLER_ID, REAL_TENANT_ID],
+    );
+    await expect(
+      api.query("UPDATE app.journal_lines SET memo = 'editado' WHERE entry_id = $1", [
+        POSTED_ENTRY_ID,
+      ]),
+    ).rejects.toMatchObject({
+      code: "23001",
+      message: "El asiento ya está contabilizado: no se modifica, se reversa",
+    });
+    await api.query("ROLLBACK");
+  });
+
+  it("journal_lines (WP-B10, RN-CTB-06): el vendedor, sin accounting.journal:read, no puede borrar una línea de un asiento contabilizado", async () => {
+    await api.query("BEGIN");
+    await api.query(
+      `SELECT set_config('app.user_id', $1, true),
+              set_config('app.tenant_id', $2, true),
+              set_config('app.audience', 'staff', true)`,
+      [REAL_SELLER_ID, REAL_TENANT_ID],
+    );
+    await expect(
+      api.query("DELETE FROM app.journal_lines WHERE entry_id = $1", [POSTED_ENTRY_ID]),
+    ).rejects.toMatchObject({
+      code: "23001",
+      message: "El asiento ya está contabilizado: no se modifica, se reversa",
+    });
+    await api.query("ROLLBACK");
+  });
+
   it("inventory_movements (WP-B10): el mismo movimiento, insertado por el owner (con inventory.stock:read), sí se acepta (control positivo)", async () => {
     await api.query("BEGIN");
     await api.query(
