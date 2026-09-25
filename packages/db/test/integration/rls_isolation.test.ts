@@ -38,6 +38,12 @@ const REAL_OWNER_ID = "22222222-2222-2222-2222-222222222222";
 // Vendedor del tenant real: el rol del seed sin inventory.stock:read.
 const REAL_SELLER_ID = "22222222-2222-2222-2222-2222222200b1";
 
+// WP-B14: un rol que el seed no trae, solo con accounting.journal:read. Ve
+// los asientos (a diferencia del vendedor) pero no tiene journal:write, así
+// que para él la única barrera contra modificar un asiento contabilizado es
+// el trigger, no RLS. Hallazgo de la revisión cruzada de B14.
+const REAL_AUDITOR_ID = "22222222-2222-2222-2222-2222222200c1";
+
 // WP-B13: has_permission() exige una sesión viva del usuario en el tenant
 // de contexto. Una por usuario, sembradas en beforeAll; actAs() fija la
 // que corresponde.
@@ -45,6 +51,7 @@ const SESSION_BY_USER = {
   [REAL_OWNER_ID]: "5e550000-0000-0000-0000-0000000000a1",
   [PEER_OWNER_ID]: "5e550000-0000-0000-0000-0000000000a2",
   [REAL_SELLER_ID]: "5e550000-0000-0000-0000-0000000000a3",
+  [REAL_AUDITOR_ID]: "5e550000-0000-0000-0000-0000000000a4",
 } as const;
 type StaffUserId = keyof typeof SESSION_BY_USER;
 
@@ -169,6 +176,16 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
         ('${SESSION_BY_USER[REAL_OWNER_ID]}', '${REAL_TENANT_ID}', '${REAL_OWNER_ID}', now() + interval '8 hours'),
         ('${SESSION_BY_USER[PEER_OWNER_ID]}', '${PEER_TENANT_ID}', '${PEER_OWNER_ID}', now() + interval '8 hours'),
         ('${SESSION_BY_USER[REAL_SELLER_ID]}', '${REAL_TENANT_ID}', '${REAL_SELLER_ID}', now() + interval '8 hours');
+      INSERT INTO app.roles (id, tenant_id, code, name)
+      VALUES ('aaaa0000-0000-0000-0000-0000000000c1', '${REAL_TENANT_ID}', 'auditor', 'Auditor');
+      INSERT INTO app.role_permissions (tenant_id, role_id, permission_code)
+      VALUES ('${REAL_TENANT_ID}', 'aaaa0000-0000-0000-0000-0000000000c1', 'accounting.journal:read');
+      INSERT INTO app.staff_users (id, tenant_id, auth_subject, email, full_name)
+      VALUES ('${REAL_AUDITOR_ID}', '${REAL_TENANT_ID}', 'sub-real-auditor', 'auditor@joda.test', 'Auditor');
+      INSERT INTO app.staff_user_roles (staff_user_id, role_id, tenant_id)
+      VALUES ('${REAL_AUDITOR_ID}', 'aaaa0000-0000-0000-0000-0000000000c1', '${REAL_TENANT_ID}');
+      INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at)
+      VALUES ('${SESSION_BY_USER[REAL_AUDITOR_ID]}', '${REAL_TENANT_ID}', '${REAL_AUDITOR_ID}', now() + interval '8 hours');
     `);
     await db.client.query(`ALTER ROLE joda_api PASSWORD '${JODA_API_TEST_PASSWORD}'`);
 
@@ -917,6 +934,46 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       await api.query("ROLLBACK");
 
       expect(rows).toEqual([{ status: "reversed" }]);
+    });
+
+    // Hallazgo de la revisión cruzada de B14: el vendedor, sin
+    // accounting.journal:read, ni siquiera llega al trigger. Para un UPDATE,
+    // Postgres solo considera las filas que la política de SELECT deja ver
+    // (accounting_read), así que su UPDATE afecta cero filas. Es un efecto
+    // de cómo se combinan las políticas, no de una política de escritura:
+    // 0016 dejó UPDATE en "solo tenant". Queda escrito para que nadie lo
+    // tome por la defensa real.
+    it("el vendedor, sin accounting.journal:read, no puede reabrir un asiento contabilizado: RLS lo deja sin filas", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      const { rowCount } = await api.query(
+        "UPDATE app.journal_entries SET status = 'draft' WHERE id = $1",
+        [POSTED_ENTRY_ID],
+      );
+      await api.query("ROLLBACK");
+
+      expect(rowCount).toBe(0);
+    });
+
+    // El auditor SÍ ve el asiento. Contra él, lo único que protege
+    // RN-CTB-06 es el trigger, que no depende de ningún permiso.
+    it("un auditor con accounting.journal:read pero sin :write ve el asiento contabilizado y el trigger le impide reabrirlo", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_AUDITOR_ID, REAL_TENANT_ID);
+      const visible = await api.query("SELECT status FROM app.journal_entries WHERE id = $1", [
+        POSTED_ENTRY_ID,
+      ]);
+      await expect(
+        api.query("UPDATE app.journal_entries SET status = 'draft' WHERE id = $1", [
+          POSTED_ENTRY_ID,
+        ]),
+      ).rejects.toMatchObject({
+        code: "23001",
+        message: "El asiento ya está contabilizado: no se modifica, se reversa",
+      });
+      await api.query("ROLLBACK");
+
+      expect(visible.rows).toEqual([{ status: "posted" }]);
     });
 
     it("el owner de otro tenant no puede crear una reversión de un asiento del tenant real", async () => {

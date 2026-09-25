@@ -234,6 +234,11 @@ Pruebas, rojo antes y verde después:
   - reabrir un asiento contabilizado se rechaza;
   - el owner vecino no puede revertir un asiento del tenant real.
 
+**Revisión cruzada de B14 (2026-09-25, subagente `revisor`, sesión limpia).** Probó más de 25 vías de romper RN-CTB-06 como `joda_api` real, con el owner, con el vendedor y con el vecino. Incluyó dos transacciones concurrentes que marcaban `reversed` a la vez: la segunda espera el lock, ve `reversed` y se rechaza. También una sombra en `pg_temp`. Ninguna pasó. Dos observaciones, corregidas en la misma rama:
+
+1. ADR-017 no anotaba esta excepción. Ahora tiene una "Segunda excepción anotada", con el criterio para una tercera.
+2. Ningún test ejercitaba `journal_entries` con alguien que no fuera el owner. El vendedor, sin `accounting.journal:read`, no llega al trigger: para un UPDATE, Postgres solo considera las filas que la política de SELECT deja ver, y su UPDATE afecta cero filas. Es un efecto de cómo se combinan las políticas, no una política de escritura. Se agregó un test que lo deja escrito, y otro con un rol auditor (solo `accounting.journal:read`), para quien la única barrera es el trigger; ese falla sin 0020.
+
 **Pregunta abierta para José, sin asumir:** ¿un asiento puede tener más de una reversión contabilizada? Hoy nada impide contabilizar dos reversiones del mismo asiento antes de marcarlo `reversed`. Una vez marcado, ya no se puede contabilizar otra: solo se revierte un `posted`.
 ---
 

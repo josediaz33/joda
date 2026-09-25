@@ -27,3 +27,19 @@ Un extremo propone construir el ERP con triggers encadenados (insertar una venta
 ## Excepción anotada
 
 La proyección de `inventory_balances` la mantiene un trigger. No es lógica de negocio: es la materialización de una suma, con el `CHECK` de no-negatividad como invariante real. La alternativa —mantenerla en el servicio— dejaría el invariante a merced de que nadie escriba por fuera.
+
+## Segunda excepción anotada (WP-B14, 2026-09-25)
+
+`trg_journal_entry_guard` (`0020_journal_immutability.sql`) gobierna las transiciones de `journal_entries.status`: `draft → posted → reversed`, con `reversed` terminal. A primera vista es una máquina de estados en la base, que esta decisión excluye.
+
+Se acepta porque ese mapa **es** la inmutabilidad del libro contable, que esta decisión sí manda a la base. "Un asiento contabilizado no se modifica" (RN-CTB-06) no se puede imponer sin impedir que `posted` vuelva a `draft`. Si no, cualquiera con `accounting.journal:write` reabre el asiento, lo edita y lo vuelve a contabilizar sin rastro.
+
+Lo que sigue fuera de la base es lo que decide:
+
+- qué asiento generar;
+- cuándo contabilizarlo;
+- cuándo revertirlo y con qué líneas.
+
+El mismo mapa vive en `packages/domain/src/accounting/journalEntry.ts`, y la aplicación lo consulta antes de intentar la transición.
+
+**El criterio para una tercera excepción es el mismo:** la transición se impone en la base solo si permitirla rompe un invariante de inmutabilidad. Que sea "una regla importante" no alcanza.
