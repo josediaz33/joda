@@ -107,10 +107,17 @@ Toda tabla con `tenant_id` lleva RLS habilitado **y forzado**:
 ```sql
 ALTER TABLE app.<tabla> ENABLE ROW LEVEL SECURITY;
 ALTER TABLE app.<tabla> FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON app.<tabla>
+CREATE POLICY tenant_isolation ON app.<tabla> AS RESTRICTIVE
   USING (tenant_id = app.current_tenant_id())
   WITH CHECK (tenant_id = app.current_tenant_id());
+-- Permisiva base requerida por Postgres, que deniega todo si no hay
+-- ninguna permisiva. El filtrado lo hace tenant_isolation, que es
+-- RESTRICTIVE. Nunca uses esta política sin la restrictiva.
+CREATE POLICY tenant_access ON app.<tabla>
+  USING (true) WITH CHECK (true);
 ```
+
+**`tenant_isolation` es RESTRICTIVE** (WP-B10): se combina con AND contra toda otra política. Si fuera permisiva (el default de Postgres), se combinaría con OR contra las de permiso de abajo, y tener el permiso alcanzaría para leer filas de cualquier tenant; ese era el defecto que corrigió B10. Detalle del patrón, incluida qué tablas llevan `tenant_access` y para qué comandos, en `docs/data-model.md` §7.
 
 Encima, políticas de permiso sobre lo sensible:
 

@@ -240,6 +240,113 @@ SELECT pg_temp.expect_true(22,
        AND c.relname NOT IN ('tenants', 'permissions')
   ));
 
+-- 23 ─ Toda tabla de app.* con RLS tiene una política `tenant_isolation`
+-- declarada AS RESTRICTIVE, salvo las mismas dos excepciones del 22 (WP-B10,
+-- packages/db/migrations/0016_rls_tenant_isolation_restrictive.sql). Las
+-- permisivas `tenant_access*` de esa migración son `USING (true)`: seguras
+-- SOLO porque la restrictiva las recorta con AND. Una tabla nueva que copie
+-- la permisiva sin la restrictiva — o una `tenant_isolation` creada
+-- PERMISSIVE, el default de Postgres, que es exactamente el defecto que
+-- corrigió B10 — queda abierta, y esto falla a propósito.
+SELECT pg_temp.expect_true(23,
+  'Toda tabla de app.* con RLS tiene tenant_isolation RESTRICTIVE, salvo tenants/permissions',
+  NOT EXISTS (
+    SELECT 1
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'app'
+       AND c.relkind = 'r'
+       AND c.relrowsecurity
+       AND c.relname NOT IN ('tenants', 'permissions')
+       AND NOT EXISTS (
+         SELECT 1
+           FROM pg_policy p
+          WHERE p.polrelid = c.oid
+            AND p.polname = 'tenant_isolation'
+            AND NOT p.polpermissive
+            AND p.polcmd = '*')
+  ));
+
+-- 24 ─ Una línea contable no puede quedar en un tenant distinto del de su
+-- asiento (WP-B10, 0017_guard_posted_journal_fail_closed.sql). Con
+-- SECURITY DEFINER, guard_posted_journal ve asientos de todos los tenants y
+-- la FK entry_id no evalúa RLS: el tenant se verifica explícitamente. Sobre
+-- un asiento en BORRADOR, para que el rechazo no venga de la regla de
+-- asiento contabilizado.
+SELECT pg_temp.expect_fail(24, 'Línea de asiento movida a otro tenant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('24242424-0000-0000-0000-000000000024', 'tenant-inv-24', 'Inv 24 SA', 'Inv 24');
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo)
+      VALUES ('f0000000-0000-0000-0000-000000000024',
+              '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 98, current_date,
+              'draft', 'Borrador para el invariante 24');
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-000000000024', id, 1000, 0
+        FROM app.chart_of_accounts WHERE code = '1.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+      -- Segunda línea para que el borrador cuadre: si el guard no rechazara,
+      -- el fallo tiene que verse como FALLO de este invariante, no como un
+      -- asiento descuadrado al COMMIT de todo el script.
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-000000000024', id, 0, 1000
+        FROM app.chart_of_accounts WHERE code = '4.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+      UPDATE app.journal_lines SET tenant_id = '24242424-0000-0000-0000-000000000024'
+       WHERE entry_id = 'f0000000-0000-0000-0000-000000000024';
+    END $x$
+  $$);
+
+-- 25 ─ El guard de asiento contabilizado FALLA CERRADO (WP-B10, 0017): si no
+-- encuentra el asiento de la línea, rechaza — nunca compara contra un NULL.
+-- Borrar el asiento contabilizado del smoke borra sus líneas por cascada,
+-- con el asiento ya inexistente: antes de 0017 eso daba v_status NULL y
+-- pasaba (el asiento contabilizado desaparecía entero).
+SELECT pg_temp.expect_fail(25, 'Borrar un asiento contabilizado (cascada a sus líneas)',
+  $$DELETE FROM app.journal_entries WHERE id = 'f0000000-0000-0000-0000-000000000001'$$);
+
+-- 26 ─ Una línea no se saca de un asiento contabilizado (WP-B10, 0017). La
+-- versión de 0009 miraba solo el asiento de NEW en un UPDATE: mover la
+-- línea a un borrador pasaba.
+SELECT pg_temp.expect_fail(26, 'Mover una línea fuera de un asiento contabilizado',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo)
+      VALUES ('f0000000-0000-0000-0000-000000000026',
+              '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 97, current_date,
+              'draft', 'Borrador para el invariante 26');
+      UPDATE app.journal_lines SET entry_id = 'f0000000-0000-0000-0000-000000000026'
+       WHERE entry_id = 'f0000000-0000-0000-0000-000000000001';
+    END $x$
+  $$);
+
+-- 27 ─ Una línea nueva no se cuelga de un asiento de otro tenant (WP-B10,
+-- 0017). La FK entry_id no evalúa RLS y el trigger de 0009 no cubría
+-- INSERT: una línea del tenant B apuntando a un asiento del tenant A
+-- pasaba. Mismo rechazo que un asiento inexistente.
+SELECT pg_temp.expect_fail(27, 'Línea nueva de un tenant sobre el asiento de otro tenant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('27272727-0000-0000-0000-000000000027', 'tenant-inv-27', 'Inv 27 SA', 'Inv 27');
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '27272727-0000-0000-0000-000000000027', 'f0000000-0000-0000-0000-000000000001', id, 1000, 0
+        FROM app.chart_of_accounts WHERE code = '1.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+      -- Par compensado: sin el guard, el fallo tiene que verse como FALLO
+      -- de este invariante, no como un asiento descuadrado al COMMIT.
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '27272727-0000-0000-0000-000000000027', 'f0000000-0000-0000-0000-000000000001', id, 0, 1000
+        FROM app.chart_of_accounts WHERE code = '4.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+    END $x$
+  $$);
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'
