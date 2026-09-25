@@ -7,7 +7,9 @@
  */
 
 @import "tailwindcss";
+@import "tw-animate-css";
 @source "../";
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
 @theme static {
   --color-*: initial;
@@ -101,6 +103,32 @@
   --radius-panel: 12px;
 }
 
+/* shadcn/Radix usa estos nombres. Cada uno apunta a un rol JODA existente;
+ * @theme inline conserva el cambio de tema dentro de [data-theme="dark"]. */
+@theme inline {
+  --color-background: var(--color-surface);
+  --color-foreground: var(--color-text);
+  --color-card: var(--color-surface-elevated);
+  --color-card-foreground: var(--color-text);
+  --color-popover: var(--color-surface-elevated);
+  --color-popover-foreground: var(--color-text);
+  --color-primary: var(--color-accent);
+  --color-primary-foreground: var(--color-accent-foreground);
+  --color-secondary: var(--color-surface-elevated);
+  --color-secondary-foreground: var(--color-text);
+  --color-muted: var(--color-surface-elevated);
+  --color-muted-foreground: var(--color-text-secondary);
+  --color-destructive: var(--color-error);
+  --color-destructive-foreground: var(--color-surface);
+  --color-border: var(--color-border-strong);
+  --color-input: var(--color-border-strong);
+  --color-ring: var(--color-focus);
+  --radius-sm: var(--radius-small);
+  --radius-md: var(--radius-control);
+  --radius-lg: var(--radius-panel);
+  --radius-xl: var(--radius-panel);
+}
+
 /* Contraste WCAG, texto normal: mínimo 4,5:1.
  * Marca: tinta/blanco 17,79; carbón/blanco 12,38; tinta/piedra 10,19;
  * carbón/piedra 7,09; oro/tinta 7,01; oro/carbón 4,88;
@@ -155,4 +183,11 @@
 /* Columnas de guaraníes, mililitros y otras cifras alineadas. */
 @utility numeric-tabular {
   font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-slot] {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

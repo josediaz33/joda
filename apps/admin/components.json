@@ -1,0 +1,20 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "radix-nova",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "",
+    "css": "../../packages/ui/src/styles/tokens.css",
+    "baseColor": "neutral",
+    "cssVariables": true
+  },
+  "iconLibrary": "lucide",
+  "aliases": {
+    "components": "@joda/ui/primitives",
+    "ui": "@joda/ui/primitives",
+    "hooks": "@joda/ui/lib",
+    "lib": "@joda/ui/lib",
+    "utils": "@joda/ui/lib/utils"
+  }
+}

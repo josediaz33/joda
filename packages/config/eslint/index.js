@@ -129,6 +129,45 @@ export default [
   ...tseslint.configs.recommended,
   prettierConfig,
 
+  // WP-E02: los colores joda-* son materia prima de tokens.css, no clases
+  // para componentes. También cubre clases armadas antes de llegar a className.
+  {
+    files: ["apps/**/*.{ts,tsx}", "packages/ui/**/*.{ts,tsx}"],
+    plugins: {
+      "joda-ui": {
+        rules: {
+          "semantic-colors": {
+            meta: {
+              type: "problem",
+              docs: { description: "Usar roles semánticos en className" },
+              messages: {
+                primitive:
+                  "La clase usa un color primitivo joda-*. Usá un rol semántico de tokens.css (WP-E02).",
+              },
+            },
+            create(context) {
+              const primitiveClass =
+                /\b(?:bg|text|border|ring|outline|fill|stroke|from|via|to|decoration|caret|shadow)(?:-[xytrblse])?-joda-[a-z-]+/;
+              return {
+                Literal(node) {
+                  if (typeof node.value === "string" && primitiveClass.test(node.value)) {
+                    context.report({ node, messageId: "primitive" });
+                  }
+                },
+                TemplateElement(node) {
+                  if (primitiveClass.test(node.value.raw)) {
+                    context.report({ node, messageId: "primitive" });
+                  }
+                },
+              };
+            },
+          },
+        },
+      },
+    },
+    rules: { "joda-ui/semantic-colors": "error" },
+  },
+
   // --- Pureza de packages/domain: restricción mecánica, no convención ---
   {
     files: ["packages/domain/**/*.ts"],
