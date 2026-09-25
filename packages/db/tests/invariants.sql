@@ -1146,22 +1146,21 @@ SELECT pg_temp.expect_fail_like(62, 'Borrar un borrador: primero las líneas, de
 -- evalúan con los permisos de quien consulta; las de public no.
 -- ─────────────────────────────────────────────────────────────────────
 
--- 63 ─ Toda vista de app.* es security_invoker, salvo v_stock_available
--- (pendiente de decisión, WP-B12b: la consume public.v_catalog_variants), y
--- ninguna de public lo es.
+-- 63 ─ Toda vista de app.* es security_invoker, sin excepciones desde
+-- WP-B12b (0022), y ninguna de public lo es.
 -- Una vista de app.* sin security_invoker corre como su dueño, que elude
 -- RLS, y le muestra a `joda_api` filas de todos los tenants (demostrado
 -- con v_trial_balance en la revisión de B10). Las de public son la
 -- excepción deliberada: corren como su dueño para que `joda_readonly` vea
 -- el catálogo publicado. "Arreglarlas" dejaría al storefront sin catálogo.
 SELECT pg_temp.expect_true(63,
-  'Toda vista de app.* es security_invoker (salvo v_stock_available, WP-B12b); ninguna de public.v_catalog_* lo es',
+  'Toda vista de app.* es security_invoker; ninguna de public.v_catalog_* lo es',
   NOT EXISTS (
     SELECT 1
       FROM pg_class c
       JOIN pg_namespace n ON n.oid = c.relnamespace
      WHERE c.relkind = 'v'
-       AND (   (n.nspname = 'app' AND c.relname <> 'v_stock_available'
+       AND (   (n.nspname = 'app'
                 AND NOT ('security_invoker=true' = ANY (COALESCE(c.reloptions, '{}'))))
             OR (n.nspname = 'public' AND c.relname LIKE 'v\_catalog\_%'
                 AND 'security_invoker=true' = ANY (COALESCE(c.reloptions, '{}'))))
@@ -1236,6 +1235,70 @@ SELECT pg_temp.expect_fail_like(65, 'Reversión en otro período: cada asiento q
         RAISE EXCEPTION 'aceptado';
       END IF;
       RAISE EXCEPTION 'inesperado: original=% reversión en su período=%', v_orig, v_rev;
+    END $x$
+  $$,
+  'aceptado');
+
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-B12b (0022_stock_available_invoker.sql): v_catalog_variants calcula
+-- la disponibilidad desde su propia fuente, no desde v_stock_available.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 66 ─ La fórmula "saldo − reservas vivas" está escrita dos veces (0022):
+-- in_stock de v_catalog_variants coincide con available > 0 de
+-- v_stock_available para toda variante publicada. Corre como superusuario,
+-- que ve todos los tenants por las dos vistas. El smoke no deja ninguna
+-- variante publicada con stock, y "coinciden" sobre un catálogo todo en
+-- falso no prueba nada: el bloque le da dos frascos al sellado, compara,
+-- los reserva (una reserva viva y una vencida, que no cuenta), y vuelve a
+-- comparar. El RAISE final revierte todo.
+SELECT pg_temp.expect_fail_like(66,
+  'in_stock de v_catalog_variants coincide con v_stock_available',
+  $$DO $x$
+    DECLARE v_disagree int; v_in_stock_before boolean; v_in_stock_after boolean;
+    BEGIN
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('99999999-0000-0000-0000-000000000660', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-000000000001', 2, 'unit', 0, 'PYG', 1, 0, 0);
+      INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-000000000660',
+              '55555555-0000-0000-0000-000000000001', 2, 'unit', 'purchase_receipt');
+      SELECT in_stock INTO v_in_stock_before
+        FROM public.v_catalog_variants WHERE id = '55555555-0000-0000-0000-000000000001';
+      SELECT count(*) INTO v_disagree
+        FROM public.v_catalog_variants c
+        LEFT JOIN app.v_stock_available s ON s.variant_id = c.id
+       WHERE c.in_stock IS DISTINCT FROM (COALESCE(s.available, 0) > 0);
+      -- Una viva de 1 y una vencida de 5: queda 1 disponible solo si las
+      -- dos fórmulas ignoran la vencida.
+      INSERT INTO app.stock_reservations (tenant_id, variant_id, qty, reason, expires_at) VALUES
+        ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-000000000001',
+         1, 'manual_hold', now() + interval '1 hour'),
+        ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-000000000001',
+         5, 'manual_hold', now() - interval '1 hour');
+      SELECT v_disagree + count(*) INTO v_disagree
+        FROM public.v_catalog_variants c
+        LEFT JOIN app.v_stock_available s ON s.variant_id = c.id
+       WHERE c.in_stock IS DISTINCT FROM (COALESCE(s.available, 0) > 0);
+      SELECT v_in_stock_before AND in_stock INTO v_in_stock_before
+        FROM public.v_catalog_variants WHERE id = '55555555-0000-0000-0000-000000000001';
+      -- Otra viva de 1: disponible 0, agotado para las dos.
+      INSERT INTO app.stock_reservations (tenant_id, variant_id, qty, reason, expires_at) VALUES
+        ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-000000000001',
+         1, 'manual_hold', now() + interval '1 hour');
+      SELECT in_stock INTO v_in_stock_after
+        FROM public.v_catalog_variants WHERE id = '55555555-0000-0000-0000-000000000001';
+      SELECT v_disagree + count(*) INTO v_disagree
+        FROM public.v_catalog_variants c
+        LEFT JOIN app.v_stock_available s ON s.variant_id = c.id
+       WHERE c.in_stock IS DISTINCT FROM (COALESCE(s.available, 0) > 0);
+      IF v_disagree = 0 AND v_in_stock_before AND NOT v_in_stock_after THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'inesperado: desacuerdos=% antes=% después=%',
+        v_disagree, v_in_stock_before, v_in_stock_after;
     END $x$
   $$,
   'aceptado');

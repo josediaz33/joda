@@ -17,7 +17,30 @@ FROM
       product_variants v
       JOIN products p ON ((p.id = v.product_id))
     )
-    LEFT JOIN v_stock_available s ON ((s.variant_id = v.id))
+    LEFT JOIN LATERAL (
+      SELECT
+        (
+          sum((b.on_hand) :: numeric) - COALESCE(
+            (
+              SELECT
+                sum((sr.qty) :: numeric) AS sum
+              FROM
+                stock_reservations sr
+              WHERE
+                (
+                  (sr.variant_id = v.id)
+                  AND (sr.released_at IS NULL)
+                  AND (sr.expires_at > NOW())
+                )
+            ),
+            (0) :: numeric
+          )
+        ) AS available
+      FROM
+        inventory_balances b
+      WHERE
+        (b.variant_id = v.id)
+    ) s ON (TRUE)
   )
 WHERE
   (
