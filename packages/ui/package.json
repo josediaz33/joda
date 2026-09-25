@@ -3,14 +3,18 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Design system compartido entre admin y storefront. Esqueleto (WP-A01); los tokens llegan en WP-E01.",
+  "description": "Tokens de diseño compartidos entre admin y storefront (WP-E01).",
+  "exports": {
+    "./tokens.css": "./src/styles/tokens.css"
+  },
   "scripts": {
-    "build": "node ../../scripts/pending-task.mjs \"build (ui)\" WP-E01",
-    "test": "node ../../scripts/pending-task.mjs \"test (ui)\" WP-E01",
+    "build": "tsc -p tsconfig.json",
+    "test": "node --test src/styles/tokens.test.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint ."
   },
   "devDependencies": {
+    "tailwindcss": "4.3.3",
     "typescript": "catalog:",
     "eslint": "catalog:",
     "@eslint/js": "catalog:",
