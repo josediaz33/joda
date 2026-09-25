@@ -13,16 +13,20 @@
   },
   "devDependencies": {
     "@eslint/js": "catalog:",
+    "@tailwindcss/postcss": "4.3.3",
     "@types/node": "catalog:",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "eslint": "catalog:",
     "eslint-config-prettier": "catalog:",
     "eslint-plugin-boundaries": "catalog:",
+    "postcss": "8.5.6",
+    "tailwindcss": "4.3.3",
     "typescript": "catalog:",
     "typescript-eslint": "catalog:"
   },
   "dependencies": {
+    "@joda/ui": "workspace:*",
     "next": "16.3.5",
     "react": "19.3.0",
     "react-dom": "19.3.0"

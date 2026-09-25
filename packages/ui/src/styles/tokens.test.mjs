@@ -1,0 +1,93 @@
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { describe, test } from "node:test";
+import { URL } from "node:url";
+
+const stylesheet = readFileSync(new URL("./tokens.css", import.meta.url), "utf8");
+const darkStart = stylesheet.indexOf(':root[data-theme="dark"]');
+const light = declarations(stylesheet.slice(0, darkStart));
+const dark = { ...light, ...declarations(stylesheet.slice(darkStart)) };
+
+function declarations(source) {
+  return Object.fromEntries(
+    [...source.matchAll(/(--color-[a-z-]+):\s*([^;]+);/g)].map((match) => [
+      match[1],
+      match[2].trim(),
+    ]),
+  );
+}
+
+function color(name, tokens) {
+  const value = tokens[`--color-${name}`];
+  assert.ok(value, `Falta --color-${name}`);
+
+  if (/^#[\da-f]{6}$/i.test(value)) {
+    return [1, 3, 5].map((index) => parseInt(value.slice(index, index + 2), 16));
+  }
+
+  const alias = value.match(/^var\((--color-[a-z-]+)\)$/);
+  if (alias) {
+    return color(alias[1].slice("--color-".length), tokens);
+  }
+
+  const mix = value.match(
+    /^color-mix\(\s*in srgb,\s*var\((--color-[a-z-]+)\)\s+(\d+)%,\s*var\((--color-[a-z-]+)\)\s*\)$/s,
+  );
+  assert.ok(mix, `Valor de color no reconocido para ${name}: ${value}`);
+  const first = color(mix[1].slice("--color-".length), tokens);
+  const second = color(mix[3].slice("--color-".length), tokens);
+  const fraction = Number(mix[2]) / 100;
+  return first.map((channel, index) =>
+    Math.round(channel * fraction + second[index] * (1 - fraction)),
+  );
+}
+
+function luminance(rgb) {
+  const linear = rgb.map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722;
+}
+
+function contrast(foreground, background) {
+  const first = luminance(foreground);
+  const second = luminance(background);
+  return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
+}
+
+function assertAa(foreground, background, tokens, mode) {
+  const ratio = contrast(color(foreground, tokens), color(background, tokens));
+  assert.ok(ratio >= 4.5, `${mode}: ${foreground} sobre ${background} da ${ratio.toFixed(2)}:1`);
+}
+
+function assertThemeAa(tokens, mode) {
+  const textRoles = [
+    "text",
+    "text-secondary",
+    "accent",
+    "error",
+    "success",
+    "warning",
+    "info",
+    "stock-available",
+    "stock-low",
+    "stock-sold-out",
+    "stock-made-to-order",
+  ];
+  for (const foreground of textRoles) {
+    assertAa(foreground, "surface", tokens, mode);
+    assertAa(foreground, "surface-elevated", tokens, mode);
+  }
+  assertAa("accent-foreground", "accent", tokens, mode);
+}
+
+describe("RNF-USA-04 · frontend-spec.md §7 · contraste AA", () => {
+  test("los roles semánticos mantienen 4,5:1 en ambas superficies claras", () => {
+    assertThemeAa(light, "claro");
+  });
+
+  test("los roles semánticos mantienen 4,5:1 en ambas superficies oscuras", () => {
+    assertThemeAa(dark, "oscuro");
+  });
+});

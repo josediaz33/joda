@@ -1,0 +1,156 @@
+/*
+ * JODA Parfums · fuente única de tokens para admin y storefront.
+ * Los componentes usan SOLO los colores semánticos (--color-surface,
+ * --color-text, --color-error, --color-stock-*, etc.). Los --color-joda-*
+ * son primitivos de marca y estado: no se usan directamente en componentes.
+ * La densidad y la composición pertenecen a cada app, no a este archivo.
+ */
+
+@import "tailwindcss";
+
+@font-face {
+  font-family: "Barlow Condensed";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("@fontsource/barlow-condensed/files/barlow-condensed-latin-700-normal.woff2")
+    format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-600-normal.woff2") format("woff2");
+}
+
+@theme static {
+  --color-*: initial;
+
+  /* Material de marca: logo, etiqueta de decant, catálogo e Instagram. */
+  --color-joda-ink: #19171c;
+  --color-joda-charcoal: #343439;
+  --color-joda-white: #ffffff;
+  --color-joda-stone: #cac3bb;
+  --color-joda-gold: #c49c61;
+  --color-joda-brass: #7a603f;
+
+  /* Dos intensidades por estado: texto AA sobre blanco / sobre tinta. */
+  --color-joda-error-deep: #963a50;
+  --color-joda-error-soft: #e8a4af;
+  --color-joda-success-deep: #1d6b60;
+  --color-joda-success-soft: #83cdb6;
+  --color-joda-warning-deep: #744b84;
+  --color-joda-warning-soft: #c6a0d8;
+  --color-joda-info-deep: #235e8c;
+  --color-joda-info-soft: #8dbfe6;
+
+  /* Semánticos para superficies claras. El modo oscuro cambia solo estos roles. */
+  --color-surface: var(--color-joda-white);
+  --color-surface-elevated: color-mix(
+    in srgb,
+    var(--color-joda-white) 75%,
+    var(--color-joda-stone)
+  );
+  --color-text: var(--color-joda-ink);
+  --color-text-secondary: var(--color-joda-charcoal);
+  --color-accent: var(--color-joda-brass);
+  --color-accent-foreground: var(--color-joda-white);
+  --color-border: var(--color-joda-charcoal);
+  --color-focus: var(--color-joda-brass);
+  --color-error: var(--color-joda-error-deep);
+  --color-success: var(--color-joda-success-deep);
+  --color-warning: var(--color-joda-warning-deep);
+  --color-info: var(--color-joda-info-deep);
+
+  /* frontend-spec §8.1: Disponible, Últimas unidades, Agotado, Bajo pedido. */
+  --color-stock-available: var(--color-joda-success-deep);
+  --color-stock-low: var(--color-joda-warning-deep);
+  --color-stock-sold-out: var(--color-joda-error-deep);
+  --color-stock-made-to-order: var(--color-joda-info-deep);
+
+  /* Dos familias, tres pesos: Barlow Condensed 700; IBM Plex Sans 400/600. */
+  --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
+  --font-body: "IBM Plex Sans", Arial, sans-serif;
+
+  /* 13/16, 14/20, 16/24, 20/28, 24/32, 32/40, 40/48, 48/56 px. */
+  --text-data: 0.8125rem;
+  --text-data--line-height: 1rem;
+  --text-caption: 0.875rem;
+  --text-caption--line-height: 1.25rem;
+  --text-body: 1rem;
+  --text-body--line-height: 1.5rem;
+  --text-lead: 1.25rem;
+  --text-lead--line-height: 1.75rem;
+  --text-heading-sm: 1.5rem;
+  --text-heading-sm--line-height: 2rem;
+  --text-heading-md: 2rem;
+  --text-heading-md--line-height: 2.5rem;
+  --text-heading-lg: 2.5rem;
+  --text-heading-lg--line-height: 3rem;
+  --text-display: 3rem;
+  --text-display--line-height: 3.5rem;
+
+  /* Escala de 4, 8, 12, 16, 24, 32, 48 y 64 px. */
+  --spacing-1: 0.25rem;
+  --spacing-2: 0.5rem;
+  --spacing-3: 0.75rem;
+  --spacing-4: 1rem;
+  --spacing-6: 1.5rem;
+  --spacing-8: 2rem;
+  --spacing-12: 3rem;
+  --spacing-16: 4rem;
+
+  /* Piezas pequeñas, controles y paneles superpuestos. */
+  --radius-small: 2px;
+  --radius-control: 6px;
+  --radius-panel: 12px;
+}
+
+/* Contraste WCAG, texto normal: mínimo 4,5:1.
+ * Marca: tinta/blanco 17,79; carbón/blanco 12,38; tinta/piedra 10,19;
+ * carbón/piedra 7,09; oro/tinta 7,01; oro/carbón 4,88;
+ * latón/blanco 5,88. Oro/blanco 2,54: NO usar como texto.
+ * Superficie elevada clara (#f2f0ee): tinta 15,65; carbón 10,89;
+ * latón 5,17; error 6,12; éxito 5,56; advertencia 5,99; info 6,05.
+ * Superficie elevada oscura (carbón): blanco 12,38; piedra 7,09;
+ * oro 4,88; error 6,11; éxito 6,70; advertencia 5,55; info 6,32.
+ * Estado (profundo/blanco · suave/tinta):
+ * error 6,96 · 8,78; éxito 6,32 · 9,63;
+ * advertencia 6,81 · 7,98; información 6,88 · 9,09.
+ * Todo estado lleva además texto o icono: el color no comunica solo.
+ */
+:root[data-theme="dark"] {
+  --color-surface: var(--color-joda-ink);
+  --color-surface-elevated: var(--color-joda-charcoal);
+  --color-text: var(--color-joda-white);
+  --color-text-secondary: var(--color-joda-stone);
+  --color-accent: var(--color-joda-gold);
+  --color-accent-foreground: var(--color-joda-ink);
+  --color-border: var(--color-joda-stone);
+  --color-focus: var(--color-joda-gold);
+  --color-error: var(--color-joda-error-soft);
+  --color-success: var(--color-joda-success-soft);
+  --color-warning: var(--color-joda-warning-soft);
+  --color-info: var(--color-joda-info-soft);
+  --color-stock-available: var(--color-joda-success-soft);
+  --color-stock-low: var(--color-joda-warning-soft);
+  --color-stock-sold-out: var(--color-joda-error-soft);
+  --color-stock-made-to-order: var(--color-joda-info-soft);
+}
+
+/* Columnas de guaraníes, mililitros y otras cifras alineadas. */
+@utility numeric-tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@source inline("numeric-tabular");

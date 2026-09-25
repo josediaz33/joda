@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import "@joda/ui/tokens.css";
 
 export const metadata = {
   title: "JODA Parfums",
