@@ -1,0 +1,5 @@
+/* WP-G01 reemplaza estos respaldos con las variables de next/font/local. */
+html {
+  --font-joda-display: "Barlow Condensed";
+  --font-joda-body: "IBM Plex Sans";
+}

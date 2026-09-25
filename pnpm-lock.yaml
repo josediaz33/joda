@@ -101,6 +101,12 @@ importers:
 
   apps/admin:
     dependencies:
+      '@fontsource/barlow-condensed':
+        specifier: 5.3.0
+        version: 5.3.0
+      '@fontsource/ibm-plex-sans':
+        specifier: 5.3.0
+        version: 5.3.0
       '@joda/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -438,13 +444,6 @@ importers:
         version: 8.70.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
 
   packages/ui:
-    dependencies:
-      '@fontsource/barlow-condensed':
-        specifier: 5.3.0
-        version: 5.3.0
-      '@fontsource/ibm-plex-sans':
-        specifier: 5.3.0
-        version: 5.3.0
     devDependencies:
       '@eslint/js':
         specifier: 'catalog:'

@@ -7,31 +7,7 @@
  */
 
 @import "tailwindcss";
-
-@font-face {
-  font-family: "Barlow Condensed";
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url("@fontsource/barlow-condensed/files/barlow-condensed-latin-700-normal.woff2")
-    format("woff2");
-}
-
-@font-face {
-  font-family: "IBM Plex Sans";
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-400-normal.woff2") format("woff2");
-}
-
-@font-face {
-  font-family: "IBM Plex Sans";
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url("@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-600-normal.woff2") format("woff2");
-}
+@source "../";
 
 @theme static {
   --color-*: initial;
@@ -62,10 +38,19 @@
     var(--color-joda-stone)
   );
   --color-text: var(--color-joda-ink);
-  --color-text-secondary: var(--color-joda-charcoal);
+  --color-text-secondary: color-mix(
+    in srgb,
+    var(--color-joda-charcoal) 62%,
+    var(--color-joda-stone)
+  );
   --color-accent: var(--color-joda-brass);
   --color-accent-foreground: var(--color-joda-white);
-  --color-border: var(--color-joda-charcoal);
+  --color-border-subtle: var(--color-joda-stone);
+  --color-border-strong: color-mix(
+    in srgb,
+    var(--color-joda-charcoal) 45%,
+    var(--color-joda-stone)
+  );
   --color-focus: var(--color-joda-brass);
   --color-error: var(--color-joda-error-deep);
   --color-success: var(--color-joda-success-deep);
@@ -79,8 +64,8 @@
   --color-stock-made-to-order: var(--color-joda-info-deep);
 
   /* Dos familias, tres pesos: Barlow Condensed 700; IBM Plex Sans 400/600. */
-  --font-display: "Barlow Condensed", "Arial Narrow", sans-serif;
-  --font-body: "IBM Plex Sans", Arial, sans-serif;
+  --font-display: var(--font-joda-display, "Barlow Condensed"), sans-serif;
+  --font-body: var(--font-joda-body, "IBM Plex Sans"), sans-serif;
 
   /* 13/16, 14/20, 16/24, 20/28, 24/32, 32/40, 40/48, 48/56 px. */
   --text-data: 0.8125rem;
@@ -120,23 +105,42 @@
  * Marca: tinta/blanco 17,79; carbón/blanco 12,38; tinta/piedra 10,19;
  * carbón/piedra 7,09; oro/tinta 7,01; oro/carbón 4,88;
  * latón/blanco 5,88. Oro/blanco 2,54: NO usar como texto.
- * Superficie elevada clara (#f2f0ee): tinta 15,65; carbón 10,89;
+ * Texto secundario: claro 5,36/blanco y 4,71/elevada;
+ * oscuro 7,19/tinta y 5,01/carbón.
+ * Superficie elevada clara (#f2f0ee): tinta 15,65;
  * latón 5,17; error 6,12; éxito 5,56; advertencia 5,99; info 6,05.
- * Superficie elevada oscura (carbón): blanco 12,38; piedra 7,09;
+ * Superficie elevada oscura (carbón): blanco 12,38;
  * oro 4,88; error 6,11; éxito 6,70; advertencia 5,55; info 6,32.
+ * Contorno fuerte, contraste no textual (mínimo 3:1):
+ * claro 3,75/blanco y 3,30/elevada; oscuro 5,20/tinta y 3,62/carbón.
+ * Foco: claro 5,88/blanco y 5,17/elevada;
+ * oscuro 7,01/tinta y 4,88/carbón.
  * Estado (profundo/blanco · suave/tinta):
  * error 6,96 · 8,78; éxito 6,32 · 9,63;
  * advertencia 6,81 · 7,98; información 6,88 · 9,09.
  * Todo estado lleva además texto o icono: el color no comunica solo.
  */
-:root[data-theme="dark"] {
+[data-theme="dark"] {
   --color-surface: var(--color-joda-ink);
   --color-surface-elevated: var(--color-joda-charcoal);
   --color-text: var(--color-joda-white);
-  --color-text-secondary: var(--color-joda-stone);
+  --color-text-secondary: color-mix(
+    in srgb,
+    var(--color-joda-stone) 78%,
+    var(--color-joda-charcoal)
+  );
   --color-accent: var(--color-joda-gold);
   --color-accent-foreground: var(--color-joda-ink);
-  --color-border: var(--color-joda-stone);
+  --color-border-subtle: color-mix(
+    in srgb,
+    var(--color-joda-charcoal) 60%,
+    var(--color-joda-stone)
+  );
+  --color-border-strong: color-mix(
+    in srgb,
+    var(--color-joda-stone) 60%,
+    var(--color-joda-charcoal)
+  );
   --color-focus: var(--color-joda-gold);
   --color-error: var(--color-joda-error-soft);
   --color-success: var(--color-joda-success-soft);
@@ -152,5 +156,3 @@
 @utility numeric-tabular {
   font-variant-numeric: tabular-nums;
 }
-
-@source inline("numeric-tabular");

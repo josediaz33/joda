@@ -4,7 +4,8 @@ import { describe, test } from "node:test";
 import { URL } from "node:url";
 
 const stylesheet = readFileSync(new URL("./tokens.css", import.meta.url), "utf8");
-const darkStart = stylesheet.indexOf(':root[data-theme="dark"]');
+const darkStart = stylesheet.indexOf('[data-theme="dark"] {');
+assert.ok(darkStart >= 0, "Falta el selector oscuro aplicable por sección");
 const light = declarations(stylesheet.slice(0, darkStart));
 const dark = { ...light, ...declarations(stylesheet.slice(darkStart)) };
 
@@ -56,9 +57,12 @@ function contrast(foreground, background) {
   return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
 }
 
-function assertAa(foreground, background, tokens, mode) {
+function assertContrast(foreground, background, tokens, mode, minimum) {
   const ratio = contrast(color(foreground, tokens), color(background, tokens));
-  assert.ok(ratio >= 4.5, `${mode}: ${foreground} sobre ${background} da ${ratio.toFixed(2)}:1`);
+  assert.ok(
+    ratio >= minimum,
+    `${mode}: ${foreground} sobre ${background} da ${ratio.toFixed(2)}:1 (mínimo ${minimum}:1)`,
+  );
 }
 
 function assertThemeAa(tokens, mode) {
@@ -76,10 +80,17 @@ function assertThemeAa(tokens, mode) {
     "stock-made-to-order",
   ];
   for (const foreground of textRoles) {
-    assertAa(foreground, "surface", tokens, mode);
-    assertAa(foreground, "surface-elevated", tokens, mode);
+    assertContrast(foreground, "surface", tokens, mode, 4.5);
+    assertContrast(foreground, "surface-elevated", tokens, mode, 4.5);
   }
-  assertAa("accent-foreground", "accent", tokens, mode);
+  assertContrast("accent-foreground", "accent", tokens, mode, 4.5);
+}
+
+function assertThemeNonTextAa(tokens, mode) {
+  for (const foreground of ["border-strong", "focus"]) {
+    assertContrast(foreground, "surface", tokens, mode, 3);
+    assertContrast(foreground, "surface-elevated", tokens, mode, 3);
+  }
 }
 
 describe("RNF-USA-04 · frontend-spec.md §7 · contraste AA", () => {
@@ -89,5 +100,10 @@ describe("RNF-USA-04 · frontend-spec.md §7 · contraste AA", () => {
 
   test("los roles semánticos mantienen 4,5:1 en ambas superficies oscuras", () => {
     assertThemeAa(dark, "oscuro");
+  });
+
+  test("contornos de controles y foco mantienen 3:1 en ambas superficies y modos", () => {
+    assertThemeNonTextAa(light, "claro");
+    assertThemeNonTextAa(dark, "oscuro");
   });
 });

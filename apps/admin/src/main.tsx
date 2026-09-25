@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import "@joda/ui/tokens.css";
+import "./fonts.css";
 import { App } from "./App";
 
 const container = document.getElementById("root");
