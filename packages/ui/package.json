@@ -4,10 +4,6 @@
   "private": true,
   "type": "module",
   "description": "Tokens y primitivas compartidos entre admin y storefront.",
-  "imports": {
-    "#primitives/*": "./src/primitives/*.tsx",
-    "#lib/*": "./src/lib/*.ts"
-  },
   "exports": {
     "./tokens.css": "./src/styles/tokens.css",
     "./primitives/*": "./src/primitives/*.tsx",

@@ -34,6 +34,30 @@ describe("WP-E02 · backlog · clases de color semántico", () => {
     expect(results[0]?.messages.map(({ ruleId }) => ruleId)).toContain("joda-ui/semantic-colors");
   });
 
+  it("rechaza divide-joda-ink", async () => {
+    const results = await eslint.lintText('void <div className="divide-joda-ink" />;', {
+      filePath,
+    });
+
+    expect(results[0]?.messages.map(({ ruleId }) => ruleId)).toContain("joda-ui/semantic-colors");
+  });
+
+  it("rechaza placeholder-joda-stone", async () => {
+    const results = await eslint.lintText('void <input className="placeholder-joda-stone" />;', {
+      filePath,
+    });
+
+    expect(results[0]?.messages.map(({ ruleId }) => ruleId)).toContain("joda-ui/semantic-colors");
+  });
+
+  it("rechaza colores joda dentro de valores arbitrarios", async () => {
+    const results = await eslint.lintText('void <div className="bg-[var(--color-joda-ink)]" />;', {
+      filePath,
+    });
+
+    expect(results[0]?.messages.map(({ ruleId }) => ruleId)).toContain("joda-ui/semantic-colors");
+  });
+
   it("acepta roles semánticos", async () => {
     const results = await eslint.lintText(
       'void <div className="bg-background text-foreground" />;',

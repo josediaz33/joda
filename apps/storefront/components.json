@@ -11,10 +11,10 @@
   },
   "iconLibrary": "lucide",
   "aliases": {
-    "components": "@joda/ui/primitives",
-    "ui": "@joda/ui/primitives",
-    "hooks": "@joda/ui/lib",
-    "lib": "@joda/ui/lib",
-    "utils": "@joda/ui/lib/utils"
+    "components": "@ui/primitives",
+    "ui": "@ui/primitives",
+    "hooks": "@ui/lib",
+    "lib": "@ui/lib",
+    "utils": "@ui/lib/utils"
   }
 }

@@ -146,8 +146,7 @@ export default [
               },
             },
             create(context) {
-              const primitiveClass =
-                /\b(?:bg|text|border|ring|outline|fill|stroke|from|via|to|decoration|caret|shadow)(?:-[xytrblse])?-joda-[a-z-]+/;
+              const primitiveClass = /(?:\b[a-z][a-z-]*-joda-[a-z-]+|--color-joda-[a-z-]+)/;
               return {
                 Literal(node) {
                   if (typeof node.value === "string" && primitiveClass.test(node.value)) {
