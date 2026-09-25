@@ -150,6 +150,11 @@ const INSERT_ONLY_TABLES = new Set([
 // FKs cuyo cruce rechaza OTRA barrera antes que la FK compuesta. Siguen
 // rechazadas, que es lo que importa; cada una dice cuál la frena y por qué.
 const REJECTED_BEFORE_THE_FK: Record<string, { code: string; message: RegExp; why: string }> = {
+  "inventory_balances.lot_id": {
+    code: "42501",
+    message: /^permission denied for table inventory_balances/,
+    why: "WP-B09b (0024): joda_api no escribe la proyección de saldos, solo los triggers SECURITY DEFINER",
+  },
   "inventory_movements.lot_id": {
     code: "23503",
     message: /^Lote .* no encontrado en el tenant del movimiento/,

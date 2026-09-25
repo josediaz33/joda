@@ -372,6 +372,41 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       }).toEqual({ inserted: 1, before: "114.650", after: "109.650" });
     });
 
+    // WP-B09b (0024_revoke_balances_write.sql). Hallazgo de la revisión
+    // cruzada de B09: el vendedor sumó 999.999 al saldo de un lote sin
+    // tocar el ledger. La proyección solo la escriben los triggers
+    // SECURITY DEFINER; la venta de arriba prueba que siguen proyectando.
+    // Con el owner, que tiene todos los permisos: la barrera es el GRANT,
+    // no un permiso de aplicación.
+    const BALANCE_WRITES = [
+      [
+        "UPDATE",
+        "UPDATE app.inventory_balances SET on_hand = on_hand + 999999 WHERE lot_id = $1 AND tenant_id = $2",
+      ],
+      [
+        "INSERT",
+        "INSERT INTO app.inventory_balances (lot_id, tenant_id, on_hand) VALUES ($1, $2, 999999)",
+      ],
+      ["DELETE", "DELETE FROM app.inventory_balances WHERE lot_id = $1 AND tenant_id = $2"],
+    ] as const;
+
+    it.each(
+      BALANCE_WRITES.flatMap(([verb, sql]) => [
+        ["el vendedor", verb, REAL_SELLER_ID, sql] as const,
+        ["el owner", verb, REAL_OWNER_ID, sql] as const,
+      ]),
+    )(
+      "%s no puede escribir el saldo por fuera del ledger: %s → 42501",
+      async (_who, _verb, userId, sql) => {
+        await api.query("BEGIN");
+        await actAs(userId, REAL_TENANT_ID);
+        await expect(api.query(sql, [BULK_LOT_ID, REAL_TENANT_ID])).rejects.toMatchObject({
+          code: "42501",
+        });
+        await api.query("ROLLBACK");
+      },
+    );
+
     it("RN-LOT-01: el vendedor no puede mover unidades sobre un lote en ml — el trigger ve el lote de verdad, no un NULL", async () => {
       await api.query("BEGIN");
       await actAs(REAL_SELLER_ID, REAL_TENANT_ID);

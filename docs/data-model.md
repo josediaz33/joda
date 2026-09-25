@@ -2,7 +2,7 @@
 
 Referencia del esquema. La verdad ejecutable está en `packages/db/migrations/`; este documento explica **por qué** está así.
 
-Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 164 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 73/73 invariantes verificados.
+Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 164 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 74/74 invariantes verificados.
 
 ---
 
@@ -118,6 +118,8 @@ inventory_lots ──< decant_work_orders >── product_variants
                           └── sale_order_id
 ```
 
+**`inventory_balances` la escriben solo los triggers.** `init_lot_balance` y `project_lot_balance` son `SECURITY DEFINER`; `joda_api` solo tiene SELECT (WP-B09b, `0024_revoke_balances_write.sql`, invariante 74). Un saldo equivocado se corrige con un movimiento de ajuste, nunca editando la proyección.
+
 **La autoreferencia `parent_lot_id` es lo que modela la apertura de frasco.** Un lote de granel apunta al lote sellado del que salió, con el costo heredado.
 
 ### 3.4 Flujo de compra
@@ -162,7 +164,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 73: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 74: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |

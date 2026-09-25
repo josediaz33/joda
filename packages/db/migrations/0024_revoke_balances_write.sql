@@ -1,0 +1,20 @@
+-- =====================================================================
+-- 0024_revoke_balances_write.sql  (WP-B09b)
+--
+-- DEFECTO. `joda_api` tenía INSERT, UPDATE y DELETE sobre
+-- `inventory_balances` por el GRANT general de 0010. La revisión cruzada
+-- de B09 lo reprodujo: el vendedor sumó 999.999 al saldo de un lote sin
+-- tocar el ledger. Va contra el no negociable "nunca UPDATE stock SET
+-- cantidad = ...": el saldo es una proyección del ledger append-only, y
+-- corregirlo es insertar un movimiento de ajuste.
+--
+-- CORRECCIÓN. Desde B09 la proyección la mantienen `init_lot_balance` y
+-- `project_lot_balance`, que son SECURITY DEFINER y escriben con los
+-- privilegios de su dueño: `joda_api` ya no necesita escribirla. Conserva
+-- SELECT (C10 lee saldos, y `v_stock_available` es invoker desde 0022).
+--
+-- El `ALTER DEFAULT PRIVILEGES` de 0010 no la alcanza: solo aplica a
+-- tablas creadas después. El invariante 74 falla si alguien vuelve a
+-- concederlo.
+-- =====================================================================
+REVOKE INSERT, UPDATE, DELETE ON app.inventory_balances FROM joda_api;

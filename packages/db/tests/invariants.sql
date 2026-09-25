@@ -1443,6 +1443,21 @@ SELECT pg_temp.expect_fail_like(73, 'Lote con la variante de otro tenant',
   $$,
   '%inventory_lots_variant_id_fkey%');
 
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-B09b (0024_revoke_balances_write.sql): la API no escribe la
+-- proyección de saldos.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 74 ─ joda_api no tiene INSERT, UPDATE ni DELETE sobre inventory_balances,
+-- y sí SELECT. La proyección la escriben solo los triggers SECURITY
+-- DEFINER; un saldo se corrige con un movimiento de ajuste.
+SELECT pg_temp.expect_true(74,
+  'joda_api solo lee inventory_balances',
+  has_table_privilege('joda_api', 'app.inventory_balances', 'SELECT')
+  AND NOT has_table_privilege('joda_api', 'app.inventory_balances', 'INSERT')
+  AND NOT has_table_privilege('joda_api', 'app.inventory_balances', 'UPDATE')
+  AND NOT has_table_privilege('joda_api', 'app.inventory_balances', 'DELETE'));
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'
