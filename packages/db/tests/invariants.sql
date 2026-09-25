@@ -121,11 +121,26 @@ SELECT pg_temp.expect_fail(7, 'Asiento con debe <> haber',
   $$);
 
 -- 8 ─ Una línea contable no puede ser débito y crédito a la vez
-SELECT pg_temp.expect_fail(8, 'Línea con debe y haber simultáneos',
-  $$INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
-    SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-000000000001', id, 5000, 5000
-      FROM app.chart_of_accounts WHERE code = '1.1.01.001'
-       AND tenant_id = '11111111-1111-1111-1111-111111111111'$$);
+-- Sobre un BORRADOR (WP-B14): desde 0020 una línea nueva en el asiento
+-- contabilizado del smoke la rechaza el guard antes de que el CHECK llegue
+-- a evaluarse, y este invariante probaría otra cosa. Por eso además exige
+-- el nombre del CHECK en el mensaje.
+SELECT pg_temp.expect_fail_like(8, 'Línea con debe y haber simultáneos',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo)
+      VALUES ('f0000000-0000-0000-0000-000000000008',
+              '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 88, current_date,
+              'draft', 'Borrador para el invariante 8');
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-000000000008', id, 5000, 5000
+        FROM app.chart_of_accounts WHERE code = '1.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+    END $x$
+  $$,
+  '%line_is_debit_xor_credit%');
 
 -- 9 ─ Un asiento contabilizado no se modifica
 SELECT pg_temp.expect_fail(9, 'Editar línea de asiento ya contabilizado',
@@ -845,6 +860,286 @@ SELECT pg_temp.expect_fail_like(46, 'has_permission con una sesión válida (con
     END $x$
   $$,
   'concedido');
+
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-B14 (0020_journal_immutability.sql, RN-CTB-06): inmutabilidad
+-- contable completa. `posted` y `reversed` no se tocan; draft → posted;
+-- posted → reversed solo con una reversión contabilizada; reversed es
+-- terminal.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Asiento contabilizado por el flujo real: nace en borrador, recibe un par
+-- de líneas cuadrado y pasa a posted. Si `p_reverses` no es NULL, es la
+-- reversión de ese asiento (las líneas van invertidas).
+CREATE OR REPLACE FUNCTION pg_temp.post_test_entry(
+  p_id uuid, p_entry_no bigint, p_reverses uuid DEFAULT NULL
+) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO app.journal_entries
+    (id, tenant_id, period_id, entry_no, entry_date, status, memo, reverses_id)
+  VALUES (p_id, '11111111-1111-1111-1111-111111111111',
+          'ffffffff-0000-0000-0000-000000000001', p_entry_no, current_date,
+          'draft', 'Asiento de prueba de WP-B14', p_reverses);
+  INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+  SELECT '11111111-1111-1111-1111-111111111111', p_id, id,
+         CASE WHEN p_reverses IS NULL THEN 1000 ELSE 0 END,
+         CASE WHEN p_reverses IS NULL THEN 0 ELSE 1000 END
+    FROM app.chart_of_accounts WHERE code = '1.1.01.001'
+     AND tenant_id = '11111111-1111-1111-1111-111111111111';
+  INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+  SELECT '11111111-1111-1111-1111-111111111111', p_id, id,
+         CASE WHEN p_reverses IS NULL THEN 0 ELSE 1000 END,
+         CASE WHEN p_reverses IS NULL THEN 1000 ELSE 0 END
+    FROM app.chart_of_accounts WHERE code = '4.1.01.001'
+     AND tenant_id = '11111111-1111-1111-1111-111111111111';
+  UPDATE app.journal_entries SET status = 'posted', posted_at = now() WHERE id = p_id;
+END $$;
+
+-- 47 ─ Un asiento contabilizado no recibe líneas nuevas. Hallazgo de la
+-- segunda revisión cruzada de B10: el guard de 0017 en INSERT solo miraba
+-- el tenant, y un par compensado pasaba (cuadra, nada más lo frenaba).
+SELECT pg_temp.expect_fail_like(47, 'Línea nueva (par compensado) en un asiento contabilizado',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-000000000001', id, 1000, 0
+        FROM app.chart_of_accounts WHERE code = '1.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-000000000001', id, 0, 1000
+        FROM app.chart_of_accounts WHERE code = '4.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+    END $x$
+  $$,
+  'El asiento ya está contabilizado%');
+
+-- 48 ─ posted no vuelve a draft. Verificado en la misma revisión de B10:
+-- reabrir, editar y volver a contabilizar no dejaba rastro.
+SELECT pg_temp.expect_fail_like(48, 'Reabrir un asiento contabilizado (posted → draft)',
+  $$UPDATE app.journal_entries SET status = 'draft'
+     WHERE id = 'f0000000-0000-0000-0000-000000000001'$$,
+  'El asiento ya está contabilizado%');
+
+-- 49 ─ Un asiento contabilizado no se edita, aunque el estado no cambie.
+SELECT pg_temp.expect_fail_like(49, 'Editar el memo de un asiento contabilizado',
+  $$UPDATE app.journal_entries SET memo = 'editado'
+     WHERE id = 'f0000000-0000-0000-0000-000000000001'$$,
+  'El asiento ya está contabilizado%');
+
+-- 50 ─ posted → reversed exige una reversión contabilizada que lo
+-- referencie. Sin ninguna reversión, se rechaza.
+SELECT pg_temp.expect_fail_like(50, 'Marcar revertido un asiento sin reversión',
+  $$UPDATE app.journal_entries SET status = 'reversed'
+     WHERE id = 'f0000000-0000-0000-0000-000000000001'$$,
+  '%no tiene un asiento de reversión contabilizado%');
+
+-- 51 ─ ... y una reversión todavía en borrador no alcanza.
+SELECT pg_temp.expect_fail_like(51, 'Marcar revertido con la reversión todavía en borrador',
+  $$DO $x$
+    BEGIN
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000510', 510);
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo, reverses_id)
+      VALUES ('f0000000-0000-0000-0000-000000000511', '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 511, current_date, 'draft',
+              'Reversión en borrador', 'f0000000-0000-0000-0000-000000000510');
+      UPDATE app.journal_entries SET status = 'reversed'
+       WHERE id = 'f0000000-0000-0000-0000-000000000510';
+    END $x$
+  $$,
+  '%no tiene un asiento de reversión contabilizado%');
+
+-- 52 ─ Control positivo: el flujo correcto de reversión funciona. Sin
+-- esto, 50/51 pasarían igual con un trigger que rechazara toda reversión.
+SELECT pg_temp.expect_fail_like(52, 'Reversión por el flujo correcto (control positivo)',
+  $$DO $x$
+    BEGIN
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000520', 520);
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000521', 521,
+                                      'f0000000-0000-0000-0000-000000000520');
+      UPDATE app.journal_entries SET status = 'reversed'
+       WHERE id = 'f0000000-0000-0000-0000-000000000520';
+      SET CONSTRAINTS app.trg_journal_balanced IMMEDIATE;
+      IF (SELECT status FROM app.journal_entries
+           WHERE id = 'f0000000-0000-0000-0000-000000000520') = 'reversed' THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 53 ─ reversed es terminal.
+SELECT pg_temp.expect_fail_like(53, 'Sacar un asiento de reversed',
+  $$DO $x$
+    BEGIN
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000530', 530);
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000531', 531,
+                                      'f0000000-0000-0000-0000-000000000530');
+      UPDATE app.journal_entries SET status = 'reversed'
+       WHERE id = 'f0000000-0000-0000-0000-000000000530';
+      UPDATE app.journal_entries SET status = 'posted'
+       WHERE id = 'f0000000-0000-0000-0000-000000000530';
+    END $x$
+  $$,
+  '%está revertido: es definitivo');
+
+-- 54 ─ Las líneas de un asiento revertido tampoco se tocan. 0017 solo
+-- bloqueaba 'posted': las de un 'reversed' se editaban como un borrador.
+SELECT pg_temp.expect_fail_like(54, 'Editar una línea de un asiento revertido',
+  $$DO $x$
+    BEGIN
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000540', 540);
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000541', 541,
+                                      'f0000000-0000-0000-0000-000000000540');
+      UPDATE app.journal_entries SET status = 'reversed'
+       WHERE id = 'f0000000-0000-0000-0000-000000000540';
+      UPDATE app.journal_lines SET memo = 'editada'
+       WHERE entry_id = 'f0000000-0000-0000-0000-000000000540';
+    END $x$
+  $$,
+  'El asiento ya está contabilizado%');
+
+-- 55 ─ Un asiento nace en borrador.
+SELECT pg_temp.expect_fail_like(55, 'Crear un asiento directamente en posted',
+  $$INSERT INTO app.journal_entries
+      (tenant_id, period_id, entry_no, entry_date, status, memo, posted_at)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            'ffffffff-0000-0000-0000-000000000001', 550, current_date,
+            'posted', 'Nacido contabilizado', now())$$,
+  'Un asiento nace en borrador%');
+
+-- 56 ─ Un borrador no pasa a reversed.
+SELECT pg_temp.expect_fail_like(56, 'Borrador directo a reversed',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo)
+      VALUES ('f0000000-0000-0000-0000-000000000560', '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 560, current_date, 'draft', 'Borrador 56');
+      UPDATE app.journal_entries SET status = 'reversed'
+       WHERE id = 'f0000000-0000-0000-0000-000000000560';
+    END $x$
+  $$,
+  'Un borrador no se revierte%');
+
+-- 57 ─ Un asiento contabilizado no se borra, ni siquiera sin líneas (el
+-- invariante 25 cubre el que tiene líneas).
+SELECT pg_temp.expect_fail_like(57, 'Borrar un asiento contabilizado sin líneas',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo)
+      VALUES ('f0000000-0000-0000-0000-000000000570', '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 570, current_date, 'draft', 'Asiento 57');
+      UPDATE app.journal_entries SET status = 'posted', posted_at = now()
+       WHERE id = 'f0000000-0000-0000-0000-000000000570';
+      DELETE FROM app.journal_entries WHERE id = 'f0000000-0000-0000-0000-000000000570';
+    END $x$
+  $$,
+  '%no está en borrador: no se borra, se reversa');
+
+-- 58 ─ Una reversión apunta a un asiento del MISMO tenant. La FK
+-- reverses_id no evalúa RLS.
+SELECT pg_temp.expect_fail_like(58, 'Reversión de un asiento de otro tenant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('58585858-0000-0000-0000-000000000058', 'tenant-inv-58', 'Inv 58 SA', 'Inv 58');
+      INSERT INTO app.accounting_periods (id, tenant_id, code, starts_on, ends_on)
+      VALUES ('58585858-0000-0000-0000-0000000000f1', '58585858-0000-0000-0000-000000000058',
+              '2026-09', '2026-09-01', '2026-09-30');
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo)
+      VALUES ('58585858-0000-0000-0000-0000000000e1', '58585858-0000-0000-0000-000000000058',
+              '58585858-0000-0000-0000-0000000000f1', 1, current_date, 'draft', 'Ajeno');
+      UPDATE app.journal_entries SET status = 'posted', posted_at = now()
+       WHERE id = '58585858-0000-0000-0000-0000000000e1';
+      INSERT INTO app.journal_entries
+        (tenant_id, period_id, entry_no, entry_date, status, memo, reverses_id)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 580, current_date, 'draft',
+              'Reversión cruzada', '58585858-0000-0000-0000-0000000000e1');
+    END $x$
+  $$,
+  'Asiento a revertir % no encontrado en el tenant del asiento');
+
+-- 59 ─ Solo se revierte un asiento contabilizado.
+SELECT pg_temp.expect_fail_like(59, 'Reversión de un borrador',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo)
+      VALUES ('f0000000-0000-0000-0000-000000000590', '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 590, current_date, 'draft', 'Borrador 59');
+      INSERT INTO app.journal_entries
+        (tenant_id, period_id, entry_no, entry_date, status, memo, reverses_id)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 591, current_date, 'draft',
+              'Reversión de un borrador', 'f0000000-0000-0000-0000-000000000590');
+    END $x$
+  $$,
+  'Solo se revierte un asiento contabilizado%');
+
+-- 60 ─ El tenant de un asiento no cambia: sus líneas quedarían colgadas de
+-- un asiento de otro tenant.
+SELECT pg_temp.expect_fail_like(60, 'Mover un borrador a otro tenant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('60606060-0000-0000-0000-000000000060', 'tenant-inv-60', 'Inv 60 SA', 'Inv 60');
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo)
+      VALUES ('f0000000-0000-0000-0000-000000000600', '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 600, current_date, 'draft', 'Borrador 60');
+      UPDATE app.journal_entries SET tenant_id = '60606060-0000-0000-0000-000000000060'
+       WHERE id = 'f0000000-0000-0000-0000-000000000600';
+    END $x$
+  $$,
+  'El tenant de un asiento no cambia');
+
+-- 61 ─ CONSECUENCIA DELIBERADA (0017, escrita en 0020): un borrador con
+-- líneas no se borra de un golpe. La cascada borra las líneas con el
+-- asiento ya inexistente, y el guard, que falla cerrado, no distingue esa
+-- línea huérfana de una colgada de un asiento de otro tenant.
+SELECT pg_temp.expect_fail_like(61, 'Borrar de un golpe un borrador con líneas (deliberado)',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo)
+      VALUES ('f0000000-0000-0000-0000-000000000610', '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 610, current_date, 'draft', 'Borrador 61');
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-000000000610', id, 1000, 0
+        FROM app.chart_of_accounts WHERE code = '1.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+      DELETE FROM app.journal_entries WHERE id = 'f0000000-0000-0000-0000-000000000610';
+    END $x$
+  $$,
+  'Asiento % no encontrado en el tenant de la línea%');
+
+-- 62 ─ ... y el camino correcto, primero las líneas y después el asiento,
+-- funciona (control positivo del 61).
+SELECT pg_temp.expect_fail_like(62, 'Borrar un borrador: primero las líneas, después el asiento',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo)
+      VALUES ('f0000000-0000-0000-0000-000000000620', '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 620, current_date, 'draft', 'Borrador 62');
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-000000000620', id, 1000, 0
+        FROM app.chart_of_accounts WHERE code = '1.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+      DELETE FROM app.journal_lines WHERE entry_id = 'f0000000-0000-0000-0000-000000000620';
+      DELETE FROM app.journal_entries WHERE id = 'f0000000-0000-0000-0000-000000000620';
+      SET CONSTRAINTS app.trg_journal_balanced IMMEDIATE;
+      IF NOT EXISTS (SELECT 1 FROM app.journal_entries
+                      WHERE id = 'f0000000-0000-0000-0000-000000000620') THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+    END $x$
+  $$,
+  'aceptado');
 
 \echo ''
 \echo '=============================================================='

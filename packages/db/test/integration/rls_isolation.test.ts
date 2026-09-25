@@ -830,4 +830,114 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       });
     });
   });
+  // WP-B14 (0020_journal_immutability.sql, RN-CTB-06), como joda_api con el
+  // owner: tiene accounting.journal:write, así que el único freno es el
+  // trigger. Todo dentro de una transacción que se revierte.
+  describe("RN-CTB-06: un asiento contabilizado no se modifica, se reversa (WP-B14)", () => {
+    const REAL_PERIOD_ID = "ffffffff-0000-0000-0000-000000000001";
+
+    async function insertBalancedLines(entryId: string, debit: string, credit: string) {
+      await api.query(
+        `INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+         VALUES ($1, $2, $3, $5, 0), ($1, $2, $4, 0, $5)`,
+        [REAL_TENANT_ID, entryId, debit, credit, 1000],
+      );
+    }
+
+    it("el flujo real pasa: el asiento nace en borrador, recibe las líneas y se contabiliza en la misma transacción", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+      await api.query(
+        `INSERT INTO app.journal_entries (id, tenant_id, period_id, entry_no, entry_date, status, memo)
+         VALUES ('f0000000-0000-0000-0000-0000000000e1', $1, $2, 901, current_date, 'draft', 'Flujo real')`,
+        [REAL_TENANT_ID, REAL_PERIOD_ID],
+      );
+      await insertBalancedLines(
+        "f0000000-0000-0000-0000-0000000000e1",
+        realAccountId,
+        realRevenueAccountId,
+      );
+      const { rowCount } = await api.query(
+        "UPDATE app.journal_entries SET status = 'posted', posted_at = now() WHERE id = 'f0000000-0000-0000-0000-0000000000e1'",
+      );
+      const check = await api.query("SET CONSTRAINTS app.trg_journal_balanced IMMEDIATE");
+      await api.query("ROLLBACK");
+
+      expect({ rowCount, check: check.command }).toEqual({ rowCount: 1, check: "SET" });
+    });
+
+    it("el owner no puede colgar un par de líneas compensadas de un asiento contabilizado", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+      await expect(
+        insertBalancedLines(POSTED_ENTRY_ID, realAccountId, realRevenueAccountId),
+      ).rejects.toMatchObject({
+        code: "23001",
+        message: "El asiento ya está contabilizado: no se modifica, se reversa",
+      });
+      await api.query("ROLLBACK");
+    });
+
+    it("el owner no puede reabrir un asiento contabilizado (posted → draft)", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+      await expect(
+        api.query("UPDATE app.journal_entries SET status = 'draft' WHERE id = $1", [
+          POSTED_ENTRY_ID,
+        ]),
+      ).rejects.toMatchObject({
+        code: "23001",
+        message: "El asiento ya está contabilizado: no se modifica, se reversa",
+      });
+      await api.query("ROLLBACK");
+    });
+
+    it("el owner revierte con un asiento inverso contabilizado, y recién ahí el original pasa a reversed", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+      await api.query(
+        `INSERT INTO app.journal_entries (id, tenant_id, period_id, entry_no, entry_date, status, memo, reverses_id)
+         VALUES ('f0000000-0000-0000-0000-0000000000e2', $1, $2, 902, current_date, 'draft', 'Reversión', $3)`,
+        [REAL_TENANT_ID, REAL_PERIOD_ID, POSTED_ENTRY_ID],
+      );
+      await insertBalancedLines(
+        "f0000000-0000-0000-0000-0000000000e2",
+        realRevenueAccountId,
+        realAccountId,
+      );
+      await api.query(
+        "UPDATE app.journal_entries SET status = 'posted', posted_at = now() WHERE id = 'f0000000-0000-0000-0000-0000000000e2'",
+      );
+      await api.query("UPDATE app.journal_entries SET status = 'reversed' WHERE id = $1", [
+        POSTED_ENTRY_ID,
+      ]);
+      const { rows } = await api.query("SELECT status FROM app.journal_entries WHERE id = $1", [
+        POSTED_ENTRY_ID,
+      ]);
+      await api.query("ROLLBACK");
+
+      expect(rows).toEqual([{ status: "reversed" }]);
+    });
+
+    it("el owner de otro tenant no puede crear una reversión de un asiento del tenant real", async () => {
+      await api.query("BEGIN");
+      await actAs(PEER_OWNER_ID, PEER_TENANT_ID);
+      await api.query(
+        `INSERT INTO app.accounting_periods (id, tenant_id, code, starts_on, ends_on)
+         VALUES ('f1000000-0000-0000-0000-0000000000a2', $1, '2026-09', '2026-09-01', '2026-09-30')`,
+        [PEER_TENANT_ID],
+      );
+      await expect(
+        api.query(
+          `INSERT INTO app.journal_entries (tenant_id, period_id, entry_no, entry_date, status, memo, reverses_id)
+           VALUES ($1, 'f1000000-0000-0000-0000-0000000000a2', 1, current_date, 'draft', 'Reversión cruzada', $2)`,
+          [PEER_TENANT_ID, POSTED_ENTRY_ID],
+        ),
+      ).rejects.toMatchObject({
+        code: "23503",
+        message: `Asiento a revertir ${POSTED_ENTRY_ID} no encontrado en el tenant del asiento`,
+      });
+      await api.query("ROLLBACK");
+    });
+  });
 });

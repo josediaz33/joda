@@ -360,15 +360,19 @@ INSERT INTO accounting_periods (id, tenant_id, code, starts_on, ends_on)
 VALUES ('ffffffff-0000-0000-0000-000000000001',
         '11111111-1111-1111-1111-111111111111', '2026-09', '2026-09-01', '2026-09-30');
 
+-- RN-CTB-06 (WP-B14, 0020_journal_immutability.sql): el asiento NACE en
+-- borrador, recibe sus líneas y se contabiliza en la misma transacción.
+-- Crearlo directo en 'posted' y colgarle líneas después ya no es posible:
+-- un asiento contabilizado no recibe líneas.
 BEGIN;
 INSERT INTO journal_entries (id, tenant_id, period_id, entry_no, entry_date, status,
-                             memo, source_type, source_id, posting_rule, posted_at,
+                             memo, source_type, source_id, posting_rule,
                              created_by)
 VALUES ('f0000000-0000-0000-0000-000000000001',
         '11111111-1111-1111-1111-111111111111', 'ffffffff-0000-0000-0000-000000000001',
-        1, current_date, 'posted', 'Venta VTA-2026-0001 — decant Layton 10ml',
+        1, current_date, 'draft', 'Venta VTA-2026-0001 — decant Layton 10ml',
         'sale_order', 'cccccccc-0000-0000-0000-000000000001', 'sale.confirmed',
-        now(), '22222222-2222-2222-2222-222222222222');
+        '22222222-2222-2222-2222-222222222222');
 
 -- IVA 10% sobre precio con impuesto incluido: 245.000 / 11 = 22.273 Gs.
 INSERT INTO journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg, memo, position)
@@ -385,6 +389,8 @@ SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-00000000
        app.vat_from_gross(245000, 'iva_10'), 'IVA débito 10%', 3
   FROM chart_of_accounts WHERE tenant_id = '11111111-1111-1111-1111-111111111111'
    AND code = '2.1.03.001';
+UPDATE journal_entries SET status = 'posted', posted_at = now()
+ WHERE id = 'f0000000-0000-0000-0000-000000000001';
 COMMIT;
 
 \echo ''
