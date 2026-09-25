@@ -500,6 +500,13 @@ Si la regla de posteo del evento está apagada o falla, el evento se registra en
 
 Un asiento contabilizado no se modifica. Se genera un asiento inverso que lo referencia por `reverses_id`.
 
+Impuesto por la base desde WP-B14 (`0020_journal_immutability.sql`), con el mismo mapa en `packages/domain/src/accounting/journalEntry.ts`:
+
+- El asiento **nace en `draft`**, recibe sus líneas y pasa a `posted` en la misma transacción. El cuadre se valida al confirmar (RN-CTB-02).
+- Transiciones: `draft → draft` (edición del borrador), `draft → posted` y `posted → reversed`. Esta última solo vale si ya existe un asiento de reversión **contabilizado**, del mismo tenant, que lo referencia por `reverses_id`, y no cambia ninguna otra columna. `reversed` es terminal.
+- `posted` y `reversed` son inmutables: ni el asiento ni sus líneas admiten INSERT, UPDATE o DELETE.
+- Un borrador con líneas se borra en dos pasos, **primero las líneas y después el asiento**. Es deliberado: el guard de líneas falla cerrado, y en un borrado en cascada no puede distinguir una línea huérfana de una colgada de un asiento de otro tenant.
+
 ---
 
 ## RN-FIS — Documentos fiscales
