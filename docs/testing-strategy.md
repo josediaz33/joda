@@ -136,6 +136,8 @@ it("RLS aísla por tenant con el rol de aplicación", async () => {
 
 **Este test es no negociable.** Es el que detecta si alguien cambió la conexión a una credencial elevada y desactivó silenciosamente toda la capa de aislamiento.
 
+Esa prueba vive en `packages/db/test/integration/rls_isolation.test.ts`. La versión exhaustiva, tabla por tabla sobre toda tabla con `tenant_id`, está en `rls_every_table.test.ts` (WP-B08b). Una tabla nueva con `tenant_id` la hace fallar hasta que se la agrega a su lista y se le da una fila en `test/fixtures/every_tenant_table.sql`.
+
 ### 3.3 Permisos por RLS: sesión real y reloj futuro
 
 Desde WP-B13, `app.has_permission()` solo concede con una fila viva de `staff_sessions`: del mismo usuario y tenant, no revocada, y con `expires_at > now()`, donde `now()` es el reloj **real** de Postgres, que no se inyecta. Dos consecuencias para un test de integración que toque una tabla con política de permiso (`inventory_lots`, `journal_entries`, `suppliers`, …):
