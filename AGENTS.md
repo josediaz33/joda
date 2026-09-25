@@ -182,7 +182,7 @@ No des una tarea por terminada sin esto:
 | Bloque                                                     | Estado                                                  |
 | ---------------------------------------------------------- | ------------------------------------------------------- |
 | A — Monorepo, `packages/domain`, contratos                 | Pendiente                                               |
-| B — Esquema Postgres                                       | **Validado** contra PG16 (63 tablas, 37/37 invariantes) |
+| B — Esquema Postgres                                       | **Validado** contra PG16 (63 tablas, 39/39 invariantes) |
 | C — API: auth, RBAC, catálogo, inventario, ventas, compras | Pendiente                                               |
 | D — ETL, imágenes, reconciliación                          | Pendiente                                               |
 | E — Admin migrado a la API                                 | Pendiente                                               |
