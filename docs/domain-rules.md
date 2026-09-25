@@ -210,7 +210,7 @@ Abrir un frasco sellado para fraccionar es una **conversión entre dos lotes**, 
 
 ### RN-LOT-03 · Frasco abierto no se vende sellado
 
-Un lote en `open_for_decant` no admite movimientos de tipo `sale` sobre la variante sellada. Impuesto por la base.
+Un lote en `open_for_decant` no admite movimientos de tipo `sale` sobre la variante sellada. Impuesto por la base (`assert_sealed_lot_not_open`), que mira la variante del lote y no solo la que declara el movimiento. Hasta la revisión de WP-B09, declarar otra variante eludía la regla.
 
 ### RN-LOT-04 · Agotamiento de frasco
 

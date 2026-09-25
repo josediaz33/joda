@@ -35,6 +35,29 @@ BEGIN
   END IF;
 END $$;
 
+-- WP-B09: como expect_fail, pero el rechazo solo cuenta si su mensaje
+-- coincide con `p_pattern` (LIKE). Cuando varios triggers pueden rechazar
+-- la misma operación, "hubo un error" no prueba que el que se quería
+-- probar haya funcionado: es exactamente como `trg_movement_uom` enmascaró
+-- la falla abierta de `assert_sealed_lot_not_open` desde WP-B01.
+CREATE OR REPLACE FUNCTION pg_temp.expect_fail_like(
+  p_n int, p_nombre text, p_sql text, p_pattern text
+) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  BEGIN
+    EXECUTE p_sql;
+    INSERT INTO results VALUES (p_n, p_nombre, 'rechazo', 'FALLO — fue aceptado');
+  EXCEPTION WHEN others THEN
+    IF SQLERRM LIKE p_pattern THEN
+      INSERT INTO results VALUES (p_n, p_nombre, 'rechazo',
+        'OK — ' || left(replace(SQLERRM, E'\n', ' '), 62));
+    ELSE
+      INSERT INTO results VALUES (p_n, p_nombre, 'rechazo',
+        'FALLO — rechazado por otro motivo: ' || left(replace(SQLERRM, E'\n', ' '), 62));
+    END IF;
+  END;
+END $$;
+
 -- 1 ─ El ledger no se edita
 SELECT pg_temp.expect_fail(1, 'UPDATE sobre inventory_movements',
   $$UPDATE app.inventory_movements SET qty = 999 WHERE id = 1$$);
@@ -346,6 +369,333 @@ SELECT pg_temp.expect_fail(27, 'Línea nueva de un tenant sobre el asiento de ot
          AND tenant_id = '11111111-1111-1111-1111-111111111111';
     END $x$
   $$);
+
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-B09 (0018_invariant_triggers_security_definer.sql): funciones de
+-- disparador SECURITY DEFINER, que fallan cerrado y verifican el tenant.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 28 ─ Toda función de disparador de app.* fija `search_path = app,
+-- pg_temp`. Sin search_path propio, la función resuelve nombres con el de
+-- quien la dispara (hallazgo de WP-C10: `joda_api` no tiene `app` en el
+-- suyo) y, si es SECURITY DEFINER, busca primero en `pg_temp`, donde quien
+-- la dispara puede sombrear una tabla.
+SELECT pg_temp.expect_true(28,
+  'Toda función de disparador de app.* tiene search_path = app, pg_temp',
+  NOT EXISTS (
+    SELECT 1
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'app'
+       AND p.prorettype = 'trigger'::regtype
+       AND NOT ('search_path=app, pg_temp' = ANY (COALESCE(p.proconfig, '{}')))
+  ));
+
+-- 29 ─ Toda función de disparador de app.* es SECURITY DEFINER, salvo las
+-- dos que no leen ninguna tabla. Una función de invariante SECURITY
+-- INVOKER lee con los permisos de quien dispara el trigger: si RLS le
+-- oculta la fila, decide sobre un NULL (el defecto de B10 y de B09). Una
+-- función nueva que lea tablas y no esté en esta lista hace fallar esto.
+SELECT pg_temp.expect_true(29,
+  'Toda función de disparador de app.* es SECURITY DEFINER, salvo set_updated_at/guard_append_only',
+  NOT EXISTS (
+    SELECT 1
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'app'
+       AND p.prorettype = 'trigger'::regtype
+       AND NOT p.prosecdef
+       AND p.proname NOT IN ('set_updated_at', 'guard_append_only')
+  ));
+
+-- 30 ─ El dueño de toda función SECURITY DEFINER de app.* elude RLS. Una
+-- SECURITY DEFINER corre como su dueño; si el dueño no es superusuario ni
+-- BYPASSRLS, FORCE ROW LEVEL SECURITY lo filtra igual que a `joda_api`, y
+-- las funciones de invariantes vuelven a decidir sobre lo que RLS les deja
+-- ver. Depende del rol que corre las migraciones en cada entorno.
+SELECT pg_temp.expect_true(30,
+  'El dueño de toda función SECURITY DEFINER de app.* elude RLS',
+  NOT EXISTS (
+    SELECT 1
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+      JOIN pg_roles r     ON r.oid = p.proowner
+     WHERE n.nspname = 'app'
+       AND p.prosecdef
+       AND NOT (r.rolsuper OR r.rolbypassrls)
+  ));
+
+-- 31 ─ El lote de un movimiento es del tenant del movimiento. Con
+-- SECURITY DEFINER el trigger ve lotes de todos los tenants y la FK lot_id
+-- no evalúa RLS: sin esta verificación, un movimiento del tenant B movía
+-- el saldo de un lote del tenant A.
+SELECT pg_temp.expect_fail_like(31, 'Movimiento de un tenant sobre el lote de otro tenant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('31313131-0000-0000-0000-000000000031', 'tenant-inv-31', 'Inv 31 SA', 'Inv 31');
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('31313131-0000-0000-0000-000000000031',
+              '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000002', 1, 'ml', 'adjustment');
+    END $x$
+  $$,
+  'Lote % no encontrado en el tenant del movimiento%');
+
+-- 32 ─ La variante de un movimiento es del tenant del movimiento. Lote
+-- propio, variante ajena: `trg_movement_uom` pasa, y lo que rechaza es
+-- `assert_sealed_lot_not_open`, que decide sobre el tipo de la variante.
+SELECT pg_temp.expect_fail_like(32, 'Movimiento con la variante de otro tenant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('32323232-0000-0000-0000-000000000032', 'tenant-inv-32', 'Inv 32 SA', 'Inv 32');
+      INSERT INTO app.products (id, tenant_id, kind, slug, name, status)
+      VALUES ('32323232-0000-0000-0000-0000000000a1',
+              '32323232-0000-0000-0000-000000000032', 'accessory', 'inv-32', 'Inv 32', 'draft');
+      INSERT INTO app.product_variants (id, tenant_id, product_id, sku, variant_type, uom, price_pyg)
+      VALUES ('32323232-0000-0000-0000-0000000000b1',
+              '32323232-0000-0000-0000-000000000032',
+              '32323232-0000-0000-0000-0000000000a1', 'INV-32', 'bulk', 'ml', 0);
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000002',
+              '32323232-0000-0000-0000-0000000000b1', 1, 'ml', 'adjustment');
+    END $x$
+  $$,
+  'Variante % no encontrada en el tenant del movimiento%');
+
+-- 33 ─ La proyección de saldo verifica el tenant POR SÍ SOLA. Se
+-- deshabilitan los dos BEFORE INSERT que hoy rechazan antes, para que lo
+-- único que pueda frenar el movimiento sea `project_lot_balance`: ningún
+-- trigger puede depender de que otro haya corrido antes. El DISABLE se
+-- revierte con el resto del bloque cuando el rechazo aborta la
+-- subtransacción.
+SELECT pg_temp.expect_fail_like(33, 'project_lot_balance sola: saldo de un lote de otro tenant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('33333333-0000-0000-0000-000000000033', 'tenant-inv-33', 'Inv 33 SA', 'Inv 33');
+      ALTER TABLE app.inventory_movements DISABLE TRIGGER trg_movement_uom;
+      ALTER TABLE app.inventory_movements DISABLE TRIGGER trg_sealed_lot_guard;
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('33333333-0000-0000-0000-000000000033',
+              '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000002', 1, 'ml', 'adjustment');
+      ALTER TABLE app.inventory_movements ENABLE TRIGGER trg_movement_uom;
+      ALTER TABLE app.inventory_movements ENABLE TRIGGER trg_sealed_lot_guard;
+    END $x$
+  $$,
+  'No existe fila de saldo para el lote % en el tenant del movimiento');
+
+-- 34 ─ LA TRAMPA DE B09: `assert_sealed_lot_not_open` falla cerrado POR SÍ
+-- SOLO, sin `trg_movement_uom` delante (que desde WP-B01 enmascaraba su
+-- falla abierta) ni `trg_project_balance` detrás. Una venta del lote de
+-- granel de OTRO tenant: sin la verificación de tenant, el lote es granel
+-- (no sellado) y el trigger la dejaba pasar.
+SELECT pg_temp.expect_fail_like(34, 'assert_sealed_lot_not_open solo: venta sobre el lote de otro tenant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('34343434-0000-0000-0000-000000000034', 'tenant-inv-34', 'Inv 34 SA', 'Inv 34');
+      ALTER TABLE app.inventory_movements DISABLE TRIGGER trg_movement_uom;
+      ALTER TABLE app.inventory_movements DISABLE TRIGGER trg_project_balance;
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('34343434-0000-0000-0000-000000000034',
+              '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000002', -1, 'ml', 'sale');
+      ALTER TABLE app.inventory_movements ENABLE TRIGGER trg_movement_uom;
+      ALTER TABLE app.inventory_movements ENABLE TRIGGER trg_project_balance;
+    END $x$
+  $$,
+  'Lote % no encontrado en el tenant del movimiento%');
+
+-- 35 ─ El movimiento de una capa de costo es del tenant de la capa. La
+-- capa es del tenant 35, con un lote propio del 35, colgada de un
+-- movimiento del tenant real; los importes cuadran, así que lo único que
+-- puede rechazarla es la verificación de tenant del movimiento.
+SELECT pg_temp.expect_fail_like(35, 'Capa de costo de un tenant sobre el movimiento de otro',
+  $$DO $x$
+    DECLARE v_mov bigint;
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('35353535-0000-0000-0000-000000000035', 'tenant-inv-35', 'Inv 35 SA', 'Inv 35');
+      INSERT INTO app.products (id, tenant_id, kind, slug, name, status)
+      VALUES ('35353535-0000-0000-0000-0000000000a1',
+              '35353535-0000-0000-0000-000000000035', 'accessory', 'inv-35', 'Inv 35', 'draft');
+      INSERT INTO app.product_variants (id, tenant_id, product_id, sku, variant_type, uom, price_pyg)
+      VALUES ('35353535-0000-0000-0000-0000000000b1',
+              '35353535-0000-0000-0000-000000000035',
+              '35353535-0000-0000-0000-0000000000a1', 'INV-35', 'unit', 'unit', 0);
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('35353535-0000-0000-0000-0000000000c1',
+              '35353535-0000-0000-0000-000000000035',
+              '35353535-0000-0000-0000-0000000000b1', 1, 'unit', 0, 'PYG', 1, 0, 0);
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000002', -1, 'ml', 'sale', 11972)
+      RETURNING id INTO v_mov;
+      INSERT INTO app.movement_cost_allocations
+        (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+      VALUES ('35353535-0000-0000-0000-000000000035',
+              v_mov, '35353535-0000-0000-0000-0000000000c1', 1, 11972, 11972);
+      SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE;
+    END $x$
+  $$,
+  'Movimiento % no encontrado en el tenant de la capa de costo%');
+
+-- 36 ─ El lote de una capa de costo es del tenant de la capa. Capa y
+-- movimiento del tenant real, lote ajeno; los importes cuadran.
+SELECT pg_temp.expect_fail_like(36, 'Capa de costo sobre el lote de otro tenant',
+  $$DO $x$
+    DECLARE v_mov bigint;
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('36363636-0000-0000-0000-000000000036', 'tenant-inv-36', 'Inv 36 SA', 'Inv 36');
+      INSERT INTO app.products (id, tenant_id, kind, slug, name, status)
+      VALUES ('36363636-0000-0000-0000-0000000000a1',
+              '36363636-0000-0000-0000-000000000036', 'accessory', 'inv-36', 'Inv 36', 'draft');
+      INSERT INTO app.product_variants (id, tenant_id, product_id, sku, variant_type, uom, price_pyg)
+      VALUES ('36363636-0000-0000-0000-0000000000b1',
+              '36363636-0000-0000-0000-000000000036',
+              '36363636-0000-0000-0000-0000000000a1', 'INV-36', 'unit', 'unit', 0);
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('36363636-0000-0000-0000-0000000000c1',
+              '36363636-0000-0000-0000-000000000036',
+              '36363636-0000-0000-0000-0000000000b1', 1, 'unit', 0, 'PYG', 1, 0, 0);
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000002', -1, 'ml', 'sale', 11972)
+      RETURNING id INTO v_mov;
+      INSERT INTO app.movement_cost_allocations
+        (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              v_mov, '36363636-0000-0000-0000-0000000000c1', 1, 11972, 11972);
+      SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE;
+    END $x$
+  $$,
+  'Lote % no encontrado en el tenant de la capa de costo%');
+
+-- 37 ─ Mover una línea de un borrador a otro verifica el cuadre de LOS DOS
+-- asientos. `assert_entry_balanced` (0007) miraba solo el asiento de NEW.
+-- Secuencia: A cuadra y se verifica; B nace con solo el debe; se mueve el
+-- haber de A a B. B queda cuadrado, A descuadrado — y el único evento que
+-- nombra a A es el UPDATE, por su OLD.
+SELECT pg_temp.expect_fail_like(37, 'Mover una línea entre borradores descuadra el de origen',
+  $$DO $x$
+    DECLARE v_credit_line bigint;
+    BEGIN
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo)
+      VALUES ('f0000000-0000-0000-0000-00000000037a',
+              '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 96, current_date,
+              'draft', 'Borrador A del invariante 37'),
+             ('f0000000-0000-0000-0000-00000000037b',
+              '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 95, current_date,
+              'draft', 'Borrador B del invariante 37');
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-00000000037a',
+             id, 1000, 0
+        FROM app.chart_of_accounts WHERE code = '1.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-00000000037a',
+             id, 0, 1000
+        FROM app.chart_of_accounts WHERE code = '4.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111'
+      RETURNING id INTO v_credit_line;
+      SET CONSTRAINTS app.trg_journal_balanced IMMEDIATE;
+      SET CONSTRAINTS app.trg_journal_balanced DEFERRED;
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-00000000037b',
+             id, 1000, 0
+        FROM app.chart_of_accounts WHERE code = '1.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+      UPDATE app.journal_lines SET entry_id = 'f0000000-0000-0000-0000-00000000037b'
+       WHERE id = v_credit_line;
+      SET CONSTRAINTS app.trg_journal_balanced IMMEDIATE;
+    END $x$
+  $$,
+  'Asiento f0000000-0000-0000-0000-00000000037a descuadrado%');
+
+-- 38 ─ RN-LOT-03 no se elude declarando otra variante. Hallazgo de la
+-- revisión cruzada de B09: el trigger decidía con `NEW.variant_id`, que
+-- pone quien inserta. Un lote de tres frascos sellados con uno abierto
+-- (quedan dos sellados de verdad, con el lote en `open_for_decant`): la
+-- venta que declara la variante de GRANEL pasaba. El lote tiene saldo, así
+-- que el único que puede rechazarla es el guard del frasco abierto.
+SELECT pg_temp.expect_fail_like(38, 'Venta de un sellado abierto declarando la variante de granel',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('99999999-0000-0000-0000-000000000038',
+              '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-000000000001', 3, 'unit', 0, 'PYG', 1, 0, 0);
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000038',
+              '55555555-0000-0000-0000-000000000001', 3, 'unit', 'purchase_receipt'),
+             ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000038',
+              '55555555-0000-0000-0000-000000000001', -1, 'unit', 'transfer_out');
+      UPDATE app.inventory_lots SET status = 'open_for_decant'
+       WHERE id = '99999999-0000-0000-0000-000000000038';
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000038',
+              '55555555-0000-0000-0000-000000000002', -1, 'unit', 'sale');
+    END $x$
+  $$,
+  'El lote 99999999-0000-0000-0000-000000000038 está abierto para decantar%');
+
+-- 39 ─ Un lote cuya variante es de otro tenant no mueve. La FK
+-- `inventory_lots.variant_id` no evalúa RLS y hoy deja crear ese lote
+-- (queda para WP-B08b); el guard del frasco abierto busca la variante del
+-- lote en el tenant del movimiento y, al no encontrarla, rechaza.
+SELECT pg_temp.expect_fail_like(39, 'Movimiento sobre un lote cuya variante es de otro tenant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('39393939-0000-0000-0000-000000000039', 'tenant-inv-39', 'Inv 39 SA', 'Inv 39');
+      INSERT INTO app.products (id, tenant_id, kind, slug, name, status)
+      VALUES ('39393939-0000-0000-0000-0000000000a1',
+              '39393939-0000-0000-0000-000000000039', 'accessory', 'inv-39', 'Inv 39', 'draft');
+      INSERT INTO app.product_variants (id, tenant_id, product_id, sku, variant_type, uom, price_pyg)
+      VALUES ('39393939-0000-0000-0000-0000000000b1',
+              '39393939-0000-0000-0000-000000000039',
+              '39393939-0000-0000-0000-0000000000a1', 'INV-39', 'unit', 'unit', 0);
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('99999999-0000-0000-0000-000000000039',
+              '11111111-1111-1111-1111-111111111111',
+              '39393939-0000-0000-0000-0000000000b1', 1, 'unit', 0, 'PYG', 1, 0, 0);
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000039',
+              '55555555-0000-0000-0000-00000000a001', 1, 'unit', 'adjustment');
+    END $x$
+  $$,
+  'Variante del lote % no encontrada en el tenant del movimiento%');
 
 \echo ''
 \echo '=============================================================='
