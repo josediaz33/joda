@@ -41,6 +41,10 @@ const REAL_SELLER_ID = "22222222-2222-2222-2222-2222222200b1";
 describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/security-spec.md §3.1, ADR-016)", () => {
   let db: TestDb;
   let api: Client;
+  // Cuenta contable del tenant real (su id es aleatorio, lo genera el
+  // seed). La usa el ataque de INSERT cruzado de WP-B10: la FK account_id
+  // tampoco evalúa RLS, así que el tenant vecino puede nombrarla.
+  let realAccountId: string;
 
   beforeAll(async () => {
     db = await startTestDb();
@@ -71,6 +75,11 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       SELECT '${REAL_SELLER_ID}', id, tenant_id FROM app.roles
        WHERE tenant_id = '${REAL_TENANT_ID}' AND code = 'vendedor';
     `);
+    const account = await db.client.query(
+      "SELECT id FROM app.chart_of_accounts WHERE tenant_id = $1 AND code = '1.1.01.001'",
+      [REAL_TENANT_ID],
+    );
+    realAccountId = account.rows[0].id;
     await db.client.query(`ALTER ROLE joda_api PASSWORD '${JODA_API_TEST_PASSWORD}'`);
 
     api = new Client({
@@ -303,6 +312,28 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
     ).rejects.toMatchObject({
       code: "23001",
       message: "El asiento ya está contabilizado: no se modifica, se reversa",
+    });
+    await api.query("ROLLBACK");
+  });
+
+  it("journal_lines (WP-B10): el owner de otro tenant no puede colgar una línea propia de un asiento del tenant real", async () => {
+    await api.query("BEGIN");
+    await api.query(
+      `SELECT set_config('app.user_id', $1, true),
+              set_config('app.tenant_id', $2, true),
+              set_config('app.audience', 'staff', true)`,
+      [PEER_OWNER_ID, PEER_TENANT_ID],
+    );
+    await expect(
+      api.query(
+        `INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+         VALUES ($1, $2, $3, 1000, 0)`,
+        [PEER_TENANT_ID, POSTED_ENTRY_ID, realAccountId],
+      ),
+    ).rejects.toMatchObject({
+      code: "23001",
+      message:
+        "Asiento f0000000-0000-0000-0000-000000000001 no encontrado en el tenant de la línea: no se puede verificar que sea editable",
     });
     await api.query("ROLLBACK");
   });

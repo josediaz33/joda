@@ -36,6 +36,11 @@
 --      `journal_entries` con status 'draft' y hacer que el trigger la lea
 --      en lugar de la real. Nombrarlo al final lo impide (manual de
 --      Postgres, "Writing SECURITY DEFINER Functions Safely").
+--   6. INSERT: el trigger pasa a BEFORE INSERT OR UPDATE OR DELETE. En
+--      INSERT solo verifica el tenant (misma búsqueda, mismo rechazo): el
+--      trigger de 0009 no cubría INSERT, y una línea de un tenant podía
+--      colgarse de un asiento de otro. Bloquear líneas nuevas en un asiento
+--      contabilizado es WP-B14, no este WP.
 --
 -- CONSECUENCIA DELIBERADA del punto 2. Un DELETE sobre `journal_entries`
 -- borra sus líneas por `ON DELETE CASCADE`, y en ese momento el asiento ya
@@ -53,16 +58,19 @@ SET search_path = app, public;
 CREATE OR REPLACE FUNCTION app.guard_posted_journal() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = app, pg_temp AS $$
 DECLARE
-  v_entry_id    uuid;
-  v_line_tenant uuid;
-  v_status      app.journal_status;
+  v_entry_id     uuid;
+  v_line_tenant  uuid;
+  v_check_posted boolean;
+  v_status       app.journal_status;
 BEGIN
-  -- Asiento de la fila tal como estaba (UPDATE/DELETE), y además el de
-  -- destino si un UPDATE mueve la línea a otro asiento.
-  FOR v_entry_id, v_line_tenant IN
-    SELECT OLD.entry_id, OLD.tenant_id
+  -- Asiento de la fila tal como estaba (UPDATE/DELETE) y asiento de la
+  -- fila nueva (INSERT/UPDATE). En INSERT solo se verifica el tenant: que
+  -- un asiento contabilizado no reciba líneas nuevas es WP-B14 (hoy el
+  -- smoke crea el asiento en 'posted' y después le agrega las líneas).
+  FOR v_entry_id, v_line_tenant, v_check_posted IN
+    SELECT OLD.entry_id, OLD.tenant_id, true WHERE TG_OP <> 'INSERT'
     UNION
-    SELECT NEW.entry_id, NEW.tenant_id WHERE TG_OP = 'UPDATE'
+    SELECT NEW.entry_id, NEW.tenant_id, TG_OP = 'UPDATE' WHERE TG_OP <> 'DELETE'
   LOOP
     -- "No existe" y "existe pero es de otro tenant" dan el MISMO rechazo,
     -- con el mismo mensaje: esta función ve asientos de todos los tenants,
@@ -86,7 +94,7 @@ BEGIN
     -- conserva la semántica de 0009 (solo 'posted' bloquea); si un asiento
     -- 'reversed' también debe bloquearse es una regla que RN-CTB-06 no
     -- escribe, fuera de este WP.
-    IF v_status = 'posted' THEN
+    IF v_check_posted AND v_status = 'posted' THEN
       RAISE EXCEPTION
         'El asiento ya está contabilizado: no se modifica, se reversa'
         USING ERRCODE = 'restrict_violation';
@@ -95,3 +103,12 @@ BEGIN
 
   RETURN COALESCE(NEW, OLD);
 END $$;
+
+-- El trigger de 0009 era BEFORE UPDATE OR DELETE: una línea nueva de un
+-- tenant podía apuntar a un asiento de OTRO tenant (verificado como
+-- `joda_api` en la segunda revisión cruzada de B10: INSERT 0 1). Ahora
+-- también cubre INSERT, con la verificación de tenant de arriba.
+DROP TRIGGER trg_journal_lines_posted_guard ON app.journal_lines;
+CREATE TRIGGER trg_journal_lines_posted_guard
+  BEFORE INSERT OR UPDATE OR DELETE ON app.journal_lines
+  FOR EACH ROW EXECUTE FUNCTION app.guard_posted_journal();

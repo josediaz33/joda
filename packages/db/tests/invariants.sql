@@ -325,6 +325,28 @@ SELECT pg_temp.expect_fail(26, 'Mover una línea fuera de un asiento contabiliza
     END $x$
   $$);
 
+-- 27 ─ Una línea nueva no se cuelga de un asiento de otro tenant (WP-B10,
+-- 0017). La FK entry_id no evalúa RLS y el trigger de 0009 no cubría
+-- INSERT: una línea del tenant B apuntando a un asiento del tenant A
+-- pasaba. Mismo rechazo que un asiento inexistente.
+SELECT pg_temp.expect_fail(27, 'Línea nueva de un tenant sobre el asiento de otro tenant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('27272727-0000-0000-0000-000000000027', 'tenant-inv-27', 'Inv 27 SA', 'Inv 27');
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '27272727-0000-0000-0000-000000000027', 'f0000000-0000-0000-0000-000000000001', id, 1000, 0
+        FROM app.chart_of_accounts WHERE code = '1.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+      -- Par compensado: sin el guard, el fallo tiene que verse como FALLO
+      -- de este invariante, no como un asiento descuadrado al COMMIT.
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '27272727-0000-0000-0000-000000000027', 'f0000000-0000-0000-0000-000000000001', id, 0, 1000
+        FROM app.chart_of_accounts WHERE code = '4.1.01.001'
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+    END $x$
+  $$);
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'
