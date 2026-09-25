@@ -1793,6 +1793,310 @@ revisala y decime qué cambiaste. Recién con el plan aprobado, escribí el CSS.
 
 El paso final —plan antes que código— es el que más diferencia hace. Un agente que escribe CSS directo produce el default; uno que tiene que justificar cada color contra la marca, no.
 
+**Estado de E01 (25/09/2026).** `tokens.css` ya define los roles compartidos y registra `packages/ui/src` con `@source` para que Tailwind detecte las clases del paquete. Las declaraciones `@font-face` están en el CSS del admin (`apps/admin/src/fonts.css`); `next/font/local` y las variables de fuentes del storefront corresponden a WP-G01. WP-E01 está cerrado en el backlog.
+
+## Bloque E — Admin y UI compartida
+
+El estado de cada sesión sigue las dependencias y casillas de `docs/backlog.md` al 25/09/2026. Revalidalo antes de copiar un prompt. Para Codex, anteponé el preámbulo de §3 a **cada** sesión.
+
+### Sesión E02 — WP-E02 · Primitivas shadcn
+
+**Dependencia:** E01 (cerrado). **Estado hoy:** libre.
+
+```
+Antes de tocar nada: git checkout -b feat/e02-ui-primitives
+
+Tomá WP-E02 del backlog.
+
+Leé primero: docs/frontend-spec.md §2 y §4, ADR-023,
+.claude/rules/frontend.md y packages/ui/src/styles/tokens.css.
+
+Objetivo: agregar primitivas shadcn sobre Radix en packages/ui.
+
+Criterio de aceptación: components.json vive en packages/ui con el alias
+correcto; verificá que npx shadcn add deposite los archivos allí y no en
+un app. Mapeá background, foreground, primary, destructive, muted, ring e
+input a roles de tokens.css. Agregá un lint o chequeo de CI que falle si
+un className usa primitivos joda-*. Evaluá migrar tokens.test.mjs a Vitest.
+
+TRAMPAS DE ESTA TAREA:
+· No crees una segunda paleta paralela al mapear los nombres de shadcn.
+· Dejá solo primitivas genéricas en packages/ui; las composiciones viven en
+  cada app. El storefront comparte estas primitivas: sin Framer Motion.
+
+Alcance: solo WP-E02. Si el alcance crece, pará y consultá.
+```
+
+### Sesión E03 — WP-E03 · Formateo compartido
+
+**Dependencia:** A01. **Estado hoy:** libre.
+
+```
+Antes de tocar nada: git checkout -b feat/e03-ui-format
+
+Tomá WP-E03 del backlog.
+
+Leé primero: docs/frontend-spec.md §4, ADR-023,
+.claude/rules/frontend.md y .claude/rules/testing.md.
+
+Objetivo: crear packages/ui/format para dinero, cantidades y fechas.
+
+Criterio de aceptación: el dinero recibido como string de unidades menores
+se muestra como Gs. 245.000; las cantidades en ml admiten hasta tres
+decimales con coma (114,65 ml), las unidades no tienen decimales y las
+fechas usan dd/mm/aaaa en America/Asuncion. Ningún otro módulo formatea
+por su cuenta.
+
+TRAMPAS DE ESTA TAREA:
+· Usá BigInt(minor) con Intl.NumberFormat, nunca Number(minor). Compará la
+  salida real de es-PY con el formato exigido en Node y en el navegador:
+  sus datos ICU pueden diferir. Si no coincide, componé el separador de
+  miles con puntos de forma explícita.
+· Usá la zona America/Asuncion por nombre, nunca un desplazamiento fijo.
+  Paraguay quedó en UTC−3 permanente desde octubre de 2024, pero un ICU
+  viejo puede aplicar horario de verano. Probá una fecha de enero y otra
+  de julio.
+
+Alcance: solo WP-E03. Si el alcance crece, pará y consultá.
+```
+
+### Sesión E04 — WP-E04 · Base del admin
+
+**Dependencias:** C05 (cerrado), E02. **Estado hoy:** esperando E02.
+
+```
+Antes de tocar nada: git checkout -b feat/e04-admin-base
+
+Tomá WP-E04 del backlog.
+
+Leé primero: docs/frontend-spec.md §2 y §5, docs/security-spec.md,
+ADR-023, .claude/rules/frontend.md y .claude/rules/testing.md.
+
+Objetivo: establecer enrutado, sesión, <Can> y guardas del admin.
+
+Criterio de aceptación: la sesión usa la cookie __Host-joda_a; quien no
+tiene MFA inscripto solo ve la inscripción. El admin consume tRPC con
+TanStack Query. Las rutas cargan sus módulos en diferido: verificá en los
+chunks del build que un vendedor no descarga contabilidad.
+
+TRAMPAS DE ESTA TAREA:
+· <Can> y las guardas mejoran la experiencia; no son la barrera de
+  seguridad. La API impone permisos y responde 404.
+· No afirmes la carga diferida por leer el código: inspeccioná el build.
+
+Alcance: solo WP-E04. Si el alcance crece, pará y consultá.
+```
+
+### Sesión E05 — WP-E05 · Catálogo en el admin
+
+**Dependencias:** C08 y C09 (cerrados), E04. **Estado hoy:** esperando E04.
+
+```
+Antes de tocar nada: git checkout -b feat/e05-admin-catalog
+
+Tomá WP-E05 del backlog.
+
+Leé primero: docs/frontend-spec.md §8 y §9, docs/api-conventions.md,
+ADR-023, .claude/rules/frontend.md y .claude/rules/contracts.md.
+
+Objetivo: agregar alta y edición de perfumes, relojes y accesorios al admin.
+
+Criterio de aceptación: cada vertical tiene su formulario con
+react-hook-form y zodResolver sobre el esquema de packages/contracts;
+categorías N:N con exactamente una primaria; importes con separador de
+miles en pantalla y enviados como string de unidades menores.
+
+TRAMPAS DE ESTA TAREA:
+· No copies esquemas ni armes un formulario genérico con campos opcionales.
+· Subí imágenes por la ruta multipart de C09, no por tRPC.
+
+Alcance: solo WP-E05. Si el alcance crece, pará y consultá.
+```
+
+### Sesión E12 — WP-E12 · Accesibilidad y paleta de comandos
+
+**Dependencia:** E04. **Estado hoy:** esperando E04.
+
+```
+Antes de tocar nada: git checkout -b feat/e12-admin-keyboard
+
+Tomá WP-E12 del backlog.
+
+Leé primero: docs/frontend-spec.md §3 y §10, ADR-023,
+.claude/rules/frontend.md y .claude/rules/testing.md.
+
+Objetivo: hacer operables por teclado los flujos frecuentes del admin.
+
+Criterio de aceptación: foco visible siempre, navegación completa por
+teclado y paleta de comandos con cmdk para operaciones frecuentes sin mouse.
+
+TRAMPAS DE ESTA TAREA:
+· El atajo de la paleta no debe quitar el foco visible ni interceptar la
+  escritura en un campo.
+· Verificá apertura, navegación, ejecución y cierre solo con teclado.
+
+Alcance: solo WP-E12. Si el alcance crece, pará y consultá.
+```
+
+### Sesión E06 — WP-E06 · Inventario en el admin
+
+**Dependencias:** C10 (cerrado), C11, C12 y E04. **Estado hoy:** esperando C11, C12 y E04.
+
+```
+Antes de tocar nada: git checkout -b feat/e06-admin-inventory
+
+Tomá WP-E06 del backlog.
+
+Leé primero: docs/frontend-spec.md §8, docs/domain-rules.md, ADR-009,
+.claude/rules/frontend.md y .claude/rules/testing.md.
+
+Objetivo: agregar consulta de saldos, ajustes y apertura de frasco al admin.
+
+Criterio de aceptación: los saldos y el historial se consultan desde la
+API; todo ajuste exige motivo; la apertura de frasco exige confirmación
+explícita antes de ejecutar la conversión irreversible.
+
+TRAMPAS DE ESTA TAREA:
+· No presentes la apertura como cambio de estado: convierte un lote sellado
+  de unidades en un lote hijo de granel en ml.
+· No permitas que un ajuste sin motivo ni una confirmación accidental
+  disparen la mutación.
+
+Alcance: solo WP-E06. Si el alcance crece, pará y consultá.
+```
+
+### Sesión E09 — WP-E09 · Compras y sourcing
+
+**Dependencias:** C14, C15, C16 y E04. **Estado hoy:** esperando todas.
+
+```
+Antes de tocar nada: git checkout -b feat/e09-admin-procurement
+
+Tomá WP-E09 del backlog.
+
+Leé primero: docs/frontend-spec.md §8.7, docs/domain-rules.md,
+ADR-023, .claude/rules/frontend.md y .claude/rules/testing.md.
+
+Objetivo: agregar compras, recepciones y sourcing al admin.
+
+Criterio de aceptación: al cargar flete y otros costos, la vista previa
+recalcula costo puesto y margen en vivo, antes de confirmar la recepción;
+los escenarios de sourcing permiten comparar alternativas.
+
+TRAMPAS DE ESTA TAREA:
+· Reusá allocateFreight y computeLandedCost de packages/domain para la
+  vista previa en el navegador; el dominio es puro y puede ejecutarse allí.
+· El servidor sigue siendo la fuente de verdad y recalcula al confirmar.
+  No conviertas una vista previa ni un escenario en movimiento de stock.
+
+Alcance: solo WP-E09. Si el alcance crece, pará y consultá.
+```
+
+### Sesión E07 — WP-E07 · Fraccionamiento
+
+**Dependencias:** C13 y E04. **Estado hoy:** esperando ambas.
+
+```
+Antes de tocar nada: git checkout -b feat/e07-admin-decants
+
+Tomá WP-E07 del backlog.
+
+Leé primero: docs/frontend-spec.md §8.6, docs/domain-rules.md, ADR-009,
+.claude/rules/frontend.md y .claude/rules/testing.md.
+
+Objetivo: agregar la cola de órdenes de fraccionamiento al admin.
+
+Criterio de aceptación: la cola se agrupa por frasco de origen; la merma
+real es obligatoria, aparece precargada con la esperada y puede editarse
+antes de ejecutar la orden.
+
+TRAMPAS DE ESTA TAREA:
+· No contabilices la merma esperada como real ni ejecutes sin declarar la
+  real: la expectativa solo sirve para planificar o reservar.
+· Mantené visible el origen al operar varias órdenes del mismo frasco.
+
+Alcance: solo WP-E07. Si el alcance crece, pará y consultá.
+```
+
+### Sesión E08 — WP-E08 · Ventas de mostrador
+
+**Dependencias:** C17, C18, C19, C20, C21 y E04. **Estado hoy:** esperando todas.
+
+```
+Antes de tocar nada: git checkout -b feat/e08-admin-sales
+
+Tomá WP-E08 del backlog.
+
+Leé primero: docs/frontend-spec.md §8 y §9, docs/domain-rules.md,
+docs/api-conventions.md, .claude/rules/frontend.md y .claude/rules/testing.md.
+
+Objetivo: completar la venta de mostrador en el admin.
+
+Criterio de aceptación: el operador puede completar una venta presencial;
+la confirmación envía Idempotency-Key y un doble clic no crea dos ventas.
+Ante un conflicto de stock, la pantalla explica en español qué pasó y
+ofrece una acción de recuperación.
+
+TRAMPAS DE ESTA TAREA:
+· Conservá la misma clave de idempotencia en los reintentos de la misma
+  confirmación; no generes una nueva por cada clic.
+· No muestres códigos técnicos de conflicto ni calcules totales de negocio
+  en el cliente: la API da el resultado autoritativo.
+
+Alcance: solo WP-E08. Si el alcance crece, pará y consultá.
+```
+
+### Sesión E10 — WP-E10 · Contabilidad y caja
+
+**Dependencias:** C22 y E04. **Estado hoy:** esperando ambas.
+
+```
+Antes de tocar nada: git checkout -b feat/e10-admin-accounting
+
+Tomá WP-E10 del backlog.
+
+Leé primero: docs/frontend-spec.md, docs/domain-rules.md, ADR-023,
+.claude/rules/frontend.md y .claude/rules/testing.md.
+
+Objetivo: agregar contabilidad y caja al admin.
+
+Criterio de aceptación: el flujo permite el arqueo diario de caja y
+presenta los datos contables que entrega la API.
+
+TRAMPAS DE ESTA TAREA:
+· No generes asientos ni calcules saldos contables en el cliente.
+· Presentá diferencias del arqueo con claridad, sin redondearlas para
+  aparentar que la caja cuadra.
+
+Alcance: solo WP-E10. Si el alcance crece, pará y consultá.
+```
+
+### Sesión E11 — WP-E11 · Reportes
+
+**Dependencias:** C25 y E04. **Estado hoy:** esperando ambas.
+
+```
+Antes de tocar nada: git checkout -b feat/e11-admin-reports
+
+Tomá WP-E11 del backlog.
+
+Leé primero: docs/frontend-spec.md, docs/especificacion-software.md
+(RF-REP-01…04),
+ADR-023, .claude/rules/frontend.md y .claude/rules/testing.md.
+
+Objetivo: agregar los cuatro reportes del backlog al admin con Recharts.
+
+Criterio de aceptación: RF-REP-01…04 visibles y legibles; los valores
+provienen de la API y las visualizaciones usan Recharts.
+
+TRAMPAS DE ESTA TAREA:
+· No calcules métricas de negocio ni reconstruyas agregados en el cliente.
+· No confundas alertas de observabilidad de C25 con los cuatro reportes:
+  verificá las definiciones de RF-REP-01…04 antes de diseñar gráficos.
+
+Alcance: solo WP-E11. Si el alcance crece, pará y consultá.
+```
+
 ### Sesión de ejemplo — WP-G03 · URLs y facetas
 
 ```
@@ -1823,6 +2127,38 @@ filtros es WP-G04.
 ---
 
 ## 3. Plantilla para el resto
+
+### Preámbulo para Codex — pegar antes de cada prompt de sesión
+
+Codex no carga la skill `tomar-wp` ni `.claude/rules/` por ruta. Pegá este bloque **antes** del prompt específico de cada WP que tome Codex:
+
+```
+Trabajás en el worktree joda-codex-ui. Antes de tocar nada, ejecutá
+git checkout main && git pull y creá la rama propia del WP.
+
+Leé SIEMPRE AGENTS.md, .claude/rules/frontend.md,
+.claude/rules/contracts.md, .claude/rules/testing.md,
+docs/frontend-spec.md, ADR-023 y la fila del WP en docs/backlog.md.
+Leé además todos los documentos que nombre el prompt de esta sesión.
+
+Si un criterio de este playbook difiere del backlog, pará y reportá la
+diferencia: manda el backlog. Reuní todas las ambigüedades antes de escribir
+código y preguntalas juntas.
+
+Nunca toques packages/db ni la lógica de apps/api.
+
+Al terminar, corré pnpm typecheck, pnpm lint, pnpm format:check, pnpm test y
+pnpm build; todos deben quedar en verde. Commiteá y verificá git status
+limpio. Recorré la lista "Antes de abrir un PR" de
+docs/engineering-principles.md. Abrí el PR con la plantilla de
+CONTRIBUTING.md y pedí la revisión del subagente revisor. No fusiones:
+avisá cuando el PR esté listo.
+
+Si encontrás algo fuera del alcance, anotá una fila con ID y criterio de
+aceptación en docs/backlog.md; no lo dejes como nota suelta.
+```
+
+La rama del prompt de sesión identifica el WP; si ya la creaste con el preámbulo, no la crees de nuevo. La excepción de §6 para PRs de documentación pura sigue vigente: la revisión con subagente se exige en las sesiones de código.
 
 ```
 Antes de tocar nada: git checkout -b feat/<área>-<tema>
