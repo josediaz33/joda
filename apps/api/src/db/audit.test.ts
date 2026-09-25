@@ -10,6 +10,7 @@ const ACTOR = {
   userId: "88888888-8888-4888-a888-888888888888",
   tenantId: TENANT_ID,
   audience: "staff" as const,
+  sessionId: null,
 };
 
 // docs/api-conventions.md §10 y docs/security-spec.md §7 (WP-C07): el
@@ -153,7 +154,7 @@ describe("recordAuditEntry (docs/api-conventions.md §10, docs/security-spec.md 
     // Con un tenant DISTINTO en contexto, tampoco ve la fila de TENANT_ID.
     const otherTenantRows = await withTenantTx(
       db,
-      { userId: ACTOR.userId, tenantId: OTHER_TENANT_ID, audience: "staff" },
+      { userId: ACTOR.userId, tenantId: OTHER_TENANT_ID, audience: "staff", sessionId: null },
       (tx) => tx.audit_log.findMany({ where: { action } }),
     );
     expect(otherTenantRows).toHaveLength(0);

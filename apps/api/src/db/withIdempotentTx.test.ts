@@ -10,6 +10,7 @@ const ACTOR = {
   userId: "44444444-4444-4444-a444-444444444444",
   tenantId: TENANT_ID,
   audience: "staff" as const,
+  sessionId: null,
 };
 
 // docs/api-conventions.md §5: middleware de idempotencia general, distinto

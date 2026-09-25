@@ -238,11 +238,14 @@ export async function withTenantTx<T>(ctx: Ctx, fn: (tx: Tx) => Promise<T>): Pro
     await tx.$executeRaw`
       SELECT set_config('app.user_id',   ${ctx.userId},   true),
              set_config('app.tenant_id', ${ctx.tenantId}, true),
-             set_config('app.audience',  ${ctx.audience}, true)`;
+             set_config('app.audience',  ${ctx.audience}, true),
+             set_config('app.session_id', ${ctx.sessionId ?? ""}, true)`;
     return fn(tx);
   });
 }
 ```
+
+`app.session_id` (WP-B13) nombra la sesión de personal que respalda el contexto: `app.has_permission()` exige que sea una sesión viva, no revocada, del mismo usuario y tenant. `null` solo en el login, que crea la sesión dentro de la misma transacción.
 
 El `true` final hace el valor local a la transacción. Sin él, se filtra a la siguiente petición que reutilice la conexión del pool — un error de aislamiento entre usuarios, silencioso y grave.
 

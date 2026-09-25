@@ -5,6 +5,7 @@ import { withTenantTx } from "./withTenantTx.js";
 
 interface SessionRow {
   tenant_id: string | null;
+  session_id: string | null;
   pid: number;
 }
 
@@ -13,7 +14,9 @@ interface SessionRow {
 // cada test (.claude/rules/testing.md: sin lógica en los tests).
 async function readSession(tx: Prisma.TransactionClient): Promise<SessionRow> {
   const rows = await tx.$queryRaw<SessionRow[]>`
-    SELECT current_setting('app.tenant_id', true) AS tenant_id, pg_backend_pid() AS pid`;
+    SELECT current_setting('app.tenant_id', true) AS tenant_id,
+           current_setting('app.session_id', true) AS session_id,
+           pg_backend_pid() AS pid`;
   return rows[0] as SessionRow;
 }
 
@@ -25,6 +28,10 @@ async function readSession(tx: Prisma.TransactionClient): Promise<SessionRow> {
 // de Prisma a reutilizar una única conexión física entre transacciones, para
 // que esta prueba sea determinística y no dependa de en qué conexión de un
 // pool más grande caiga cada llamada.
+// Una sesión cualquiera: estas pruebas leen el valor de sesión, no lo
+// validan contra staff_sessions (eso es has_permission, WP-B13).
+const SESSION_ONE = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+
 describe("withTenantTx no filtra contexto entre transacciones que reusan la conexión del pool (docs/api-conventions.md §8.1)", () => {
   let testDb: TestDb;
   let db: PrismaClient;
@@ -45,19 +52,33 @@ describe("withTenantTx no filtra contexto entre transacciones que reusan la cone
 
     const first = await withTenantTx(
       db,
-      { userId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", tenantId: TENANT_ONE, audience: "staff" },
+      {
+        userId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        tenantId: TENANT_ONE,
+        audience: "staff",
+        sessionId: SESSION_ONE,
+      },
       readSession,
     );
 
     const second = await withTenantTx(
       db,
-      { userId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", tenantId: TENANT_TWO, audience: "staff" },
+      {
+        userId: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        tenantId: TENANT_TWO,
+        audience: "staff",
+        sessionId: null,
+      },
       readSession,
     );
 
     expect(first.tenant_id).toBe(TENANT_ONE);
+    expect(first.session_id).toBe(SESSION_ONE);
     expect(second.pid).toBe(first.pid);
     expect(second.tenant_id).toBe(TENANT_TWO);
+    // WP-B13: sin sesión, app.session_id queda vacío — no hereda la sesión
+    // de la transacción anterior sobre la misma conexión física.
+    expect(second.session_id).toBe("");
   });
 
   it("una transacción que no pasa por withTenantTx no hereda el tenant de la transacción anterior sobre la misma conexión", async () => {
@@ -65,7 +86,12 @@ describe("withTenantTx no filtra contexto entre transacciones que reusan la cone
 
     await withTenantTx(
       db,
-      { userId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", tenantId: TENANT_ONE, audience: "staff" },
+      {
+        userId: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        tenantId: TENANT_ONE,
+        audience: "staff",
+        sessionId: SESSION_ONE,
+      },
       async (tx) => {
         await tx.$queryRaw`SELECT 1`;
       },
@@ -74,5 +100,6 @@ describe("withTenantTx no filtra contexto entre transacciones que reusan la cone
     const leaked = await db.$transaction(readSession);
 
     expect(leaked.tenant_id).toBeFalsy();
+    expect(leaked.session_id).toBeFalsy();
   });
 });

@@ -112,7 +112,12 @@ describe("WP-C10 · módulo inventario (RF-INV-03…05)", () => {
       authProvider: createFakeStaffAuthProvider(
         new Map([[STAFF_OWNER_EMAIL, { password: STAFF_PASSWORD, authSubject: "auth|owner-c10" }]]),
       ),
-      clock: createManualClock(new Date("2026-01-01T12:00:00.000Z")),
+      // Fijo y FUTURO a propósito (WP-B13). La sesión nace con
+      // `expires_at` = este reloj + 8 h, y `app.has_permission()` la compara
+      // contra el `now()` real de Postgres, que no se inyecta. Con un reloj
+      // en el pasado la sesión nace vencida para la base, y `inventory_lots`
+      // (política `inventory.stock:read`) se vuelve invisible: 404.
+      clock: createManualClock(new Date("2099-01-01T12:00:00.000Z")),
       mfaEncryptionKey: MFA_ENCRYPTION_KEY,
     };
     app = buildServer(authDeps, "0".repeat(32));

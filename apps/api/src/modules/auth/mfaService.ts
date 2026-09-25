@@ -52,7 +52,12 @@ export async function enrollMfa(
 ): Promise<Result<MfaEnrollResult, MfaEnrollError>> {
   return withTenantTx(
     deps.db,
-    { userId: session.staffUserId, tenantId: session.tenantId, audience: "staff" },
+    {
+      userId: session.staffUserId,
+      tenantId: session.tenantId,
+      audience: "staff",
+      sessionId: session.sessionId,
+    },
     async (tx) => {
       const current = await getStaffMfaSecret(tx, session.staffUserId);
       if (current.mfaEnrolled) return err({ code: "ALREADY_ENROLLED" });
@@ -101,7 +106,12 @@ export async function confirmMfaEnrollment(
 
   const outcome = await withTenantTx(
     deps.db,
-    { userId: session.staffUserId, tenantId: session.tenantId, audience: "staff" },
+    {
+      userId: session.staffUserId,
+      tenantId: session.tenantId,
+      audience: "staff",
+      sessionId: session.sessionId,
+    },
     async (tx): Promise<ConfirmOutcome> => {
       const current = await getStaffMfaSecret(tx, session.staffUserId);
       if (current.mfaEnrolled || !current.secretEncrypted) return { kind: "not_started" };
@@ -156,7 +166,12 @@ export async function verifyMfaChallenge(
 
   const outcome = await withTenantTx(
     deps.db,
-    { userId: session.staffUserId, tenantId: session.tenantId, audience: "staff" },
+    {
+      userId: session.staffUserId,
+      tenantId: session.tenantId,
+      audience: "staff",
+      sessionId: session.sessionId,
+    },
     async (tx): Promise<VerifyOutcome> => {
       const current = await getStaffMfaSecret(tx, session.staffUserId);
       if (!current.mfaEnrolled || !current.secretEncrypted) return { kind: "not_enrolled" };

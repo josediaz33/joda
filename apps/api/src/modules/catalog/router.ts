@@ -47,8 +47,13 @@ function requireDb(db: PrismaClient | null): PrismaClient {
 
 /** Mismo criterio que requireStaffContext de trpc/exampleRouter.ts: todo procedimiento de catálogo necesita tenant para abrir withTenantTx. */
 function requireStaffContext(ctx: RequestContext): TenantTxContext {
-  if (ctx.audience === "staff" && ctx.userId && ctx.tenantId) {
-    return { userId: ctx.userId, tenantId: ctx.tenantId, audience: ctx.audience };
+  if (ctx.audience === "staff" && ctx.userId && ctx.tenantId && ctx.sessionId) {
+    return {
+      userId: ctx.userId,
+      tenantId: ctx.tenantId,
+      audience: ctx.audience,
+      sessionId: ctx.sessionId,
+    };
   }
   throw toTRPCError(
     appError("UNAUTHENTICATED_SESSION_EXPIRED", 401, "Necesitás una sesión de personal."),

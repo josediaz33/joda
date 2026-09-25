@@ -52,9 +52,15 @@ function requireStaffContext(ctx: RequestContext): {
   readonly userId: string;
   readonly tenantId: string;
   readonly audience: "staff";
+  readonly sessionId: string;
 } {
-  if (ctx.audience === "staff" && ctx.userId && ctx.tenantId) {
-    return { userId: ctx.userId, tenantId: ctx.tenantId, audience: ctx.audience };
+  if (ctx.audience === "staff" && ctx.userId && ctx.tenantId && ctx.sessionId) {
+    return {
+      userId: ctx.userId,
+      tenantId: ctx.tenantId,
+      audience: ctx.audience,
+      sessionId: ctx.sessionId,
+    };
   }
   throw toTRPCError(
     appError("UNAUTHENTICATED_SESSION_EXPIRED", 401, "Necesitás una sesión de personal."),

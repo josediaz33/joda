@@ -697,6 +697,155 @@ SELECT pg_temp.expect_fail_like(39, 'Movimiento sobre un lote cuya variante es d
   $$,
   'Variante del lote % no encontrada en el tenant del movimiento%');
 
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-B13 (0019_has_permission_session_bound.sql): has_permission exige una
+-- sesión válida, y ninguna SECURITY DEFINER busca primero en pg_temp.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 40 ─ Toda función SECURITY DEFINER de app.* fija `search_path = app,
+-- pg_temp`. Con `app, public` (lo que tenían has_permission y las dos
+-- búsquedas de login), `pg_temp` se busca PRIMERO y una tabla temporal
+-- sombrea a la real: verificado como `joda_api` en WP-B10 sobre
+-- has_permission. El 28 cubre las de disparador; este, todas.
+SELECT pg_temp.expect_true(40,
+  'Toda función SECURITY DEFINER de app.* tiene search_path = app, pg_temp',
+  NOT EXISTS (
+    SELECT 1
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'app'
+       AND p.prosecdef
+       AND NOT ('search_path=app, pg_temp' = ANY (COALESCE(p.proconfig, '{}')))
+  ));
+
+-- 41 a 46 ─ has_permission con el owner del smoke, que TIENE el permiso
+-- por rol. Cada bloque fija el contexto como withTenantTx y rechaza con
+-- 'concedido' si has_permission da true: en 41–45 ese rechazo es un FALLO
+-- (se concedió lo que no debía), así que se busca el rechazo 'denegado'.
+-- El 46 es el control positivo, al revés. Las sesiones se crean dentro del
+-- bloque y se revierten con él.
+
+-- 41 ─ Sin app.session_id no hay permiso, aunque el user_id tenga el rol.
+-- Es exactamente el caso del error de aplicación que fija un user_id.
+SELECT pg_temp.expect_fail_like(41, 'has_permission sin app.session_id',
+  $$DO $x$
+    BEGIN
+      PERFORM set_config('app.user_id', '22222222-2222-2222-2222-222222222222', true),
+              set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', '', true);
+      IF app.has_permission('accounting.journal:read') THEN
+        RAISE EXCEPTION 'concedido';
+      END IF;
+      RAISE EXCEPTION 'denegado';
+    END $x$
+  $$,
+  'denegado');
+
+-- 42 ─ Una sesión revocada no concede permisos.
+SELECT pg_temp.expect_fail_like(42, 'has_permission con una sesión revocada',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at, revoked_at, revoked_reason)
+      VALUES ('5e550000-0000-0000-0000-000000000042', '11111111-1111-1111-1111-111111111111',
+              '22222222-2222-2222-2222-222222222222', now() + interval '8 hours', now(), 'logout');
+      PERFORM set_config('app.user_id', '22222222-2222-2222-2222-222222222222', true),
+              set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', '5e550000-0000-0000-0000-000000000042', true);
+      IF app.has_permission('accounting.journal:read') THEN
+        RAISE EXCEPTION 'concedido';
+      END IF;
+      RAISE EXCEPTION 'denegado';
+    END $x$
+  $$,
+  'denegado');
+
+-- 43 ─ Una sesión vencida no concede permisos.
+SELECT pg_temp.expect_fail_like(43, 'has_permission con una sesión vencida',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at)
+      VALUES ('5e550000-0000-0000-0000-000000000043', '11111111-1111-1111-1111-111111111111',
+              '22222222-2222-2222-2222-222222222222', now() - interval '1 second');
+      PERFORM set_config('app.user_id', '22222222-2222-2222-2222-222222222222', true),
+              set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', '5e550000-0000-0000-0000-000000000043', true);
+      IF app.has_permission('accounting.journal:read') THEN
+        RAISE EXCEPTION 'concedido';
+      END IF;
+      RAISE EXCEPTION 'denegado';
+    END $x$
+  $$,
+  'denegado');
+
+-- 44 ─ La sesión de OTRO usuario no concede los permisos de este: el
+-- user_id equivocado necesita una sesión viva de ESE usuario, no una
+-- cualquiera.
+SELECT pg_temp.expect_fail_like(44, 'has_permission con la sesión de otro usuario',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.staff_users (id, tenant_id, auth_subject, email, full_name)
+      VALUES ('22222222-0000-0000-0000-000000000044', '11111111-1111-1111-1111-111111111111',
+              'sub-inv-44', 'inv44@joda.test', 'Invariante 44');
+      INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at)
+      VALUES ('5e550000-0000-0000-0000-000000000044', '11111111-1111-1111-1111-111111111111',
+              '22222222-0000-0000-0000-000000000044', now() + interval '8 hours');
+      PERFORM set_config('app.user_id', '22222222-2222-2222-2222-222222222222', true),
+              set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', '5e550000-0000-0000-0000-000000000044', true);
+      IF app.has_permission('accounting.journal:read') THEN
+        RAISE EXCEPTION 'concedido';
+      END IF;
+      RAISE EXCEPTION 'denegado';
+    END $x$
+  $$,
+  'denegado');
+
+-- 45 ─ Una sesión del usuario en OTRO tenant no concede permisos en este.
+SELECT pg_temp.expect_fail_like(45, 'has_permission con una sesión de otro tenant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('45454545-0000-0000-0000-000000000045', 'tenant-inv-45', 'Inv 45 SA', 'Inv 45');
+      INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at)
+      VALUES ('5e550000-0000-0000-0000-000000000045', '45454545-0000-0000-0000-000000000045',
+              '22222222-2222-2222-2222-222222222222', now() + interval '8 hours');
+      PERFORM set_config('app.user_id', '22222222-2222-2222-2222-222222222222', true),
+              set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', '5e550000-0000-0000-0000-000000000045', true);
+      IF app.has_permission('accounting.journal:read') THEN
+        RAISE EXCEPTION 'concedido';
+      END IF;
+      RAISE EXCEPTION 'denegado';
+    END $x$
+  $$,
+  'denegado');
+
+-- 46 ─ Control positivo: sesión viva, del usuario y del tenant → concede.
+-- Sin esto, 41–45 pasarían igual con un has_permission que siempre diera
+-- false.
+SELECT pg_temp.expect_fail_like(46, 'has_permission con una sesión válida (control positivo)',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at)
+      VALUES ('5e550000-0000-0000-0000-000000000046', '11111111-1111-1111-1111-111111111111',
+              '22222222-2222-2222-2222-222222222222', now() + interval '8 hours');
+      PERFORM set_config('app.user_id', '22222222-2222-2222-2222-222222222222', true),
+              set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', '5e550000-0000-0000-0000-000000000046', true);
+      IF app.has_permission('accounting.journal:read') THEN
+        RAISE EXCEPTION 'concedido';
+      END IF;
+      RAISE EXCEPTION 'denegado';
+    END $x$
+  $$,
+  'concedido');
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'

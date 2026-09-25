@@ -109,7 +109,15 @@ export async function login(
 
   const { sessionId, profile } = await withTenantTx(
     deps.db,
-    { userId: lookup.staffUserId, tenantId: lookup.tenantId, audience: "staff" },
+    {
+      userId: lookup.staffUserId,
+      tenantId: lookup.tenantId,
+      audience: "staff",
+      // La sesión nace DENTRO de esta transacción: todavía no hay una que
+      // nombrar. Sin sesión, has_permission() da false (WP-B13), y esta
+      // transacción no toca ninguna tabla con política de permiso.
+      sessionId: null,
+    },
     async (tx) => {
       const session = await createStaffSession(tx, {
         tenantId: lookup.tenantId,
@@ -176,7 +184,12 @@ export async function refresh(
   if (outcome.kind === "reuse_detected") {
     await withTenantTx(
       deps.db,
-      { userId: lookup.staffUserId, tenantId: lookup.tenantId, audience: "staff" },
+      {
+        userId: lookup.staffUserId,
+        tenantId: lookup.tenantId,
+        audience: "staff",
+        sessionId: lookup.sessionId,
+      },
       (tx) =>
         revokeStaffSession(tx, {
           sessionId: lookup.sessionId,
@@ -193,7 +206,12 @@ export async function refresh(
 
   await withTenantTx(
     deps.db,
-    { userId: lookup.staffUserId, tenantId: lookup.tenantId, audience: "staff" },
+    {
+      userId: lookup.staffUserId,
+      tenantId: lookup.tenantId,
+      audience: "staff",
+      sessionId: lookup.sessionId,
+    },
     async (tx) => {
       const newToken = await insertRefreshToken(tx, {
         tenantId: lookup.tenantId,
@@ -244,7 +262,12 @@ export async function logout(
   const now = deps.clock.now();
   await withTenantTx(
     deps.db,
-    { userId: session.staffUserId, tenantId: session.tenantId, audience: "staff" },
+    {
+      userId: session.staffUserId,
+      tenantId: session.tenantId,
+      audience: "staff",
+      sessionId: session.sessionId,
+    },
     (tx) =>
       revokeStaffSession(tx, { sessionId: session.sessionId, reason: "logout", revokedAt: now }),
   );
@@ -271,14 +294,19 @@ export interface ResolvedStaffSession {
  */
 async function resolveGrantedPermissions(
   deps: AuthServiceDeps,
-  session: { readonly userId: string; readonly tenantId: string },
+  session: { readonly userId: string; readonly tenantId: string; readonly sessionId: string },
 ): Promise<ReadonlySet<string>> {
   const cached = await getCachedPermissions(deps.redis, session.userId);
   if (cached) return new Set(cached);
 
   const codes = await withTenantTx(
     deps.db,
-    { userId: session.userId, tenantId: session.tenantId, audience: "staff" },
+    {
+      userId: session.userId,
+      tenantId: session.tenantId,
+      audience: "staff",
+      sessionId: session.sessionId,
+    },
     (tx) => getGrantedPermissionCodes(tx, session.userId),
   );
   await setCachedPermissions(deps.redis, session.userId, codes);
@@ -316,7 +344,10 @@ export async function resolveRequestSession(
 ): Promise<ResolvedStaffSession | null> {
   const cached = await getCachedStaffSession(deps.redis, cookie.sessionId);
   if (cached) {
-    const grantedPermissions = await resolveGrantedPermissions(deps, cached);
+    const grantedPermissions = await resolveGrantedPermissions(deps, {
+      ...cached,
+      sessionId: cookie.sessionId,
+    });
     return { ...cached, sessionId: cookie.sessionId, grantedPermissions };
   }
 
@@ -339,7 +370,12 @@ export async function resolveRequestSession(
   if (outcome.kind === "reuse_detected") {
     await withTenantTx(
       deps.db,
-      { userId: lookup.staffUserId, tenantId: lookup.tenantId, audience: "staff" },
+      {
+        userId: lookup.staffUserId,
+        tenantId: lookup.tenantId,
+        audience: "staff",
+        sessionId: lookup.sessionId,
+      },
       (tx) =>
         revokeStaffSession(tx, {
           sessionId: lookup.sessionId,
@@ -369,6 +405,7 @@ export async function resolveRequestSession(
   const grantedPermissions = await resolveGrantedPermissions(deps, {
     userId: lookup.staffUserId,
     tenantId: lookup.tenantId,
+    sessionId: lookup.sessionId,
   });
   return { ...cacheable, sessionId: lookup.sessionId, grantedPermissions };
 }

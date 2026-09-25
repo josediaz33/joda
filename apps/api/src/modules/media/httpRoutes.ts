@@ -67,8 +67,13 @@ function requireMediaPublicBaseUrl(mediaPublicBaseUrl: string | null): string {
 
 /** Mismo criterio que requireStaffContext de modules/catalog/router.ts. */
 function requireStaffContext(ctx: RequestContext): TenantTxContext {
-  if (ctx.audience === "staff" && ctx.userId && ctx.tenantId) {
-    return { userId: ctx.userId, tenantId: ctx.tenantId, audience: ctx.audience };
+  if (ctx.audience === "staff" && ctx.userId && ctx.tenantId && ctx.sessionId) {
+    return {
+      userId: ctx.userId,
+      tenantId: ctx.tenantId,
+      audience: ctx.audience,
+      sessionId: ctx.sessionId,
+    };
   }
   throw appError("UNAUTHENTICATED_SESSION_EXPIRED", 401, "Necesitás una sesión de personal.");
 }

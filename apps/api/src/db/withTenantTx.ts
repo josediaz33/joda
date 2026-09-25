@@ -5,6 +5,15 @@ export interface TenantTxContext {
   userId: string;
   tenantId: string;
   audience: Audience;
+  /**
+   * La fila de `staff_sessions` que respalda este contexto (WP-B13). Sin
+   * ella, `app.has_permission()` responde `false` aunque `userId` tenga el
+   * rol: un error que fije el `userId` equivocado ya no alcanza, también
+   * tendría que nombrar una sesión viva de ese usuario en este tenant. `null`
+   * solo donde todavía no hay sesión que nombrar (login, que la crea dentro
+   * de la misma transacción): ahí no se concede ningún permiso por RLS.
+   */
+  sessionId: string | null;
 }
 
 export type TenantTx = Prisma.TransactionClient;
@@ -47,7 +56,8 @@ export async function withTenantTx<T>(
     await tx.$executeRaw`
       SELECT set_config('app.user_id',   ${ctx.userId},   true),
              set_config('app.tenant_id', ${ctx.tenantId}, true),
-             set_config('app.audience',  ${ctx.audience},  true)`;
+             set_config('app.audience',  ${ctx.audience},  true),
+             set_config('app.session_id', ${ctx.sessionId ?? ""}, true)`;
     return fn(tx);
   });
 }
