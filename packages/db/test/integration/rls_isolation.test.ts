@@ -1036,20 +1036,45 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       },
     );
 
-    // COMPORTAMIENTO CONOCIDO, NO DESEADO. Lo corrige WP-B12b, pendiente de
-    // decisión de José. v_stock_available sigue corriendo como su dueño
-    // porque public.v_catalog_variants la consume, y una vista
-    // security_invoker anidada se evalúa con los permisos de quien consulta
-    // (joda_readonly), no del dueño de la vista exterior: el storefront se
-    // quedaba sin disponibilidad. Cuando B12b la corrija, este test TIENE
-    // que fallar: invertirlo a cero filas.
-    it("v_stock_available (conocido, lo corrige WP-B12b): sin tenant en contexto, joda_api ve el saldo de todos los tenants", async () => {
+    // WP-B12b (0022_stock_available_invoker.sql). Hasta B12b este test
+    // afirmaba lo contrario: v_stock_available corría como su dueño y
+    // joda_api veía el saldo de todos los tenants sin contexto. Ahora es
+    // invoker, y v_catalog_variants calcula la disponibilidad por su cuenta
+    // (el describe del storefront, más abajo, cuida que siga andando).
+    it("v_stock_available: sin tenant en contexto, joda_api no ve filas", async () => {
       await api.query("BEGIN");
       const { rowCount } = await api.query("SELECT * FROM app.v_stock_available");
       await api.query("ROLLBACK");
 
-      expect(rowCount).toBeGreaterThan(0);
+      expect(rowCount).toBe(0);
     });
+
+    it("v_stock_available: el owner de otro tenant no ve el saldo del tenant real", async () => {
+      await api.query("BEGIN");
+      await actAs(PEER_OWNER_ID, PEER_TENANT_ID);
+      const { rowCount } = await api.query("SELECT * FROM app.v_stock_available");
+      await api.query("ROLLBACK");
+
+      expect(rowCount).toBe(0);
+    });
+
+    // inventory_balances y stock_reservations exigen solo tenant: el
+    // vendedor, sin inventory.stock:read, sigue viendo la disponibilidad de
+    // su tenant, que es lo que necesita para vender (C10, C19).
+    it.each([
+      ["el owner", REAL_OWNER_ID],
+      ["el vendedor", REAL_SELLER_ID],
+    ] as const)(
+      "v_stock_available: %s del tenant real ve el saldo de su tenant",
+      async (_who, userId) => {
+        await api.query("BEGIN");
+        await actAs(userId, REAL_TENANT_ID);
+        const { rows } = await api.query("SELECT DISTINCT tenant_id FROM app.v_stock_available");
+        await api.query("ROLLBACK");
+
+        expect(rows).toEqual([{ tenant_id: REAL_TENANT_ID }]);
+      },
+    );
 
     it("v_trial_balance: el vendedor, sin accounting.journal:read, no ve el balance de su propio tenant", async () => {
       await api.query("BEGIN");
@@ -1118,10 +1143,11 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
     });
 
     // public.v_catalog_* es la excepción deliberada: corre como su dueño.
-    // v_catalog_variants consume app.v_stock_available. Este test es el que
-    // descubrió, al escribir B12, que volver invoker a v_stock_available
-    // deja al storefront sin disponibilidad (permission denied como
-    // joda_readonly): cuida que WP-B12b no lo rompa. Se le da stock al
+    // Este test es el que descubrió, al escribir B12, que volver invoker a
+    // v_stock_available dejaba al storefront sin disponibilidad (permission
+    // denied como joda_readonly) mientras v_catalog_variants la consumía.
+    // Desde WP-B12b la vista calcula la disponibilidad desde su propia
+    // fuente, y esto cuida que siga andando. Se le da stock al
     // sellado (un lote nuevo con su recepción) para que in_stock tenga algo
     // que mostrar.
     describe("el storefront (joda_readonly) sigue viendo la disponibilidad del catálogo", () => {
@@ -1160,6 +1186,15 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
         );
 
         expect(rows).toEqual([{ sku: "LAY-125-SEALED", in_stock: true }]);
+      });
+
+      // WP-B12b: v_catalog_variants corre como su dueño y ve el saldo de
+      // todos los tenants. Es la única puerta a esa fuente, y joda_api no
+      // la tiene concedida: si la tuviera, B12b solo habría movido la fuga.
+      it("joda_api no puede leer public.v_catalog_variants", async () => {
+        await expect(api.query("SELECT * FROM public.v_catalog_variants")).rejects.toMatchObject({
+          code: "42501",
+        });
       });
 
       it("joda_readonly no puede leer app.v_stock_available directamente", async () => {
