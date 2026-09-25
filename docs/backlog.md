@@ -260,6 +260,12 @@ Pruebas, rojo antes y verde después:
   - `joda_readonly` sobre `v_catalog_variants`, con `in_stock` verdadero, y sin acceso directo a `app`;
   - el comportamiento conocido de `v_stock_available`.
 
+**Revisión cruzada de B12 (2026-09-25, subagente `revisor`, sesión limpia; una interrupción por límite de uso, retomada).** Como `joda_api` real, sin tenant, con otro tenant y sin sesión (equivalente a no tener el permiso): las tres vistas convertidas dan cero filas donde corresponde, y `v_stock_available` confirma la fuga conocida (5 filas sin tenant). C10 da 10/10. El revisor no pudo reproducir a mano la vista anidada ni el rojo sin 0021, porque el sandbox le denegó alterar el esquema de la base compartida; se apoyó en el test automatizado en contenedor propio, y el rojo lo verificó esta sesión (8 fallan sin 0021). Veredicto: aprobar con observaciones.
+
+- **H1, períodos distintos: fijado como comportamiento correcto, no como defecto.** El revisor reprodujo que, con la reversión en un período posterior, el período original sigue mostrando el asiento y el de la reversión muestra el importe inverso. Es el tratamiento contable correcto: un período cerrado no se reescribe, y la reversión impacta en el período en que se contabiliza. El filtro viejo (`posted` solo) era el que lo rompía, porque borraba retroactivamente el original de su período. Se aclaró en la migración y en `docs/data-model.md` §5 que "se compensan" vale en el total, y el invariante 65 lo fija.
+- **H2.** La pregunta abierta de B14 (¿más de una reversión contabilizada por asiento?) ahora tiene una consecuencia numérica: con dos reversiones contabilizadas, `v_trial_balance` sobre-revierte el saldo. Conviene que José la responda antes del motor de posteo (Bloque H).
+- **H4.** El criterio de WP-B12b ahora incluye quitar la excepción del invariante 63 y verificar que la vista interna nueva no tenga GRANT a `joda_api`.
+
 **Hallazgo aparte, preexistente, no corregido:** `pnpm db:reset` (`scripts/lib/tasks.mjs`, `resetSchema`) recrea `public` con `CREATE SCHEMA public` sin el `GRANT USAGE ... TO PUBLIC` que trae una base nueva. En la base local reseteada, `joda_readonly` no puede leer ningún `v_catalog_*` (`permission denied for schema public`), a diferencia de CI, Testcontainers y producción. Ninguna migración le da `USAGE ON SCHEMA public` a `joda_readonly` en forma explícita: depende del default de Postgres/Supabase. Conviene resolverlo antes del Bloque G.
 ---
 

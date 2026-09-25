@@ -1194,6 +1194,52 @@ SELECT pg_temp.expect_fail_like(64, 'Revertir un asiento deja el balance como es
   $$,
   'aceptado');
 
+-- 65 ─ Una reversión en un período posterior NO reescribe el período del
+-- original. Hallazgo de la revisión cruzada de B12, fijado como
+-- comportamiento correcto: el período original conserva el asiento (un
+-- período cerrado no se reescribe) y la reversión impacta en el suyo. La
+-- compensación vale en el total, no por período. Con el filtro viejo
+-- ('posted' solo), el original desaparecía retroactivamente de su período.
+SELECT pg_temp.expect_fail_like(65, 'Reversión en otro período: cada asiento queda en el suyo',
+  $$DO $x$
+    DECLARE v_orig numeric; v_rev numeric;
+    BEGIN
+      INSERT INTO app.accounting_periods (id, tenant_id, code, starts_on, ends_on)
+      VALUES ('ffffffff-0000-0000-0000-000000000065', '11111111-1111-1111-1111-111111111111',
+              '2026-10', '2026-10-01', '2026-10-31');
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000650', 650);
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo, reverses_id)
+      VALUES ('f0000000-0000-0000-0000-000000000651', '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000065', 651, current_date, 'draft',
+              'Reversión en octubre', 'f0000000-0000-0000-0000-000000000650');
+      INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+      SELECT '11111111-1111-1111-1111-111111111111', 'f0000000-0000-0000-0000-000000000651', id,
+             CASE code WHEN '1.1.01.001' THEN 0 ELSE 1000 END,
+             CASE code WHEN '1.1.01.001' THEN 1000 ELSE 0 END
+        FROM app.chart_of_accounts WHERE code IN ('1.1.01.001', '4.1.01.001')
+         AND tenant_id = '11111111-1111-1111-1111-111111111111';
+      UPDATE app.journal_entries SET status = 'posted', posted_at = now()
+       WHERE id = 'f0000000-0000-0000-0000-000000000651';
+      UPDATE app.journal_entries SET status = 'reversed'
+       WHERE id = 'f0000000-0000-0000-0000-000000000650';
+      SELECT COALESCE(sum(balance_pyg), 0) INTO v_rev
+        FROM app.v_trial_balance
+       WHERE period_id = 'ffffffff-0000-0000-0000-000000000065' AND account_code = '1.1.01.001';
+      SELECT COALESCE(sum(jl.debit_pyg - jl.credit_pyg), 0) INTO v_orig
+        FROM app.journal_lines jl JOIN app.chart_of_accounts c ON c.id = jl.account_id
+       WHERE jl.entry_id = 'f0000000-0000-0000-0000-000000000650' AND c.code = '1.1.01.001';
+      IF v_orig = 1000 AND v_rev = -1000
+         AND EXISTS (SELECT 1 FROM app.v_trial_balance
+                      WHERE period_id = 'ffffffff-0000-0000-0000-000000000001'
+                        AND account_code = '1.1.01.001') THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'inesperado: original=% reversión en su período=%', v_orig, v_rev;
+    END $x$
+  $$,
+  'aceptado');
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'

@@ -56,6 +56,11 @@
 -- que es para lo que existe la reversión (RN-CTB-06). Contar solo 'posted'
 -- era el único criterio incorrecto; contar ninguno de los dos daría el
 -- mismo total, pero borraría el rastro. El invariante 64 lo verifica.
+-- La compensación vale en el TOTAL, no por período: si la reversión cae en
+-- un período posterior, el período original conserva el asiento y la
+-- reversión impacta en el suyo. Es lo correcto, porque un período cerrado
+-- no se reescribe; con el filtro viejo, el original desaparecía
+-- retroactivamente de su período. El invariante 65 lo fija.
 -- =====================================================================
 SET search_path = app, public;
 
