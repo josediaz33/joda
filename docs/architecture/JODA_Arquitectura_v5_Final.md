@@ -143,7 +143,8 @@ Cada transacción de la API abre con:
 ```sql
 SELECT set_config('app.user_id',   $1, true),
        set_config('app.tenant_id', $2, true),
-       set_config('app.audience',  $3, true);
+       set_config('app.audience',  $3, true),
+       set_config('app.session_id', $4, true);  -- WP-B13: has_permission exige esta sesión viva
 ```
 
 El tercer parámetro `true` hace el valor local a la transacción, para que no se filtre a otra request que reutilice la conexión del pool.

@@ -136,6 +136,13 @@ it("RLS aísla por tenant con el rol de aplicación", async () => {
 
 **Este test es no negociable.** Es el que detecta si alguien cambió la conexión a una credencial elevada y desactivó silenciosamente toda la capa de aislamiento.
 
+### 3.3 Permisos por RLS: sesión real y reloj futuro
+
+Desde WP-B13, `app.has_permission()` solo concede con una fila viva de `staff_sessions`: del mismo usuario y tenant, no revocada, y con `expires_at > now()`, donde `now()` es el reloj **real** de Postgres, que no se inyecta. Dos consecuencias para un test de integración que toque una tabla con política de permiso (`inventory_lots`, `journal_entries`, `suppliers`, …):
+
+- **Conectado directo como `joda_api`:** fijá `app.session_id` con una sesión sembrada. Ver `actAs` en `packages/db/test/integration/rls_isolation.test.ts`.
+- **Pasando por la API con `createManualClock`:** el reloj fijo tiene que estar en el **futuro**. La sesión nace con `expires_at` = reloj inyectado + 8 h, y con un reloj en el pasado nace vencida para la base. El síntoma es un 404 sin explicación en la primera lectura de lotes. Ejemplo: `inventory.integration.test.ts`.
+
 ---
 
 ## 4. Nivel 3 — Invariantes de base

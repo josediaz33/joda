@@ -17,8 +17,15 @@ Toda transacción abre con el contexto, antes de la primera consulta:
 ```ts
 SELECT set_config('app.user_id', $1, true),
        set_config('app.tenant_id', $2, true),
-       set_config('app.audience', $3, true)
+       set_config('app.audience', $3, true),
+       set_config('app.session_id', $4, true)
 ```
+
+`app.session_id` (WP-B13) es la fila de `staff_sessions` que respalda el
+contexto: sin una sesión viva de ese usuario en ese tenant, `has_permission()`
+da `false`. Solo `withTenantTx` fija estos valores, siempre desde una sesión
+resuelta, nunca desde la entrada del cliente (`sessionContextAudit.test.ts`
+falla si aparece otro lugar).
 
 El `true` final es obligatorio: hace el valor local a la transacción para que no
 se filtre por el pool a otra petición.

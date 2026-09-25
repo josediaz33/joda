@@ -119,7 +119,7 @@ Estas no son preferencias de estilo. Romper cualquiera de ellas produce pérdida
 
 - **Solo `apps/api` escribe en la base.** El storefront lee vistas estables (`v_catalog_*`), nunca tablas.
 - **Tres roles de base, y cada uno tiene su lugar.** `joda_api` (`NOBYPASSRLS`) para el runtime de la API; `joda_readonly` para la lectura del catálogo público desde el storefront, limitado a las vistas de `public`; `service_role` **solo** para migraciones y ETL desde CI. Nunca uses `service_role` ni el owner de las tablas en código de runtime: con credencial privilegiada RLS no se evalúa y toda la capa de aislamiento desaparece.
-- **Toda transacción abre con `set_config('app.user_id'|'app.tenant_id'|'app.audience', ..., true)`.** El `true` final es obligatorio: hace el valor local a la transacción para que no se filtre por el pool.
+- **Toda transacción abre con `set_config('app.user_id'|'app.tenant_id'|'app.audience'|'app.session_id', ..., true)`.** El `true` final es obligatorio: hace el valor local a la transacción para que no se filtre por el pool.
 - **Rutas administrativas no autorizadas devuelven 404, no 403.**
 - **Los permisos no van en el JWT.** Se resuelven server-side con caché en Redis.
 - **El número de tarjeta nunca toca este sistema.** Checkout hospedado. Solo se guardan `card_last4` y `card_brand`.
@@ -182,7 +182,7 @@ No des una tarea por terminada sin esto:
 | Bloque                                                     | Estado                                                  |
 | ---------------------------------------------------------- | ------------------------------------------------------- |
 | A — Monorepo, `packages/domain`, contratos                 | Pendiente                                               |
-| B — Esquema Postgres                                       | **Validado** contra PG16 (63 tablas, 39/39 invariantes) |
+| B — Esquema Postgres                                       | **Validado** contra PG16 (63 tablas, 46/46 invariantes) |
 | C — API: auth, RBAC, catálogo, inventario, ventas, compras | Pendiente                                               |
 | D — ETL, imágenes, reconciliación                          | Pendiente                                               |
 | E — Admin migrado a la API                                 | Pendiente                                               |
