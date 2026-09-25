@@ -14,9 +14,9 @@ const PRODUCT_INCLUDE = {
   product_categories: { select: { category_id: true, is_primary: true } },
   product_tags: { select: { tag_id: true } },
   product_variants: { orderBy: { position: "asc" } },
-  perfume_details_perfume_details_product_idToproducts: true,
-  watch_details_watch_details_product_idToproducts: true,
-  accessory_details_accessory_details_product_idToproducts: true,
+  perfume_details_perfume_details_product_id_tenant_idToproducts: true,
+  watch_details_watch_details_product_id_tenant_idToproducts: true,
+  accessory_details_accessory_details_product_id_tenant_idToproducts: true,
 } as const;
 
 export type ProductRow = Prisma.productsGetPayload<{ include: typeof PRODUCT_INCLUDE }>;

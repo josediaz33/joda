@@ -487,21 +487,23 @@ SELECT pg_temp.expect_fail_like(32, 'Movimiento con la variante de otro tenant',
 -- único que pueda frenar el movimiento sea `project_lot_balance`: ningún
 -- trigger puede depender de que otro haya corrido antes. El DISABLE se
 -- revierte con el resto del bloque cuando el rechazo aborta la
--- subtransacción.
+-- subtransacción. Desde 0023 (WP-B08c) la FK compuesta de lote también
+-- rechaza el cruce, y corre antes (los triggers AFTER van en orden
+-- alfabético y los de FK empiezan con "RI_"): se deshabilitan todos y se
+-- rehabilita solo el que se prueba.
 SELECT pg_temp.expect_fail_like(33, 'project_lot_balance sola: saldo de un lote de otro tenant',
   $$DO $x$
     BEGIN
       INSERT INTO app.tenants (id, slug, legal_name, trade_name)
       VALUES ('33333333-0000-0000-0000-000000000033', 'tenant-inv-33', 'Inv 33 SA', 'Inv 33');
-      ALTER TABLE app.inventory_movements DISABLE TRIGGER trg_movement_uom;
-      ALTER TABLE app.inventory_movements DISABLE TRIGGER trg_sealed_lot_guard;
+      ALTER TABLE app.inventory_movements DISABLE TRIGGER ALL;
+      ALTER TABLE app.inventory_movements ENABLE TRIGGER trg_project_balance;
       INSERT INTO app.inventory_movements
         (tenant_id, lot_id, variant_id, qty, uom, movement_type)
       VALUES ('33333333-0000-0000-0000-000000000033',
               '99999999-0000-0000-0000-000000000002',
               '55555555-0000-0000-0000-000000000002', 1, 'ml', 'adjustment');
-      ALTER TABLE app.inventory_movements ENABLE TRIGGER trg_movement_uom;
-      ALTER TABLE app.inventory_movements ENABLE TRIGGER trg_sealed_lot_guard;
+      ALTER TABLE app.inventory_movements ENABLE TRIGGER ALL;
     END $x$
   $$,
   'No existe fila de saldo para el lote % en el tenant del movimiento');
@@ -533,6 +535,9 @@ SELECT pg_temp.expect_fail_like(34, 'assert_sealed_lot_not_open solo: venta sobr
 -- capa es del tenant 35, con un lote propio del 35, colgada de un
 -- movimiento del tenant real; los importes cuadran, así que lo único que
 -- puede rechazarla es la verificación de tenant del movimiento.
+-- Desde 0023 (WP-B08c) la FK compuesta rechaza el cruce al insertar la
+-- capa, antes que este trigger diferido: se deshabilitan las FKs de la
+-- tabla para probar la función sola.
 SELECT pg_temp.expect_fail_like(35, 'Capa de costo de un tenant sobre el movimiento de otro',
   $$DO $x$
     DECLARE v_mov bigint;
@@ -558,6 +563,8 @@ SELECT pg_temp.expect_fail_like(35, 'Capa de costo de un tenant sobre el movimie
               '99999999-0000-0000-0000-000000000002',
               '55555555-0000-0000-0000-000000000002', -1, 'ml', 'sale', 11972)
       RETURNING id INTO v_mov;
+      ALTER TABLE app.movement_cost_allocations DISABLE TRIGGER ALL;
+      ALTER TABLE app.movement_cost_allocations ENABLE TRIGGER trg_cost_allocation_matches;
       INSERT INTO app.movement_cost_allocations
         (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
       VALUES ('35353535-0000-0000-0000-000000000035',
@@ -569,6 +576,9 @@ SELECT pg_temp.expect_fail_like(35, 'Capa de costo de un tenant sobre el movimie
 
 -- 36 ─ El lote de una capa de costo es del tenant de la capa. Capa y
 -- movimiento del tenant real, lote ajeno; los importes cuadran.
+-- Desde 0023 (WP-B08c) la FK compuesta rechaza el cruce al insertar la
+-- capa, antes que este trigger diferido: se deshabilitan las FKs de la
+-- tabla para probar la función sola.
 SELECT pg_temp.expect_fail_like(36, 'Capa de costo sobre el lote de otro tenant',
   $$DO $x$
     DECLARE v_mov bigint;
@@ -594,6 +604,8 @@ SELECT pg_temp.expect_fail_like(36, 'Capa de costo sobre el lote de otro tenant'
               '99999999-0000-0000-0000-000000000002',
               '55555555-0000-0000-0000-000000000002', -1, 'ml', 'sale', 11972)
       RETURNING id INTO v_mov;
+      ALTER TABLE app.movement_cost_allocations DISABLE TRIGGER ALL;
+      ALTER TABLE app.movement_cost_allocations ENABLE TRIGGER trg_cost_allocation_matches;
       INSERT INTO app.movement_cost_allocations
         (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
       VALUES ('11111111-1111-1111-1111-111111111111',
@@ -681,10 +693,12 @@ SELECT pg_temp.expect_fail_like(38, 'Venta de un sellado abierto declarando la v
   $$,
   'El lote 99999999-0000-0000-0000-000000000038 está abierto para decantar%');
 
--- 39 ─ Un lote cuya variante es de otro tenant no mueve. La FK
--- `inventory_lots.variant_id` no evalúa RLS y hoy deja crear ese lote
--- (queda para WP-B08b); el guard del frasco abierto busca la variante del
--- lote en el tenant del movimiento y, al no encontrarla, rechaza.
+-- 39 ─ Un lote cuya variante es de otro tenant no mueve. Desde 0023
+-- (WP-B08c) ese lote ya no se puede crear: la FK compuesta lo rechaza (el
+-- 67 y cross_tenant_fks.test.ts lo prueban). Acá se lo fabrica con las
+-- FKs deshabilitadas, para probar que el guard del frasco abierto, que
+-- busca la variante del lote en el tenant del movimiento, sigue fallando
+-- cerrado por sí solo ante un dato corrupto.
 SELECT pg_temp.expect_fail_like(39, 'Movimiento sobre un lote cuya variante es de otro tenant',
   $$DO $x$
     BEGIN
@@ -697,12 +711,14 @@ SELECT pg_temp.expect_fail_like(39, 'Movimiento sobre un lote cuya variante es d
       VALUES ('39393939-0000-0000-0000-0000000000b1',
               '39393939-0000-0000-0000-000000000039',
               '39393939-0000-0000-0000-0000000000a1', 'INV-39', 'unit', 'unit', 0);
+      ALTER TABLE app.inventory_lots DISABLE TRIGGER ALL;
       INSERT INTO app.inventory_lots
         (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
          fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
       VALUES ('99999999-0000-0000-0000-000000000039',
               '11111111-1111-1111-1111-111111111111',
               '39393939-0000-0000-0000-0000000000b1', 1, 'unit', 0, 'PYG', 1, 0, 0);
+      ALTER TABLE app.inventory_lots ENABLE TRIGGER ALL;
       INSERT INTO app.inventory_movements
         (tenant_id, lot_id, variant_id, qty, uom, movement_type)
       VALUES ('11111111-1111-1111-1111-111111111111',
@@ -820,14 +836,20 @@ SELECT pg_temp.expect_fail_like(44, 'has_permission con la sesión de otro usuar
   'denegado');
 
 -- 45 ─ Una sesión del usuario en OTRO tenant no concede permisos en este.
+-- Desde 0023 (WP-B08c) esa sesión no se puede crear: la FK compuesta
+-- staff_user_id → staff_users exige el mismo tenant. Se la fabrica con las
+-- FKs deshabilitadas para probar que has_permission sigue verificando el
+-- tenant de la sesión por sí sola.
 SELECT pg_temp.expect_fail_like(45, 'has_permission con una sesión de otro tenant',
   $$DO $x$
     BEGIN
       INSERT INTO app.tenants (id, slug, legal_name, trade_name)
       VALUES ('45454545-0000-0000-0000-000000000045', 'tenant-inv-45', 'Inv 45 SA', 'Inv 45');
+      ALTER TABLE app.staff_sessions DISABLE TRIGGER ALL;
       INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at)
       VALUES ('5e550000-0000-0000-0000-000000000045', '45454545-0000-0000-0000-000000000045',
               '22222222-2222-2222-2222-222222222222', now() + interval '8 hours');
+      ALTER TABLE app.staff_sessions ENABLE TRIGGER ALL;
       PERFORM set_config('app.user_id', '22222222-2222-2222-2222-222222222222', true),
               set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
               set_config('app.audience', 'staff', true),
@@ -1302,6 +1324,124 @@ SELECT pg_temp.expect_fail_like(66,
     END $x$
   $$,
   'aceptado');
+
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-B08c (0023_cross_tenant_fks.sql): coherencia entre filas
+-- relacionadas. FKs con tenant, variante del movimiento = variante del
+-- lote, RN-LOT-03 extendida a cualquier movimiento, y un lote sellado
+-- abierto es terminal.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 67 ─ Toda FK entre dos tablas con tenant_id verifica el tenant. Para
+-- cada FK, su columna de referencia (la primera) tiene que estar en una FK
+-- de la misma tabla, al mismo destino, que incluya tenant_id. Así pasan
+-- las `(product_id, kind)` de las tablas de detalle, que tienen al lado su
+-- `(product_id, tenant_id)`. Una FK nueva de una sola columna lo rompe.
+-- El conteo mínimo evita que pase porque la consulta no encuentra nada.
+SELECT pg_temp.expect_true(67,
+  'Toda FK entre tablas con tenant_id incluye tenant_id',
+  NOT EXISTS (
+    SELECT 1
+      FROM pg_constraint c
+      JOIN pg_attribute ct ON ct.attrelid = c.conrelid  AND ct.attname = 'tenant_id'
+      JOIN pg_attribute tt ON tt.attrelid = c.confrelid AND tt.attname = 'tenant_id'
+     WHERE c.contype = 'f'
+       AND c.connamespace = 'app'::regnamespace
+       AND c.conkey[1] <> ct.attnum
+       AND NOT EXISTS (
+         SELECT 1 FROM pg_constraint c2
+          WHERE c2.contype = 'f'
+            AND c2.conrelid = c.conrelid
+            AND c2.confrelid = c.confrelid
+            AND c.conkey[1] = ANY (c2.conkey)
+            AND ct.attnum = ANY (c2.conkey))
+  )
+  AND (SELECT count(*) FROM pg_constraint c
+         JOIN pg_attribute ct ON ct.attrelid = c.conrelid AND ct.attname = 'tenant_id'
+        WHERE c.contype = 'f' AND c.connamespace = 'app'::regnamespace
+          AND ct.attnum = ANY (c.conkey) AND cardinality(c.conkey) > 1) >= 103);
+
+-- 68 ─ La variante de un movimiento es la de su lote. Fue la puerta del
+-- bloqueante de B09. Sobre el granel (no sellado, así el guard de RN-LOT-03
+-- no interviene), con la uom del lote y otra variante del mismo tenant:
+-- lo único que puede rechazarlo es la FK compuesta lote+variante.
+SELECT pg_temp.expect_fail_like(68, 'Movimiento que declara una variante distinta de la de su lote',
+  $$INSERT INTO app.inventory_movements
+      (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '99999999-0000-0000-0000-000000000002',
+            '55555555-0000-0000-0000-00000000a001', 1, 'ml', 'adjustment')$$,
+  '%inventory_movements_lot_id_fkey%');
+
+-- 69 y 70 ─ RN-LOT-03 extendida: un lote sellado abierto no admite NINGÚN
+-- movimiento. Hasta 0023 solo rechazaba `sale`; un `waste` o un
+-- `adjustment` sacaban frascos sellados de un lote de tres con uno
+-- abierto (pregunta de la revisión de B09, decidida por José).
+SELECT pg_temp.expect_fail_like(69, 'waste sobre un lote sellado abierto con saldo',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('99999999-0000-0000-0000-000000000069', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-000000000001', 3, 'unit', 0, 'PYG', 1, 0, 0);
+      INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-000000000069',
+              '55555555-0000-0000-0000-000000000001', 3, 'unit', 'purchase_receipt'),
+             ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-000000000069',
+              '55555555-0000-0000-0000-000000000001', -1, 'unit', 'transfer_out');
+      UPDATE app.inventory_lots SET status = 'open_for_decant'
+       WHERE id = '99999999-0000-0000-0000-000000000069';
+      INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-000000000069',
+              '55555555-0000-0000-0000-000000000001', -1, 'unit', 'waste');
+    END $x$
+  $$,
+  'El lote 99999999-0000-0000-0000-000000000069 está abierto para decantar: un sellado abierto no admite movimientos');
+
+SELECT pg_temp.expect_fail_like(70, 'adjustment positivo sobre un lote sellado abierto',
+  $$INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+    VALUES ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-000000000001',
+            '55555555-0000-0000-0000-000000000001', 1, 'unit', 'adjustment')$$,
+  'El lote 99999999-0000-0000-0000-000000000001 está abierto para decantar: un sellado abierto no admite movimientos');
+
+-- 71 ─ Un lote sellado abierto es terminal: volverlo a `available` es la
+-- vía para eludir 69/70 (y abrir dos veces el mismo frasco, caso borde 5).
+SELECT pg_temp.expect_fail_like(71, 'Lote sellado abierto vuelve a available',
+  $$UPDATE app.inventory_lots SET status = 'available'
+     WHERE id = '99999999-0000-0000-0000-000000000001'$$,
+  'El lote 99999999-0000-0000-0000-000000000001 es un sellado abierto para decantar: su estado es terminal');
+
+-- 72 ─ Control positivo: el granel hijo también está en `open_for_decant`
+-- pero no es sellado. Se sigue moviendo y puede agotarse (RN-LOT-04).
+SELECT pg_temp.expect_fail_like(72, 'El granel abierto se mueve y se agota',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000002', -0.5, 'ml', 'waste');
+      UPDATE app.inventory_lots SET status = 'depleted'
+       WHERE id = '99999999-0000-0000-0000-000000000002';
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+-- 73 ─ El caso de la revisión de B09: un lote propio que apunta a una
+-- variante de otro tenant. Hasta 0023 se creaba igual.
+SELECT pg_temp.expect_fail_like(73, 'Lote con la variante de otro tenant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('73737373-0000-0000-0000-000000000073', 'tenant-inv-73', 'Inv 73 SA', 'Inv 73');
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('99999999-0000-0000-0000-000000000073', '73737373-0000-0000-0000-000000000073',
+              '55555555-0000-0000-0000-000000000001', 1, 'unit', 0, 'PYG', 1, 0, 0);
+    END $x$
+  $$,
+  '%inventory_lots_variant_id_fkey%');
 
 \echo ''
 \echo '=============================================================='

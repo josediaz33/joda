@@ -212,7 +212,16 @@ Abrir un frasco sellado para fraccionar es una **conversión entre dos lotes**, 
 
 ### RN-LOT-03 · Frasco abierto no se vende sellado
 
-Un lote en `open_for_decant` no admite movimientos de tipo `sale` sobre la variante sellada. Impuesto por la base (`assert_sealed_lot_not_open`), que mira la variante del lote y no solo la que declara el movimiento. Hasta la revisión de WP-B09, declarar otra variante eludía la regla.
+Un lote **sellado** en `open_for_decant` es **terminal**: no admite ningún movimiento (venta, baja, ajuste, devolución) ni cambia de estado. El granel hijo también está en `open_for_decant`, pero no es sellado: se mueve y se agota normalmente (RN-LOT-04).
+
+Impuesto por la base:
+
+- `assert_sealed_lot_not_open` rechaza el movimiento. Mira la variante del lote, no solo la que declara el movimiento. Hasta la revisión de WP-B09, declarar otra variante eludía la regla. Desde WP-B08c, además, las dos no pueden diferir.
+- `trg_sealed_lot_terminal` rechaza sacar el lote de `open_for_decant`. Si no, volverlo a `available` eludía lo anterior y permitía abrir dos veces el mismo frasco (caso borde 5).
+
+Hasta WP-B08c solo se rechazaba `sale`; un `waste` o un `adjustment` sacaban frascos sellados de un lote abierto. Decidido por José el 2026-09-25.
+
+La apertura (RN-LOT-02) saca la unidad **antes** de cambiar el estado, así que no choca con esto. En un lote de varios frascos, ver el caso borde 21.
 
 ### RN-LOT-04 · Agotamiento de frasco
 
