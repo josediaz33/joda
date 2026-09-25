@@ -26,7 +26,7 @@ Todo lo que sigue se ejecutó, no se estimó:
 | Triggers (no internos)     | 25                |
 | Tablas con RLS activo      | 62                |
 | Políticas RLS              | 71                |
-| **Pruebas de invariantes** | **37 / 37 pasan** |
+| **Pruebas de invariantes** | **39 / 39 pasan** |
 
 Verificado el 2026-09-23 contra la base recién migrada (`pnpm db:reset`, PostgreSQL 16), con estas consultas — así la próxima actualización es correr esto y pegar los números, no recalcular a ojo:
 
@@ -93,7 +93,7 @@ igual en Windows sin cliente de Postgres y en CI (`.github/workflows/ci.yml`,
 job `db`, con un servicio `postgres:16`). `db:test` no se conforma con que no
 haya un error de SQL: `invariants.sql` atrapa sus propias excepciones y las
 registra en una tabla en vez de relanzarlas, así que el runner falla si el
-conteo de invariantes en verde no es exactamente `EXPECTED_INVARIANT_COUNT` (hoy 37), y en
+conteo de invariantes en verde no es exactamente `EXPECTED_INVARIANT_COUNT` (hoy 39), y en
 `smoke_business_flow.sql` verifica en código que `v_balance_drift` da cero
 filas y que el asiento de la venta cuadra.
 

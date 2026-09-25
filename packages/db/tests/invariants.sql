@@ -632,6 +632,71 @@ SELECT pg_temp.expect_fail_like(37, 'Mover una línea entre borradores descuadra
   $$,
   'Asiento f0000000-0000-0000-0000-00000000037a descuadrado%');
 
+-- 38 ─ RN-LOT-03 no se elude declarando otra variante. Hallazgo de la
+-- revisión cruzada de B09: el trigger decidía con `NEW.variant_id`, que
+-- pone quien inserta. Un lote de tres frascos sellados con uno abierto
+-- (quedan dos sellados de verdad, con el lote en `open_for_decant`): la
+-- venta que declara la variante de GRANEL pasaba. El lote tiene saldo, así
+-- que el único que puede rechazarla es el guard del frasco abierto.
+SELECT pg_temp.expect_fail_like(38, 'Venta de un sellado abierto declarando la variante de granel',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('99999999-0000-0000-0000-000000000038',
+              '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-000000000001', 3, 'unit', 0, 'PYG', 1, 0, 0);
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000038',
+              '55555555-0000-0000-0000-000000000001', 3, 'unit', 'purchase_receipt'),
+             ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000038',
+              '55555555-0000-0000-0000-000000000001', -1, 'unit', 'transfer_out');
+      UPDATE app.inventory_lots SET status = 'open_for_decant'
+       WHERE id = '99999999-0000-0000-0000-000000000038';
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000038',
+              '55555555-0000-0000-0000-000000000002', -1, 'unit', 'sale');
+    END $x$
+  $$,
+  'El lote 99999999-0000-0000-0000-000000000038 está abierto para decantar%');
+
+-- 39 ─ Un lote cuya variante es de otro tenant no mueve. La FK
+-- `inventory_lots.variant_id` no evalúa RLS y hoy deja crear ese lote
+-- (queda para WP-B08b); el guard del frasco abierto busca la variante del
+-- lote en el tenant del movimiento y, al no encontrarla, rechaza.
+SELECT pg_temp.expect_fail_like(39, 'Movimiento sobre un lote cuya variante es de otro tenant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('39393939-0000-0000-0000-000000000039', 'tenant-inv-39', 'Inv 39 SA', 'Inv 39');
+      INSERT INTO app.products (id, tenant_id, kind, slug, name, status)
+      VALUES ('39393939-0000-0000-0000-0000000000a1',
+              '39393939-0000-0000-0000-000000000039', 'accessory', 'inv-39', 'Inv 39', 'draft');
+      INSERT INTO app.product_variants (id, tenant_id, product_id, sku, variant_type, uom, price_pyg)
+      VALUES ('39393939-0000-0000-0000-0000000000b1',
+              '39393939-0000-0000-0000-000000000039',
+              '39393939-0000-0000-0000-0000000000a1', 'INV-39', 'unit', 'unit', 0);
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('99999999-0000-0000-0000-000000000039',
+              '11111111-1111-1111-1111-111111111111',
+              '39393939-0000-0000-0000-0000000000b1', 1, 'unit', 0, 'PYG', 1, 0, 0);
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000039',
+              '55555555-0000-0000-0000-00000000a001', 1, 'unit', 'adjustment');
+    END $x$
+  $$,
+  'Variante del lote % no encontrada en el tenant del movimiento%');
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'

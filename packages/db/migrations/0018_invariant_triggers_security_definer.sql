@@ -41,6 +41,8 @@
 --      lo que solo esta función ve). Invariantes nuevos que salen de acá:
 --        · el lote de un movimiento es del tenant del movimiento;
 --        · la variante de un movimiento es del tenant del movimiento;
+--        · la variante DEL LOTE de un movimiento es del tenant del
+--          movimiento (un lote que apunta a una variante ajena no mueve);
 --        · el movimiento y el lote de una capa de costo son del tenant de
 --          la capa;
 --        · la proyección de saldo solo se actualiza en el tenant del
@@ -136,18 +138,30 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------
--- Un frasco abierto no se vende sellado (invariante 6). Busca el lote y la
--- variante SIEMPRE, no solo en ventas: la verificación de tenant vale para
--- todo movimiento, y este trigger no puede apoyarse en que
--- `trg_movement_uom` haya corrido antes (eso era la trampa).
+-- Un frasco abierto no se vende sellado (invariante 6, RN-LOT-03). Busca
+-- el lote y las variantes SIEMPRE, no solo en ventas: la verificación de
+-- tenant vale para todo movimiento, y este trigger no puede apoyarse en
+-- que `trg_movement_uom` haya corrido antes (eso era la trampa).
+--
+-- Decide con la variante DEL LOTE, no solo con la que declara el
+-- movimiento. La versión de 0009 miraba únicamente `NEW.variant_id`, un
+-- dato que pone quien inserta, y nada exige que coincida con
+-- `inventory_lots.variant_id`. Una venta sobre un lote sellado abierto que
+-- declarara la variante de granel pasaba (hallazgo de la revisión cruzada
+-- de B09, reproducido como `joda_api` con un lote de tres frascos y uno
+-- abierto). Se rechaza si CUALQUIERA de las dos es sellada: nunca es más
+-- permisivo que 0009. Si la variante del movimiento debe coincidir siempre
+-- con la del lote es una regla aparte, sin escribir (docs/backlog.md, B09).
 -- ---------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION app.assert_sealed_lot_not_open() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = app, pg_temp AS $$
 DECLARE
-  v_status app.lot_status;
-  v_type   app.variant_type;
+  v_status        app.lot_status;
+  v_lot_variant   uuid;
+  v_lot_type      app.variant_type;
+  v_declared_type app.variant_type;
 BEGIN
-  SELECT l.status INTO v_status
+  SELECT l.status, l.variant_id INTO v_status, v_lot_variant
     FROM app.inventory_lots l
    WHERE l.id = NEW.lot_id
      AND l.tenant_id = NEW.tenant_id;
@@ -159,7 +173,7 @@ BEGIN
       USING ERRCODE = 'foreign_key_violation';
   END IF;
 
-  SELECT v.variant_type INTO v_type
+  SELECT v.variant_type INTO v_declared_type
     FROM app.product_variants v
    WHERE v.id = NEW.variant_id
      AND v.tenant_id = NEW.tenant_id;
@@ -171,9 +185,28 @@ BEGIN
       USING ERRCODE = 'foreign_key_violation';
   END IF;
 
-  -- `status` y `variant_type` son NOT NULL y los dos "no encontrado" ya se
+  -- La FK `inventory_lots.variant_id` no evalúa RLS: hoy un lote puede
+  -- apuntar a una variante de otro tenant (hallazgo de la revisión de B09,
+  -- queda para WP-B08b). Ese lote es un dato corrupto, y falla cerrado:
+  -- ningún movimiento suyo pasa. Sin el filtro, el rechazo de abajo
+  -- revelaría si una variante ajena es sellada.
+  SELECT v.variant_type INTO v_lot_type
+    FROM app.product_variants v
+   WHERE v.id = v_lot_variant
+     AND v.tenant_id = NEW.tenant_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION
+      'Variante del lote % no encontrada en el tenant del movimiento: no se puede verificar el movimiento',
+      NEW.lot_id
+      USING ERRCODE = 'foreign_key_violation';
+  END IF;
+
+  -- `status` y `variant_type` son NOT NULL y los tres "no encontrado" ya se
   -- rechazaron: la comparación nunca ve un NULL.
-  IF NEW.movement_type = 'sale' AND v_type = 'sealed' AND v_status = 'open_for_decant' THEN
+  IF NEW.movement_type = 'sale'
+     AND v_status = 'open_for_decant'
+     AND 'sealed' IN (v_lot_type, v_declared_type) THEN
     RAISE EXCEPTION
       'El lote % está abierto para decantar: no puede venderse como sellado',
       NEW.lot_id
@@ -240,7 +273,11 @@ END $$;
 -- Todo asiento cuadra (invariante 7, diferida).
 --
 -- No busca el asiento: la decisión (debe = haber) se toma solo sobre las
--- líneas, y con SECURITY DEFINER las ve todas. Que el asiento no exista
+-- líneas, y con SECURITY DEFINER las ve todas. Es la única de estas
+-- funciones que no filtra por tenant, a propósito: `entry_id` es un uuid
+-- globalmente único, y `guard_posted_journal` (0017) ya impuso antes del
+-- INSERT/UPDATE que toda línea sea del tenant de su asiento. Un filtro por
+-- el tenant de la línea que dispara no agregaría nada. Que el asiento no exista
 -- no es falta de visibilidad sino un borrado en cascada, donde las líneas
 -- también se fueron y la suma da 0 = 0. Que una línea sea del tenant de
 -- su asiento lo impone `guard_posted_journal` (0017) antes de insertarla.

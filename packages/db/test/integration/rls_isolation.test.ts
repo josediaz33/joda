@@ -390,6 +390,44 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       await api.query("ROLLBACK");
     });
 
+    // Hallazgo de la revisión cruzada de B09, reproducido tal cual: un lote
+    // de tres frascos sellados con uno abierto. El trigger decidía con la
+    // variante que declara el movimiento; declarando la de granel, el
+    // vendedor vendía uno de los dos sellados que quedan.
+    it("RN-LOT-03: el vendedor no puede vender un sellado de un lote abierto declarando la variante de granel", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+      await api.query(
+        `INSERT INTO app.inventory_lots
+           (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+            fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+         VALUES ('99999999-0000-0000-0000-0000000000b3', $1, $2, 3, 'unit', 0, 'PYG', 1, 0, 0)`,
+        [REAL_TENANT_ID, SEALED_VARIANT_ID],
+      );
+      await api.query(
+        `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+         VALUES ($1, '99999999-0000-0000-0000-0000000000b3', $2, 3, 'unit', 'purchase_receipt'),
+                ($1, '99999999-0000-0000-0000-0000000000b3', $2, -1, 'unit', 'transfer_out')`,
+        [REAL_TENANT_ID, SEALED_VARIANT_ID],
+      );
+      await api.query(
+        "UPDATE app.inventory_lots SET status = 'open_for_decant' WHERE id = '99999999-0000-0000-0000-0000000000b3'",
+      );
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      await expect(
+        api.query(
+          `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+           VALUES ($1, '99999999-0000-0000-0000-0000000000b3', $2, -1, 'unit', 'sale')`,
+          [REAL_TENANT_ID, BULK_VARIANT_ID],
+        ),
+      ).rejects.toMatchObject({
+        code: "23514",
+        message:
+          "El lote 99999999-0000-0000-0000-0000000000b3 está abierto para decantar: no puede venderse como sellado",
+      });
+      await api.query("ROLLBACK");
+    });
+
     it("el lote que crea el vendedor nace con su fila de saldo en cero (init_lot_balance)", async () => {
       await api.query("BEGIN");
       await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
