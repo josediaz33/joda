@@ -1793,7 +1793,7 @@ revisala y decime qué cambiaste. Recién con el plan aprobado, escribí el CSS.
 
 El paso final —plan antes que código— es el que más diferencia hace. Un agente que escribe CSS directo produce el default; uno que tiene que justificar cada color contra la marca, no.
 
-**Estado de E01 (25/09/2026).** `tokens.css` ya define los roles compartidos y registra `packages/ui/src` con `@source` para que Tailwind detecte las clases del paquete. Las declaraciones `@font-face` están en el CSS del admin (`apps/admin/src/fonts.css`); `next/font/local` y las variables de fuentes del storefront corresponden a WP-G01. La fila WP-E01 del backlog todavía figura sin cerrar: actualizar ese estado por su propio circuito antes de tratar E02 como libre.
+**Estado de E01 (25/09/2026).** `tokens.css` ya define los roles compartidos y registra `packages/ui/src` con `@source` para que Tailwind detecte las clases del paquete. Las declaraciones `@font-face` están en el CSS del admin (`apps/admin/src/fonts.css`); `next/font/local` y las variables de fuentes del storefront corresponden a WP-G01. WP-E01 está cerrado en el backlog.
 
 ## Bloque E — Admin y UI compartida
 
@@ -1801,7 +1801,7 @@ El estado de cada sesión sigue las dependencias y casillas de `docs/backlog.md`
 
 ### Sesión E02 — WP-E02 · Primitivas shadcn
 
-**Dependencia:** E01. **Estado hoy:** esperando el cierre de E01 en el backlog.
+**Dependencia:** E01 (cerrado). **Estado hoy:** libre.
 
 ```
 Antes de tocar nada: git checkout -b feat/e02-ui-primitives
