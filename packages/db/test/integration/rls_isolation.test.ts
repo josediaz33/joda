@@ -38,6 +38,16 @@ const REAL_OWNER_ID = "22222222-2222-2222-2222-222222222222";
 // Vendedor del tenant real: el rol del seed sin inventory.stock:read.
 const REAL_SELLER_ID = "22222222-2222-2222-2222-2222222200b1";
 
+// WP-B13: has_permission() exige una sesión viva del usuario en el tenant
+// de contexto. Una por usuario, sembradas en beforeAll; actAs() fija la
+// que corresponde.
+const SESSION_BY_USER = {
+  [REAL_OWNER_ID]: "5e550000-0000-0000-0000-0000000000a1",
+  [PEER_OWNER_ID]: "5e550000-0000-0000-0000-0000000000a2",
+  [REAL_SELLER_ID]: "5e550000-0000-0000-0000-0000000000a3",
+} as const;
+type StaffUserId = keyof typeof SESSION_BY_USER;
+
 // Fixtures de smoke_business_flow.sql: el frasco sellado Layton (lote en
 // unidades, abierto para decantar) y su granel (lote en ml).
 const SEALED_OPEN_LOT_ID = "99999999-0000-0000-0000-000000000001";
@@ -71,12 +81,15 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
 
   // Contexto de staff dentro de la transacción abierta, igual que
   // withTenantTx: tercer parámetro de set_config en true.
-  async function actAs(userId: string, tenantId: string): Promise<void> {
+  // WP-B13: también app.session_id, con la sesión viva del usuario sembrada
+  // en beforeAll — sin ella has_permission() da false.
+  async function actAs(userId: StaffUserId, tenantId: string): Promise<void> {
     await api.query(
       `SELECT set_config('app.user_id', $1, true),
               set_config('app.tenant_id', $2, true),
-              set_config('app.audience', 'staff', true)`,
-      [userId, tenantId],
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', $3, true)`,
+      [userId, tenantId, SESSION_BY_USER[userId]],
     );
   }
 
@@ -152,6 +165,10 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       VALUES ('${REAL_DRAFT_ENTRY_ID}', '${REAL_TENANT_ID}',
               'ffffffff-0000-0000-0000-000000000001', 50, current_date, 'draft',
               'Borrador de rls_isolation.test.ts');
+      INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at) VALUES
+        ('${SESSION_BY_USER[REAL_OWNER_ID]}', '${REAL_TENANT_ID}', '${REAL_OWNER_ID}', now() + interval '8 hours'),
+        ('${SESSION_BY_USER[PEER_OWNER_ID]}', '${PEER_TENANT_ID}', '${PEER_OWNER_ID}', now() + interval '8 hours'),
+        ('${SESSION_BY_USER[REAL_SELLER_ID]}', '${REAL_TENANT_ID}', '${REAL_SELLER_ID}', now() + interval '8 hours');
     `);
     await db.client.query(`ALTER ROLE joda_api PASSWORD '${JODA_API_TEST_PASSWORD}'`);
 
@@ -271,12 +288,7 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
     "$table (WP-B10): el staff de otro tenant, con $permission, no ve las filas del tenant real",
     async ({ table, permission }) => {
       await api.query("BEGIN");
-      await api.query(
-        `SELECT set_config('app.user_id', $1, true),
-                set_config('app.tenant_id', $2, true),
-                set_config('app.audience', 'staff', true)`,
-        [PEER_OWNER_ID, PEER_TENANT_ID],
-      );
+      await actAs(PEER_OWNER_ID, PEER_TENANT_ID);
       const permissionCheck = await api.query("SELECT app.has_permission($1) AS granted", [
         permission,
       ]);
@@ -294,12 +306,7 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
     "$table (WP-B10): el staff del tenant real, con $permission, sí ve sus filas (control positivo)",
     async ({ table }) => {
       await api.query("BEGIN");
-      await api.query(
-        `SELECT set_config('app.user_id', $1, true),
-                set_config('app.tenant_id', $2, true),
-                set_config('app.audience', 'staff', true)`,
-        [REAL_OWNER_ID, REAL_TENANT_ID],
-      );
+      await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
       const { rowCount } = await api.query(`SELECT * FROM app.${table}`);
       await api.query("ROLLBACK");
 
@@ -309,12 +316,7 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
 
   it("products (WP-B10): la permisiva base tenant_access no abre la tabla — otro tenant sigue viendo cero filas", async () => {
     await api.query("BEGIN");
-    await api.query(
-      `SELECT set_config('app.user_id', $1, true),
-              set_config('app.tenant_id', $2, true),
-              set_config('app.audience', 'staff', true)`,
-      [PEER_OWNER_ID, PEER_TENANT_ID],
-    );
+    await actAs(PEER_OWNER_ID, PEER_TENANT_ID);
     const { rowCount } = await api.query("SELECT * FROM app.products");
     await api.query("ROLLBACK");
 
@@ -679,12 +681,7 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
 
   it("journal_lines (WP-B10, RN-CTB-06): el vendedor, sin accounting.journal:read, no puede editar una línea de un asiento contabilizado", async () => {
     await api.query("BEGIN");
-    await api.query(
-      `SELECT set_config('app.user_id', $1, true),
-              set_config('app.tenant_id', $2, true),
-              set_config('app.audience', 'staff', true)`,
-      [REAL_SELLER_ID, REAL_TENANT_ID],
-    );
+    await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
     await expect(
       api.query("UPDATE app.journal_lines SET memo = 'editado' WHERE entry_id = $1", [
         POSTED_ENTRY_ID,
@@ -698,12 +695,7 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
 
   it("journal_lines (WP-B10, RN-CTB-06): el vendedor, sin accounting.journal:read, no puede borrar una línea de un asiento contabilizado", async () => {
     await api.query("BEGIN");
-    await api.query(
-      `SELECT set_config('app.user_id', $1, true),
-              set_config('app.tenant_id', $2, true),
-              set_config('app.audience', 'staff', true)`,
-      [REAL_SELLER_ID, REAL_TENANT_ID],
-    );
+    await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
     await expect(
       api.query("DELETE FROM app.journal_lines WHERE entry_id = $1", [POSTED_ENTRY_ID]),
     ).rejects.toMatchObject({
@@ -715,12 +707,7 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
 
   it("journal_lines (WP-B10): el owner de otro tenant no puede colgar una línea propia de un asiento del tenant real", async () => {
     await api.query("BEGIN");
-    await api.query(
-      `SELECT set_config('app.user_id', $1, true),
-              set_config('app.tenant_id', $2, true),
-              set_config('app.audience', 'staff', true)`,
-      [PEER_OWNER_ID, PEER_TENANT_ID],
-    );
+    await actAs(PEER_OWNER_ID, PEER_TENANT_ID);
     await expect(
       api.query(
         `INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
@@ -737,12 +724,7 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
 
   it("inventory_movements (WP-B10): el mismo movimiento, insertado por el owner (con inventory.stock:read), sí se acepta (control positivo)", async () => {
     await api.query("BEGIN");
-    await api.query(
-      `SELECT set_config('app.user_id', $1, true),
-              set_config('app.tenant_id', $2, true),
-              set_config('app.audience', 'staff', true)`,
-      [REAL_OWNER_ID, REAL_TENANT_ID],
-    );
+    await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
     const { rowCount } = await api.query(
       `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
        VALUES ($1, '99999999-0000-0000-0000-000000000002',
@@ -752,5 +734,100 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
     await api.query("ROLLBACK");
 
     expect(rowCount).toBe(1);
+  });
+  // WP-B13 (0019_has_permission_session_bound.sql). Modelo de confianza de
+  // ADR-016: RLS protege contra errores de la aplicación, no contra un
+  // proceso de API comprometido. El error que se simula acá es un
+  // withTenantTx armado con el user_id correcto pero sin la sesión que lo
+  // respalda, o con una ajena.
+  describe("has_permission exige una sesión viva del mismo usuario y tenant (WP-B13, docs/adr/016-rbac-tres-capas.md)", () => {
+    it("el user_id del owner sin app.session_id no ve los lotes (inventory.stock:read)", async () => {
+      await api.query("BEGIN");
+      await api.query(
+        `SELECT set_config('app.user_id', $1, true),
+                set_config('app.tenant_id', $2, true),
+                set_config('app.audience', 'staff', true)`,
+        [REAL_OWNER_ID, REAL_TENANT_ID],
+      );
+      const permissionCheck = await api.query("SELECT app.has_permission($1) AS granted", [
+        "inventory.stock:read",
+      ]);
+      const { rowCount } = await api.query("SELECT * FROM app.inventory_lots");
+      await api.query("ROLLBACK");
+
+      expect({ granted: permissionCheck.rows[0].granted, rowCount }).toEqual({
+        granted: false,
+        rowCount: 0,
+      });
+    });
+
+    it("el user_id del owner con la sesión del vendedor no hereda los permisos del owner", async () => {
+      await api.query("BEGIN");
+      await api.query(
+        `SELECT set_config('app.user_id', $1, true),
+                set_config('app.tenant_id', $2, true),
+                set_config('app.audience', 'staff', true),
+                set_config('app.session_id', $3, true)`,
+        [REAL_OWNER_ID, REAL_TENANT_ID, SESSION_BY_USER[REAL_SELLER_ID]],
+      );
+      const permissionCheck = await api.query("SELECT app.has_permission($1) AS granted", [
+        "inventory.stock:read",
+      ]);
+      const { rowCount } = await api.query("SELECT * FROM app.inventory_lots");
+      await api.query("ROLLBACK");
+
+      expect({ granted: permissionCheck.rows[0].granted, rowCount }).toEqual({
+        granted: false,
+        rowCount: 0,
+      });
+    });
+
+    it("el owner con su sesión revocada pierde el permiso aunque conserve el rol", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+      await api.query(
+        "UPDATE app.staff_sessions SET revoked_at = now(), revoked_reason = 'logout' WHERE id = $1",
+        [SESSION_BY_USER[REAL_OWNER_ID]],
+      );
+      const permissionCheck = await api.query("SELECT app.has_permission($1) AS granted", [
+        "inventory.stock:read",
+      ]);
+      await api.query("ROLLBACK");
+
+      expect(permissionCheck.rows[0].granted).toBe(false);
+    });
+
+    // Hallazgo de WP-B10, reproducido: con search_path = app, public,
+    // pg_temp se buscaba PRIMERO y estas tablas temporales le daban al
+    // vendedor accounting.journal:read. Ahora has_permission califica todo
+    // con app. y deja pg_temp último.
+    it("tablas temporales que sombrean roles, permisos y sesiones no le dan permisos al vendedor", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      await api.query(
+        `CREATE TEMP TABLE staff_user_roles (staff_user_id uuid, role_id uuid) ON COMMIT DROP`,
+      );
+      await api.query(
+        `CREATE TEMP TABLE role_permissions (role_id uuid, permission_code text) ON COMMIT DROP`,
+      );
+      await api.query(
+        `INSERT INTO pg_temp.staff_user_roles VALUES ($1, 'eeeeeeee-0000-0000-0000-000000000001')`,
+        [REAL_SELLER_ID],
+      );
+      await api.query(
+        `INSERT INTO pg_temp.role_permissions
+         VALUES ('eeeeeeee-0000-0000-0000-000000000001', 'accounting.journal:read')`,
+      );
+      const permissionCheck = await api.query("SELECT app.has_permission($1) AS granted", [
+        "accounting.journal:read",
+      ]);
+      const { rowCount } = await api.query("SELECT * FROM app.journal_entries");
+      await api.query("ROLLBACK");
+
+      expect({ granted: permissionCheck.rows[0].granted, rowCount }).toEqual({
+        granted: false,
+        rowCount: 0,
+      });
+    });
   });
 });

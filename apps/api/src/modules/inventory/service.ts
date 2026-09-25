@@ -21,8 +21,13 @@ const NOT_FOUND_ERROR = appError("NOT_FOUND", 404, "No encontrado.");
 
 /** Mismo criterio que requireStaffContext de modules/catalog/router.ts — acá vive en el service porque createAdjustment necesita además ip/userAgent/requestId de RequestContext, no solo el trío de TenantTxContext. */
 function requireStaffContext(ctx: RequestContext): TenantTxContext {
-  if (ctx.audience === "staff" && ctx.userId && ctx.tenantId) {
-    return { userId: ctx.userId, tenantId: ctx.tenantId, audience: ctx.audience };
+  if (ctx.audience === "staff" && ctx.userId && ctx.tenantId && ctx.sessionId) {
+    return {
+      userId: ctx.userId,
+      tenantId: ctx.tenantId,
+      audience: ctx.audience,
+      sessionId: ctx.sessionId,
+    };
   }
   throw toTRPCError(
     appError("UNAUTHENTICATED_SESSION_EXPIRED", 401, "Necesitás una sesión de personal."),
