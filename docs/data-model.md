@@ -2,7 +2,7 @@
 
 Referencia del esquema. La verdad ejecutable está en `packages/db/migrations/`; este documento explica **por qué** está así.
 
-Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 133 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 27/27 invariantes verificados.
+Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 133 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 37/37 invariantes verificados.
 
 ---
 
@@ -162,7 +162,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 27: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 37: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -216,7 +216,11 @@ IF v_status = 'posted' THEN RAISE ...; END IF;
 
 No es hipotético. WP-B10 hizo que `journal_entries` exija `accounting.journal:read` para leer. `guard_posted_journal` corría con los permisos de quien edita, y un vendedor sin ese permiso pudo editar y borrar líneas de un asiento contabilizado. Corregido en `0017_guard_posted_journal_fail_closed.sql`.
 
-Además, una función que impone un invariante verifica integridad, no expone datos: va `SECURITY DEFINER` con `SET search_path = app, pg_temp` (`pg_temp` al final, nombres calificados con `app.`). Si una tabla referenciada tiene `tenant_id`, la función verifica que coincida con el de la fila que dispara el trigger: como `SECURITY DEFINER` ve todos los tenants y una FK no evalúa RLS, nadie más lo haría. Convertir las funciones de invariantes restantes queda en WP-B09.
+Además, una función que impone un invariante verifica integridad, no expone datos: va `SECURITY DEFINER` con `SET search_path = app, pg_temp` (`pg_temp` al final, nombres calificados con `app.`). Si una tabla referenciada tiene `tenant_id`, la función verifica que coincida con el de la fila que dispara el trigger: como `SECURITY DEFINER` ve todos los tenants y una FK no evalúa RLS, nadie más lo haría.
+
+Desde WP-B09 (`0018_invariant_triggers_security_definer.sql`) toda función de disparador de `app.*` sigue este patrón. Los invariantes 28–30 lo verifican de forma estructural: toda función de disparador tiene `search_path = app, pg_temp`; toda es `SECURITY DEFINER` salvo `set_updated_at` y `guard_append_only`, que no leen ninguna tabla; y el dueño de toda función `SECURITY DEFINER` elude RLS. Ese último es una dependencia operativa. `SECURITY DEFINER` corre como el rol que ejecutó la migración, y si ese rol no es superusuario ni `BYPASSRLS`, `FORCE ROW LEVEL SECURITY` lo filtra igual que a `joda_api`.
+
+**Ningún trigger depende de que otro haya corrido antes.** Los `BEFORE INSERT` de una tabla se ejecutan en orden alfabético, y un trigger que rechaza primero puede ocultar que el siguiente falla abierto. Pasó con `assert_sealed_lot_not_open`: desde WP-B01 dejaba vender como sellado un frasco abierto cuando no veía el lote, y no se notaba porque `trg_movement_uom` corría antes y rechazaba. Por eso cada función hace su propia búsqueda con su propio `IF NOT FOUND`. Los invariantes 33 y 34 deshabilitan los demás triggers y prueban cada función por separado.
 
 ---
 
