@@ -2,7 +2,7 @@
 
 Referencia del esquema. La verdad ejecutable está en `packages/db/migrations/`; este documento explica **por qué** está así.
 
-Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 133 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 62/62 invariantes verificados.
+Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 133 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 65/65 invariantes verificados.
 
 ---
 
@@ -162,7 +162,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 62: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 65: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -236,6 +236,14 @@ Desde WP-B09 (`0018_invariant_triggers_security_definer.sql`) toda función de d
 | `public.v_catalog_variants` | Variantes publicadas con disponibilidad **booleana**            | Storefront (`joda_readonly`) |
 
 Las vistas públicas son el contrato con el storefront. **El storefront nunca lee tablas base.** Si leyera, el esquema interno se volvería API pública y no se podría refactorizar nada.
+
+**Con qué permisos corre cada vista** (WP-B12, `0021_app_views_security_invoker.sql`):
+
+- `v_trial_balance`, `v_balance_drift` y `v_decant_yield` son `security_invoker`: RLS se evalúa como en una consulta directa. Sin tenant, cero filas. `v_trial_balance` además exige `accounting.journal:read`, y `v_balance_drift` exige `inventory.stock:read`.
+- **`v_balance_drift` vacía no significa "sin deriva"** para quien no ve los lotes. El chequeo de deriva corre con el rol de migraciones/CI, o con tenant y `inventory.stock:read`, y en ese caso verificando que ve lotes.
+- `v_trial_balance` cuenta los asientos `posted` y `reversed`: una reversión compensa a su original (RN-CTB-06). La compensación vale en el total. Por período, cada asiento queda en el suyo: si la reversión cae en un período posterior, el original sigue en su período (un período cerrado no se reescribe) y la reversión impacta en el propio (invariante 65).
+- `public.v_catalog_*` corren como su dueño a propósito, para que `joda_readonly` vea el catálogo publicado.
+- **`v_stock_available` sigue corriendo como su dueño**, pendiente de WP-B12b. `v_catalog_variants` la consume, y una vista `security_invoker` anidada se evalúa con los permisos de quien consulta (`joda_readonly`), no los del dueño de la vista exterior. Volverla invoker deja al storefront sin disponibilidad. Hasta B12b, `joda_api` ve a través de ella el saldo de todos los tenants.
 
 `v_catalog_variants` expone `in_stock` como booleano, nunca la cantidad: el stock es información competitiva.
 
