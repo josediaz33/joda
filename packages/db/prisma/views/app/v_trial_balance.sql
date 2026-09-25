@@ -26,7 +26,11 @@ FROM
       JOIN journal_entries je ON (
         (
           (je.id = jl.entry_id)
-          AND (je.status = 'posted' :: journal_status)
+          AND (
+            je.status = ANY (
+              ARRAY ['posted'::journal_status, 'reversed'::journal_status]
+            )
+          )
         )
       )
     )
