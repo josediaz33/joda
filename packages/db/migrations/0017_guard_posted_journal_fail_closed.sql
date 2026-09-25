@@ -67,6 +67,10 @@ BEGIN
   -- fila nueva (INSERT/UPDATE). En INSERT solo se verifica el tenant: que
   -- un asiento contabilizado no reciba líneas nuevas es WP-B14 (hoy el
   -- smoke crea el asiento en 'posted' y después le agrega las líneas).
+  -- Iteraciones por operación: INSERT → 1 (NEW, sin chequeo de 'posted');
+  -- DELETE → 1 (OLD); UPDATE que no cambia entry_id ni tenant_id → 1,
+  -- porque el UNION deduplica las dos tuplas idénticas; UPDATE que los
+  -- cambia → 2 (OLD y NEW, ambas con chequeo de 'posted').
   FOR v_entry_id, v_line_tenant, v_check_posted IN
     SELECT OLD.entry_id, OLD.tenant_id, true WHERE TG_OP <> 'INSERT'
     UNION
