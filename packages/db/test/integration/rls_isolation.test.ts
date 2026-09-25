@@ -1,5 +1,5 @@
 import { Client } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { startTestDb, type TestDb } from "../setup/db.js";
 import { runSmokeBusinessFlow } from "../../scripts/lib/smoke.mjs";
 
@@ -38,6 +38,25 @@ const REAL_OWNER_ID = "22222222-2222-2222-2222-222222222222";
 // Vendedor del tenant real: el rol del seed sin inventory.stock:read.
 const REAL_SELLER_ID = "22222222-2222-2222-2222-2222222200b1";
 
+// Fixtures de smoke_business_flow.sql: el frasco sellado Layton (lote en
+// unidades, abierto para decantar) y su granel (lote en ml).
+const SEALED_OPEN_LOT_ID = "99999999-0000-0000-0000-000000000001";
+const SEALED_VARIANT_ID = "55555555-0000-0000-0000-000000000001";
+const BULK_LOT_ID = "99999999-0000-0000-0000-000000000002";
+const BULK_VARIANT_ID = "55555555-0000-0000-0000-000000000002";
+const REAL_SALE_ORDER_ID = "cccccccc-0000-0000-0000-000000000001";
+
+// WP-B09: fixtures propios de este archivo. Un borrador del tenant real
+// (para ejercitar el cuadre como vendedor, sembrado en beforeAll) y una
+// variante con su lote en el tenant vecino (para los intentos de cruce de
+// tenant). Estos últimos los crea el owner vecino DENTRO de la transacción
+// de cada test, que se revierte: sembrados en beforeAll, romperían las
+// pruebas de arriba que exigen que el vecino vea cero filas.
+const REAL_DRAFT_ENTRY_ID = "f0000000-0000-0000-0000-0000000000d1";
+const PEER_PRODUCT_ID = "33333333-0000-0000-0000-0000000000a1";
+const PEER_VARIANT_ID = "33333333-0000-0000-0000-0000000000b1";
+const PEER_LOT_ID = "33333333-0000-0000-0000-0000000000c1";
+
 describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/security-spec.md §3.1, ADR-016)", () => {
   let db: TestDb;
   let api: Client;
@@ -45,6 +64,44 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
   // seed). La usa el ataque de INSERT cruzado de WP-B10: la FK account_id
   // tampoco evalúa RLS, así que el tenant vecino puede nombrarla.
   let realAccountId: string;
+  // WP-B09: cuenta de ingresos (contrapartida para cuadrar un borrador) y
+  // un movimiento real del granel (blanco del cruce de capas de costo).
+  let realRevenueAccountId: string;
+  let realMovementId: string;
+
+  // Contexto de staff dentro de la transacción abierta, igual que
+  // withTenantTx: tercer parámetro de set_config en true.
+  async function actAs(userId: string, tenantId: string): Promise<void> {
+    await api.query(
+      `SELECT set_config('app.user_id', $1, true),
+              set_config('app.tenant_id', $2, true),
+              set_config('app.audience', 'staff', true)`,
+      [userId, tenantId],
+    );
+  }
+
+  // Inventario propio del tenant vecino, creado por su owner (todos los
+  // permisos) dentro de la transacción abierta: el atacante no necesita
+  // nada del tenant real para tener un lote y una variante legítimos.
+  async function seedPeerInventory(): Promise<void> {
+    await api.query(
+      `INSERT INTO app.products (id, tenant_id, kind, slug, name, status)
+       VALUES ($1, $2, 'accessory', 'vecino-insumo', 'Insumo del vecino', 'draft')`,
+      [PEER_PRODUCT_ID, PEER_TENANT_ID],
+    );
+    await api.query(
+      `INSERT INTO app.product_variants (id, tenant_id, product_id, sku, variant_type, uom, price_pyg)
+       VALUES ($1, $2, $3, 'VEC-001', 'unit', 'unit', 0)`,
+      [PEER_VARIANT_ID, PEER_TENANT_ID, PEER_PRODUCT_ID],
+    );
+    await api.query(
+      `INSERT INTO app.inventory_lots
+         (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+          fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+       VALUES ($1, $2, $3, 10, 'unit', 0, 'PYG', 1, 10000, 1000)`,
+      [PEER_LOT_ID, PEER_TENANT_ID, PEER_VARIANT_ID],
+    );
+  }
 
   beforeAll(async () => {
     db = await startTestDb();
@@ -80,6 +137,22 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       [REAL_TENANT_ID],
     );
     realAccountId = account.rows[0].id;
+    const revenueAccount = await db.client.query(
+      "SELECT id FROM app.chart_of_accounts WHERE tenant_id = $1 AND code = '4.1.01.001'",
+      [REAL_TENANT_ID],
+    );
+    realRevenueAccountId = revenueAccount.rows[0].id;
+    const movement = await db.client.query(
+      "SELECT min(id) AS id FROM app.inventory_movements WHERE lot_id = $1",
+      [BULK_LOT_ID],
+    );
+    realMovementId = movement.rows[0].id;
+    await db.client.query(`
+      INSERT INTO app.journal_entries (id, tenant_id, period_id, entry_no, entry_date, status, memo)
+      VALUES ('${REAL_DRAFT_ENTRY_ID}', '${REAL_TENANT_ID}',
+              'ffffffff-0000-0000-0000-000000000001', 50, current_date, 'draft',
+              'Borrador de rls_isolation.test.ts');
+    `);
     await db.client.query(`ALTER ROLE joda_api PASSWORD '${JODA_API_TEST_PASSWORD}'`);
 
     api = new Client({
@@ -91,6 +164,14 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
     });
     await api.connect();
   }, 60_000);
+
+  // Un test que falla a mitad de camino no llega a su ROLLBACK y deja la
+  // transacción abortada: sin esto, todos los tests siguientes fallan en
+  // cascada con "current transaction is aborted". Fuera de una transacción,
+  // ROLLBACK solo emite un aviso.
+  afterEach(async () => {
+    await api.query("ROLLBACK");
+  });
 
   afterAll(async () => {
     await api.end();
@@ -240,34 +321,312 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
     expect(rowCount).toBe(0);
   });
 
-  // COMPORTAMIENTO CONOCIDO, NO DESEADO — lo corrige WP-B09. Con B10,
-  // inventory_lots exige inventory.stock:read también para los triggers de
-  // invariantes (0009/0015), que son SECURITY INVOKER y leen el lote con los
-  // permisos de quien inserta. El vendedor no tiene ese permiso: el trigger
-  // ve el lote como inexistente (uom NULL) y rechaza el movimiento. Hoy no
-  // rompe nada (ningún módulo de ventas escribe todavía), pero bloquea
-  // WP-C19. Cuando B09 pase esas funciones a SECURITY DEFINER, este test
-  // TIENE que fallar: invertirlo a "el vendedor sí puede insertar".
-  it("inventory_movements (WP-B10, conocido — lo corrige WP-B09): un staff sin inventory.stock:read no puede insertar un movimiento de su propio tenant", async () => {
-    await api.query("BEGIN");
-    await api.query(
-      `SELECT set_config('app.user_id', $1, true),
-              set_config('app.tenant_id', $2, true),
-              set_config('app.audience', 'staff', true)`,
-      [REAL_SELLER_ID, REAL_TENANT_ID],
-    );
-    await expect(
-      api.query(
+  // WP-B09 (0018_invariant_triggers_security_definer.sql). Hasta B09 este
+  // test afirmaba lo contrario: con B10, inventory_lots exige
+  // inventory.stock:read también dentro de los triggers de invariantes, que
+  // eran SECURITY INVOKER; el vendedor veía el lote como inexistente (uom
+  // NULL) y `assert_movement_uom` rechazaba todo movimiento suyo. Ahora son
+  // SECURITY DEFINER: el vendedor vende, y el saldo se proyecta.
+  describe("triggers de invariantes ejercitados por el vendedor, sin inventory.stock:read (WP-B09; RN-LOT-01, RN-LOT-03, RN-CTB-02, docs/data-model.md §4.2)", () => {
+    it("el vendedor puede registrar una venta de su propio tenant, y el saldo del lote baja", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      const before = await api.query(
+        "SELECT on_hand FROM app.inventory_balances WHERE lot_id = $1",
+        [BULK_LOT_ID],
+      );
+      const insert = await api.query(
         `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
-         VALUES ($1, '99999999-0000-0000-0000-000000000002',
-                 '55555555-0000-0000-0000-000000000002', -5, 'ml', 'sale')`,
-        [REAL_TENANT_ID],
-      ),
-    ).rejects.toMatchObject({
-      code: "23514",
-      message: "Unidad de medida incompatible: el lote está en <NULL> y el movimiento en ml",
+         VALUES ($1, $2, $3, -5, 'ml', 'sale')`,
+        [REAL_TENANT_ID, BULK_LOT_ID, BULK_VARIANT_ID],
+      );
+      const after = await api.query(
+        "SELECT on_hand FROM app.inventory_balances WHERE lot_id = $1",
+        [BULK_LOT_ID],
+      );
+      await api.query("ROLLBACK");
+
+      expect({
+        inserted: insert.rowCount,
+        before: before.rows[0].on_hand,
+        after: after.rows[0].on_hand,
+      }).toEqual({ inserted: 1, before: "114.650", after: "109.650" });
     });
-    await api.query("ROLLBACK");
+
+    it("RN-LOT-01: el vendedor no puede mover unidades sobre un lote en ml — el trigger ve el lote de verdad, no un NULL", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      await expect(
+        api.query(
+          `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+           VALUES ($1, $2, $3, -1, 'unit', 'sale')`,
+          [REAL_TENANT_ID, BULK_LOT_ID, BULK_VARIANT_ID],
+        ),
+      ).rejects.toMatchObject({
+        code: "23514",
+        message: "Unidad de medida incompatible: el lote está en ml y el movimiento en unit",
+      });
+      await api.query("ROLLBACK");
+    });
+
+    // La trampa de B09: `assert_sealed_lot_not_open` fallaba ABIERTO para
+    // el vendedor (lote invisible → NULL → la comparación no daba
+    // verdadero), enmascarado por `trg_movement_uom`, que corre antes y
+    // rechazaba primero. Con los dos SECURITY DEFINER, el que rechaza es
+    // el guard del frasco abierto, con su propio mensaje.
+    it("RN-LOT-03: el vendedor no puede vender como sellado un frasco abierto para decantar", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      await expect(
+        api.query(
+          `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+           VALUES ($1, $2, $3, -1, 'unit', 'sale')`,
+          [REAL_TENANT_ID, SEALED_OPEN_LOT_ID, SEALED_VARIANT_ID],
+        ),
+      ).rejects.toMatchObject({
+        code: "23514",
+        message: `El lote ${SEALED_OPEN_LOT_ID} está abierto para decantar: no puede venderse como sellado`,
+      });
+      await api.query("ROLLBACK");
+    });
+
+    it("el lote que crea el vendedor nace con su fila de saldo en cero (init_lot_balance)", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      await api.query(
+        `INSERT INTO app.inventory_lots
+           (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+            fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+         VALUES ('99999999-0000-0000-0000-0000000000b9', $1, $2, 125, 'ml', 0, 'PYG', 1, 0, 0)`,
+        [REAL_TENANT_ID, BULK_VARIANT_ID],
+      );
+      const { rows } = await api.query(
+        "SELECT tenant_id, on_hand FROM app.inventory_balances WHERE lot_id = '99999999-0000-0000-0000-0000000000b9'",
+      );
+      await api.query("ROLLBACK");
+
+      expect(rows).toEqual([{ tenant_id: REAL_TENANT_ID, on_hand: "0.000" }]);
+    });
+
+    it("las capas de costo que registra el vendedor se verifican contra el movimiento: si cuadran, pasan", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      await api.query(
+        `WITH m AS (
+           INSERT INTO app.inventory_movements
+             (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg)
+           VALUES ($1, $2, $3, -1, 'ml', 'sale', 11972)
+           RETURNING id)
+         INSERT INTO app.movement_cost_allocations
+           (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+         SELECT $1, m.id, $2, 1, 11972, 11972 FROM m`,
+        [REAL_TENANT_ID, BULK_LOT_ID, BULK_VARIANT_ID],
+      );
+      const check = await api.query("SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE");
+      await api.query("ROLLBACK");
+
+      expect(check.command).toBe("SET");
+    });
+
+    it("las capas de costo que registra el vendedor se verifican contra el movimiento: si no cuadran, se rechazan", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      await api.query(
+        `WITH m AS (
+           INSERT INTO app.inventory_movements
+             (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg)
+           VALUES ($1, $2, $3, -1, 'ml', 'sale', 11972)
+           RETURNING id)
+         INSERT INTO app.movement_cost_allocations
+           (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+         SELECT $1, m.id, $2, 1, 5000, 5000 FROM m`,
+        [REAL_TENANT_ID, BULK_LOT_ID, BULK_VARIANT_ID],
+      );
+      await expect(
+        api.query("SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE"),
+      ).rejects.toMatchObject({
+        code: "23514",
+        message: expect.stringMatching(
+          /^Capas de costo del movimiento \d+ no cuadran: asignado=5000 declarado=11972$/,
+        ),
+      });
+      await api.query("ROLLBACK");
+    });
+
+    it("RN-CTB-02: un borrador que el vendedor deja descuadrado se rechaza al verificar el cuadre", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      await api.query(
+        `INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+         VALUES ($1, $2, $3, 1000, 0), ($1, $2, $4, 0, 700)`,
+        [REAL_TENANT_ID, REAL_DRAFT_ENTRY_ID, realAccountId, realRevenueAccountId],
+      );
+      await expect(
+        api.query("SET CONSTRAINTS app.trg_journal_balanced IMMEDIATE"),
+      ).rejects.toMatchObject({
+        code: "23514",
+        message: `Asiento ${REAL_DRAFT_ENTRY_ID} descuadrado: debe=1000 haber=700 (diferencia 300)`,
+      });
+      await api.query("ROLLBACK");
+    });
+
+    it("RN-CTB-02: un borrador que el vendedor deja cuadrado pasa la verificación (control positivo)", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      await api.query(
+        `INSERT INTO app.journal_lines (tenant_id, entry_id, account_id, debit_pyg, credit_pyg)
+         VALUES ($1, $2, $3, 1000, 0), ($1, $2, $4, 0, 1000)`,
+        [REAL_TENANT_ID, REAL_DRAFT_ENTRY_ID, realAccountId, realRevenueAccountId],
+      );
+      const check = await api.query("SET CONSTRAINTS app.trg_journal_balanced IMMEDIATE");
+      await api.query("ROLLBACK");
+
+      expect(check.command).toBe("SET");
+    });
+
+    it("una edición del vendedor actualiza updated_at aunque intente fijarlo (set_updated_at)", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      const { rows } = await api.query(
+        `UPDATE app.products SET updated_at = '2000-01-01T00:00:00Z'
+          WHERE id = '44444444-4444-4444-4444-444444444444'
+         RETURNING updated_at > '2000-01-01T00:00:00Z'::timestamptz AS refreshed`,
+      );
+      await api.query("ROLLBACK");
+
+      expect(rows).toEqual([{ refreshed: true }]);
+    });
+
+    it("el vendedor no puede reescribir una transición de pedido (guard_append_only)", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      await api.query(
+        `INSERT INTO app.sale_order_transitions (tenant_id, sale_order_id, from_status, to_status)
+         VALUES ($1, $2, 'awaiting_payment', 'paid')`,
+        [REAL_TENANT_ID, REAL_SALE_ORDER_ID],
+      );
+      await expect(
+        api.query(
+          "UPDATE app.sale_order_transitions SET reason = 'reescrita' WHERE sale_order_id = $1",
+          [REAL_SALE_ORDER_ID],
+        ),
+      ).rejects.toMatchObject({
+        code: "23001",
+        message: "La tabla app.sale_order_transitions es append-only; operación UPDATE rechazada",
+      });
+      await api.query("ROLLBACK");
+    });
+
+    // docs/data-model.md §4.2: `pg_temp` va último en el search_path de toda
+    // función SECURITY DEFINER. Si fuera primero (el default cuando no se lo
+    // nombra), esta tabla temporal haría creer al trigger que el granel está
+    // en unidades.
+    it("una tabla temporal que sombrea inventory_lots no engaña al trigger de unidad de medida", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      await api.query(
+        `CREATE TEMP TABLE inventory_lots (id uuid, tenant_id uuid, uom text, status text)
+           ON COMMIT DROP`,
+      );
+      await api.query("INSERT INTO pg_temp.inventory_lots VALUES ($1, $2, 'unit', 'available')", [
+        BULK_LOT_ID,
+        REAL_TENANT_ID,
+      ]);
+      await expect(
+        api.query(
+          `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+           VALUES ($1, $2, $3, -1, 'unit', 'sale')`,
+          [REAL_TENANT_ID, BULK_LOT_ID, BULK_VARIANT_ID],
+        ),
+      ).rejects.toMatchObject({
+        code: "23514",
+        message: "Unidad de medida incompatible: el lote está en ml y el movimiento en unit",
+      });
+      await api.query("ROLLBACK");
+    });
+  });
+
+  // WP-B09: con SECURITY DEFINER los triggers ven filas de TODOS los tenants,
+  // y las FK no evalúan RLS. El atacante es el owner del tenant vecino, con
+  // todos los permisos: la única barrera es la verificación de tenant dentro
+  // de cada trigger. Cada rechazo tiene el mismo mensaje que una fila
+  // inexistente — no confirma que la fila ajena exista.
+  describe("triggers de invariantes contra un staff de otro tenant (WP-B09, docs/data-model.md §4.2)", () => {
+    it("un movimiento del tenant vecino no puede tocar un lote del tenant real", async () => {
+      await api.query("BEGIN");
+      await actAs(PEER_OWNER_ID, PEER_TENANT_ID);
+      await expect(
+        api.query(
+          `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+           VALUES ($1, $2, $3, 1, 'ml', 'adjustment')`,
+          [PEER_TENANT_ID, BULK_LOT_ID, BULK_VARIANT_ID],
+        ),
+      ).rejects.toMatchObject({
+        code: "23503",
+        message: `Lote ${BULK_LOT_ID} no encontrado en el tenant del movimiento: no se puede verificar el movimiento`,
+      });
+      await api.query("ROLLBACK");
+    });
+
+    it("un movimiento del tenant vecino no puede declarar una variante del tenant real", async () => {
+      await api.query("BEGIN");
+      await actAs(PEER_OWNER_ID, PEER_TENANT_ID);
+      await seedPeerInventory();
+      await expect(
+        api.query(
+          `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+           VALUES ($1, $2, $3, 1, 'unit', 'adjustment')`,
+          [PEER_TENANT_ID, PEER_LOT_ID, SEALED_VARIANT_ID],
+        ),
+      ).rejects.toMatchObject({
+        code: "23503",
+        message: `Variante ${SEALED_VARIANT_ID} no encontrada en el tenant del movimiento: no se puede verificar el movimiento`,
+      });
+      await api.query("ROLLBACK");
+    });
+
+    it("una capa de costo del tenant vecino no puede colgarse de un movimiento del tenant real", async () => {
+      await api.query("BEGIN");
+      await actAs(PEER_OWNER_ID, PEER_TENANT_ID);
+      await seedPeerInventory();
+      await api.query(
+        `INSERT INTO app.movement_cost_allocations
+           (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+         VALUES ($1, $2, $3, 1, 1000, 1000)`,
+        [PEER_TENANT_ID, realMovementId, PEER_LOT_ID],
+      );
+      await expect(
+        api.query("SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE"),
+      ).rejects.toMatchObject({
+        code: "23503",
+        message: `Movimiento ${realMovementId} no encontrado en el tenant de la capa de costo: no se puede verificar la capa`,
+      });
+      await api.query("ROLLBACK");
+    });
+
+    it("una capa de costo del tenant vecino no puede consumir un lote del tenant real", async () => {
+      await api.query("BEGIN");
+      await actAs(PEER_OWNER_ID, PEER_TENANT_ID);
+      await seedPeerInventory();
+      await api.query(
+        `WITH m AS (
+           INSERT INTO app.inventory_movements
+             (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg)
+           VALUES ($1, $2, $3, 1, 'unit', 'adjustment', 1000)
+           RETURNING id)
+         INSERT INTO app.movement_cost_allocations
+           (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+         SELECT $1, m.id, $4, 1, 1000, 1000 FROM m`,
+        [PEER_TENANT_ID, PEER_LOT_ID, PEER_VARIANT_ID, BULK_LOT_ID],
+      );
+      await expect(
+        api.query("SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE"),
+      ).rejects.toMatchObject({
+        code: "23503",
+        message: `Lote ${BULK_LOT_ID} no encontrado en el tenant de la capa de costo: no se puede verificar la capa`,
+      });
+      await api.query("ROLLBACK");
+    });
   });
 
   // RN-CTB-06 (docs/domain-rules.md): un asiento contabilizado no se
