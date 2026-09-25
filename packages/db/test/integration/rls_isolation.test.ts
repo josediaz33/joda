@@ -997,4 +997,178 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       await api.query("ROLLBACK");
     });
   });
+  // WP-B12 (0021_app_views_security_invoker.sql). Las vistas de app.*
+  // corrían como su dueño, que elude RLS: joda_api leía filas de todos los
+  // tenants sin contexto. Ahora son security_invoker.
+  describe("las vistas de app.* respetan RLS como una consulta directa (WP-B12, docs/data-model.md §5 y §7)", () => {
+    it.each(["v_decant_yield", "v_trial_balance"])(
+      "%s: sin tenant en contexto, joda_api no ve filas",
+      async (view) => {
+        await api.query("BEGIN");
+        const { rowCount } = await api.query(`SELECT * FROM app.${view}`);
+        await api.query("ROLLBACK");
+
+        expect(rowCount).toBe(0);
+      },
+    );
+
+    it.each(["v_decant_yield", "v_trial_balance"])(
+      "%s: el owner de otro tenant, con todos los permisos, no ve las filas del tenant real",
+      async (view) => {
+        await api.query("BEGIN");
+        await actAs(PEER_OWNER_ID, PEER_TENANT_ID);
+        const { rowCount } = await api.query(`SELECT * FROM app.${view}`);
+        await api.query("ROLLBACK");
+
+        expect(rowCount).toBe(0);
+      },
+    );
+
+    it.each(["v_decant_yield", "v_trial_balance"])(
+      "%s: el owner del tenant real sí ve sus filas (control positivo)",
+      async (view) => {
+        await api.query("BEGIN");
+        await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+        const { rowCount } = await api.query(`SELECT * FROM app.${view}`);
+        await api.query("ROLLBACK");
+
+        expect(rowCount).toBeGreaterThan(0);
+      },
+    );
+
+    // COMPORTAMIENTO CONOCIDO, NO DESEADO. Lo corrige WP-B12b, pendiente de
+    // decisión de José. v_stock_available sigue corriendo como su dueño
+    // porque public.v_catalog_variants la consume, y una vista
+    // security_invoker anidada se evalúa con los permisos de quien consulta
+    // (joda_readonly), no del dueño de la vista exterior: el storefront se
+    // quedaba sin disponibilidad. Cuando B12b la corrija, este test TIENE
+    // que fallar: invertirlo a cero filas.
+    it("v_stock_available (conocido, lo corrige WP-B12b): sin tenant en contexto, joda_api ve el saldo de todos los tenants", async () => {
+      await api.query("BEGIN");
+      const { rowCount } = await api.query("SELECT * FROM app.v_stock_available");
+      await api.query("ROLLBACK");
+
+      expect(rowCount).toBeGreaterThan(0);
+    });
+
+    it("v_trial_balance: el vendedor, sin accounting.journal:read, no ve el balance de su propio tenant", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      const { rowCount } = await api.query("SELECT * FROM app.v_trial_balance");
+      await api.query("ROLLBACK");
+
+      expect(rowCount).toBe(0);
+    });
+
+    // Con deriva cero la vista está vacía para todos y no prueba nada. Se
+    // fabrica una deriva real de 1 ml en el granel (superusuario, fuera del
+    // ledger) y se deshace al final.
+    describe("v_balance_drift con una deriva real en el granel", () => {
+      beforeAll(async () => {
+        await db.client.query(
+          "UPDATE app.inventory_balances SET on_hand = on_hand + 1 WHERE lot_id = $1",
+          [BULK_LOT_ID],
+        );
+      });
+
+      afterAll(async () => {
+        await db.client.query(
+          "UPDATE app.inventory_balances SET on_hand = on_hand - 1 WHERE lot_id = $1",
+          [BULK_LOT_ID],
+        );
+      });
+
+      it("sin tenant en contexto, joda_api no la ve", async () => {
+        await api.query("BEGIN");
+        const { rowCount } = await api.query("SELECT * FROM app.v_balance_drift");
+        await api.query("ROLLBACK");
+
+        expect(rowCount).toBe(0);
+      });
+
+      it("el owner de otro tenant no la ve", async () => {
+        await api.query("BEGIN");
+        await actAs(PEER_OWNER_ID, PEER_TENANT_ID);
+        const { rowCount } = await api.query("SELECT * FROM app.v_balance_drift");
+        await api.query("ROLLBACK");
+
+        expect(rowCount).toBe(0);
+      });
+
+      // Documenta el fallo abierto del monitoreo (0021): para quien no ve
+      // los lotes, la vista da cero filas aunque haya deriva. Un chequeo
+      // de deriva tiene que correr con quien lo ve todo.
+      it("el vendedor, sin inventory.stock:read, no la ve: cero filas no significa cero deriva", async () => {
+        await api.query("BEGIN");
+        await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+        const { rowCount } = await api.query("SELECT * FROM app.v_balance_drift");
+        await api.query("ROLLBACK");
+
+        expect(rowCount).toBe(0);
+      });
+
+      it("el owner del tenant real ve la deriva de su lote", async () => {
+        await api.query("BEGIN");
+        await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+        const { rows } = await api.query("SELECT lot_id, drift FROM app.v_balance_drift");
+        await api.query("ROLLBACK");
+
+        expect(rows).toEqual([{ lot_id: BULK_LOT_ID, drift: "1.000" }]);
+      });
+    });
+
+    // public.v_catalog_* es la excepción deliberada: corre como su dueño.
+    // v_catalog_variants consume app.v_stock_available. Este test es el que
+    // descubrió, al escribir B12, que volver invoker a v_stock_available
+    // deja al storefront sin disponibilidad (permission denied como
+    // joda_readonly): cuida que WP-B12b no lo rompa. Se le da stock al
+    // sellado (un lote nuevo con su recepción) para que in_stock tenga algo
+    // que mostrar.
+    describe("el storefront (joda_readonly) sigue viendo la disponibilidad del catálogo", () => {
+      let storefront: Client;
+
+      beforeAll(async () => {
+        await db.client.query(`
+          INSERT INTO app.inventory_lots
+            (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+             fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+          VALUES ('99999999-0000-0000-0000-0000000000d2', '${REAL_TENANT_ID}',
+                  '${SEALED_VARIANT_ID}', 2, 'unit', 0, 'PYG', 1, 0, 0);
+          INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+          VALUES ('${REAL_TENANT_ID}', '99999999-0000-0000-0000-0000000000d2',
+                  '${SEALED_VARIANT_ID}', 2, 'unit', 'purchase_receipt');
+          ALTER ROLE joda_readonly PASSWORD '${JODA_API_TEST_PASSWORD}';
+        `);
+        storefront = new Client({
+          host: db.container.getHost(),
+          port: db.container.getPort(),
+          database: db.container.getDatabase(),
+          user: "joda_readonly",
+          password: JODA_API_TEST_PASSWORD,
+        });
+        await storefront.connect();
+      });
+
+      afterAll(async () => {
+        await storefront.end();
+      });
+
+      it("v_catalog_variants muestra el sellado como disponible, sin tenant en contexto", async () => {
+        const { rows } = await storefront.query(
+          "SELECT sku, in_stock FROM public.v_catalog_variants WHERE id = $1",
+          [SEALED_VARIANT_ID],
+        );
+
+        expect(rows).toEqual([{ sku: "LAY-125-SEALED", in_stock: true }]);
+      });
+
+      it("joda_readonly no puede leer app.v_stock_available directamente", async () => {
+        await expect(storefront.query("SELECT * FROM app.v_stock_available")).rejects.toMatchObject(
+          {
+            code: "42501",
+          },
+        );
+      });
+    });
+  });
 });

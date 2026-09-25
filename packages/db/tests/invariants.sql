@@ -1141,6 +1141,59 @@ SELECT pg_temp.expect_fail_like(62, 'Borrar un borrador: primero las líneas, de
   $$,
   'aceptado');
 
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-B12 (0021_app_views_security_invoker.sql): las vistas de app.* se
+-- evalúan con los permisos de quien consulta; las de public no.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 63 ─ Toda vista de app.* es security_invoker, salvo v_stock_available
+-- (pendiente de decisión, WP-B12b: la consume public.v_catalog_variants), y
+-- ninguna de public lo es.
+-- Una vista de app.* sin security_invoker corre como su dueño, que elude
+-- RLS, y le muestra a `joda_api` filas de todos los tenants (demostrado
+-- con v_trial_balance en la revisión de B10). Las de public son la
+-- excepción deliberada: corren como su dueño para que `joda_readonly` vea
+-- el catálogo publicado. "Arreglarlas" dejaría al storefront sin catálogo.
+SELECT pg_temp.expect_true(63,
+  'Toda vista de app.* es security_invoker (salvo v_stock_available, WP-B12b); ninguna de public.v_catalog_* lo es',
+  NOT EXISTS (
+    SELECT 1
+      FROM pg_class c
+      JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE c.relkind = 'v'
+       AND (   (n.nspname = 'app' AND c.relname <> 'v_stock_available'
+                AND NOT ('security_invoker=true' = ANY (COALESCE(c.reloptions, '{}'))))
+            OR (n.nspname = 'public' AND c.relname LIKE 'v\_catalog\_%'
+                AND 'security_invoker=true' = ANY (COALESCE(c.reloptions, '{}'))))
+  ));
+
+-- 64 ─ Revertir un asiento deja el balance como estaba (RN-CTB-06). Hasta
+-- 0021, v_trial_balance contaba solo 'posted': el original, ya 'reversed',
+-- desaparecía, la reversión quedaba sola, y el saldo de la cuenta cambiaba
+-- en el importe invertido en vez de volver al de antes.
+SELECT pg_temp.expect_fail_like(64, 'Revertir un asiento deja el balance como estaba',
+  $$DO $x$
+    DECLARE v_before numeric; v_after numeric;
+    BEGIN
+      SELECT COALESCE(sum(balance_pyg), 0) INTO v_before
+        FROM app.v_trial_balance
+       WHERE tenant_id = '11111111-1111-1111-1111-111111111111' AND account_code = '1.1.01.001';
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000640', 640);
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000641', 641,
+                                      'f0000000-0000-0000-0000-000000000640');
+      UPDATE app.journal_entries SET status = 'reversed'
+       WHERE id = 'f0000000-0000-0000-0000-000000000640';
+      SELECT COALESCE(sum(balance_pyg), 0) INTO v_after
+        FROM app.v_trial_balance
+       WHERE tenant_id = '11111111-1111-1111-1111-111111111111' AND account_code = '1.1.01.001';
+      IF v_after = v_before THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'balance cambió: antes=% después=%', v_before, v_after;
+    END $x$
+  $$,
+  'aceptado');
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'
