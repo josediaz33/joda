@@ -2,7 +2,7 @@
 
 Referencia del esquema. La verdad ejecutable está en `packages/db/migrations/`; este documento explica **por qué** está así.
 
-Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 133 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 46/46 invariantes verificados.
+Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 133 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 62/62 invariantes verificados.
 
 ---
 
@@ -162,7 +162,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 46: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 62: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -174,7 +174,7 @@ Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo 
 | 6   | Un frasco abierto no se vende sellado             | Trigger `BEFORE INSERT`                                                |
 | 7   | Todo asiento cuadra                               | Constraint trigger **diferida**                                        |
 | 8   | Una línea contable es débito o crédito, no ambos  | `CHECK`                                                                |
-| 9   | Un asiento contabilizado no se modifica           | Trigger que consulta el estado del asiento                             |
+| 9   | Un asiento contabilizado no se modifica           | Triggers sobre líneas y asiento (0020): solo `draft` cambia            |
 | 10  | Una notificación de pago no se procesa dos veces  | `UNIQUE (provider, external_event_id)`                                 |
 | 11  | Un producto no tiene detalles de otra vertical    | FK compuesta `(product_id, kind)`                                      |
 | 12  | Una seña no se sobre-aplica                       | `CHECK (applied + refunded <= amount)`                                 |
