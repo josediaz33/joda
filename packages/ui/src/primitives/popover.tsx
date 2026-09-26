@@ -12,12 +12,22 @@ function PopoverTrigger({ ...props }: React.ComponentProps<typeof PopoverPrimiti
   return <PopoverPrimitive.Trigger data-slot="popover-trigger" {...props} />;
 }
 
+type PopoverContentProps = Omit<
+  React.ComponentProps<typeof PopoverPrimitive.Content>,
+  "aria-label" | "aria-labelledby"
+> & { "aria-label": string };
+
 function PopoverContent({
+  "aria-label": ariaLabel,
   className,
   align = "center",
   sideOffset = 4,
   ...props
-}: React.ComponentProps<typeof PopoverPrimitive.Content>) {
+}: PopoverContentProps) {
+  if (!ariaLabel?.trim()) {
+    throw new Error("PopoverContent requiere un aria-label no vacío");
+  }
+
   return (
     <PopoverPrimitive.Portal>
       <PopoverPrimitive.Content
@@ -29,6 +39,7 @@ function PopoverContent({
           className,
         )}
         {...props}
+        aria-label={ariaLabel.trim()}
       />
     </PopoverPrimitive.Portal>
   );
@@ -49,7 +60,7 @@ function PopoverHeader({ className, ...props }: React.ComponentProps<"div">) {
 }
 
 function PopoverTitle({ className, ...props }: React.ComponentProps<"h2">) {
-  return <div data-slot="popover-title" className={cn("font-medium", className)} {...props} />;
+  return <h2 data-slot="popover-title" className={cn("font-medium", className)} {...props} />;
 }
 
 function PopoverDescription({ className, ...props }: React.ComponentProps<"p">) {

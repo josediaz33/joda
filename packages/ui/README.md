@@ -22,6 +22,8 @@ El CLI no puede instalar dependencias con `npm` en este monorepo porque usa
 `catalog:`. Si propone una dependencia nueva, agregala primero con
 `pnpm --filter @joda/ui add -E <dependencia>` y después repetí el comando.
 
-`tokens.test.mjs` permanece en `node:test`: solo verifica el CSS y no necesita
-dependencias de React ni un runner adicional. Se evaluó el paso a Vitest en
-WP-E02 y no aportaría cobertura nueva.
+`PopoverContent` requiere un `aria-label` no vacío para nombrar el diálogo que
+monta Radix. `PopoverTitle` renderiza un encabezado `h2` para el título visible.
+
+`tokens.test.mjs` permanece en `node:test` porque solo verifica CSS. La prueba
+de comportamiento de `Popover` usa Vitest y un DOM simulado.
