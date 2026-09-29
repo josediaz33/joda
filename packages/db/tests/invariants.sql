@@ -1458,6 +1458,46 @@ SELECT pg_temp.expect_true(74,
   AND NOT has_table_privilege('joda_api', 'app.inventory_balances', 'UPDATE')
   AND NOT has_table_privilege('joda_api', 'app.inventory_balances', 'DELETE'));
 
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-B14b (0025_single_reversal.sql): un asiento se revierte una sola vez.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 75 ─ Una segunda reversión contabilizada del mismo asiento se rechaza.
+-- Hasta 0025 pasaba, y v_trial_balance sobre-revertía el saldo (H2 de la
+-- revisión de B12).
+SELECT pg_temp.expect_fail_like(75, 'Segunda reversión contabilizada del mismo asiento',
+  $$DO $x$
+    BEGIN
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000750', 750);
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000751', 751,
+                                      'f0000000-0000-0000-0000-000000000750');
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000752', 752,
+                                      'f0000000-0000-0000-0000-000000000750');
+    END $x$
+  $$,
+  '%journal_entries_single_reversal%');
+
+-- 76 ─ Control positivo: dos BORRADORES de reversión del mismo asiento
+-- conviven (no impactan el balance), el primero se contabiliza, y el
+-- original pasa a reversed.
+SELECT pg_temp.expect_fail_like(76, 'Dos borradores de reversión conviven; uno se contabiliza',
+  $$DO $x$
+    BEGIN
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000760', 760);
+      INSERT INTO app.journal_entries
+        (id, tenant_id, period_id, entry_no, entry_date, status, memo, reverses_id)
+      VALUES ('f0000000-0000-0000-0000-000000000761', '11111111-1111-1111-1111-111111111111',
+              'ffffffff-0000-0000-0000-000000000001', 761, current_date, 'draft',
+              'Borrador de reversión que sobra', 'f0000000-0000-0000-0000-000000000760');
+      PERFORM pg_temp.post_test_entry('f0000000-0000-0000-0000-000000000762', 762,
+                                      'f0000000-0000-0000-0000-000000000760');
+      UPDATE app.journal_entries SET status = 'reversed'
+       WHERE id = 'f0000000-0000-0000-0000-000000000760';
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'

@@ -515,6 +515,7 @@ Impuesto por la base desde WP-B14 (`0020_journal_immutability.sql`), con el mism
 
 - El asiento **nace en `draft`**, recibe sus líneas y pasa a `posted` en la misma transacción. El cuadre se valida al confirmar (RN-CTB-02).
 - Transiciones: `draft → draft` (edición del borrador), `draft → posted` y `posted → reversed`. Esta última solo vale si ya existe un asiento de reversión **contabilizado**, del mismo tenant, que lo referencia por `reverses_id`, y no cambia ninguna otra columna. `reversed` es terminal.
+- **Un asiento se revierte una sola vez.** Índice único parcial `journal_entries_single_reversal` sobre `reverses_id` para los asientos que no son borrador (WP-B14b). Dos borradores de reversión pueden convivir; el segundo falla al contabilizarse. Sin esto, dos reversiones contabilizadas sobre-revertían el saldo en `v_trial_balance`.
 - `posted` y `reversed` son inmutables: ni el asiento ni sus líneas admiten INSERT, UPDATE o DELETE.
 - Un borrador con líneas se borra en dos pasos, **primero las líneas y después el asiento**. Es deliberado: el guard de líneas falla cerrado, y en un borrado en cascada no puede distinguir una línea huérfana de una colgada de un asiento de otro tenant.
 
