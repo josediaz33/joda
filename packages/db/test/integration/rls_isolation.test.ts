@@ -444,10 +444,14 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       await api.query("ROLLBACK");
     });
 
-    // Hallazgo de la revisión cruzada de B09, reproducido tal cual: un lote
-    // de tres frascos sellados con uno abierto. El trigger decidía con la
+    // Hallazgo de la revisión cruzada de B09: el trigger decidía con la
     // variante que declara el movimiento; declarando la de granel, el
-    // vendedor vendía uno de los dos sellados que quedan.
+    // vendedor vendía un sellado de un lote abierto con saldo. Desde WP-C11
+    // un sellado abierto es de una sola unidad, así que el escenario original
+    // (tres frascos, uno abierto) ya no se puede armar; el lote de este test
+    // es de una unidad y conserva su saldo porque el UPDATE del estado se
+    // hace sin la salida que haría la apertura. El guard tiene que rechazar
+    // igual, por sí solo.
     it("RN-LOT-03: el vendedor no puede vender un sellado de un lote abierto declarando la variante de granel", async () => {
       await api.query("BEGIN");
       await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
@@ -455,13 +459,12 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
         `INSERT INTO app.inventory_lots
            (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
             fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
-         VALUES ('99999999-0000-0000-0000-0000000000b3', $1, $2, 3, 'unit', 0, 'PYG', 1, 0, 0)`,
+         VALUES ('99999999-0000-0000-0000-0000000000b3', $1, $2, 1, 'unit', 0, 'PYG', 1, 0, 0)`,
         [REAL_TENANT_ID, SEALED_VARIANT_ID],
       );
       await api.query(
         `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
-         VALUES ($1, '99999999-0000-0000-0000-0000000000b3', $2, 3, 'unit', 'purchase_receipt'),
-                ($1, '99999999-0000-0000-0000-0000000000b3', $2, -1, 'unit', 'transfer_out')`,
+         VALUES ($1, '99999999-0000-0000-0000-0000000000b3', $2, 1, 'unit', 'purchase_receipt')`,
         [REAL_TENANT_ID, SEALED_VARIANT_ID],
       );
       await api.query(
@@ -484,28 +487,30 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
 
     // WP-B08c (0023): RN-LOT-03 extendida. Un lote sellado en
     // open_for_decant es terminal y no admite NINGÚN movimiento: hasta 0023
-    // un waste o un adjustment sacaban frascos sellados de un lote de tres
-    // con uno abierto (pregunta de la revisión de B09, decidida por José).
+    // un waste o un adjustment sacaban frascos sellados de un lote abierto
+    // con saldo (pregunta de la revisión de B09, decidida por José). Desde
+    // WP-C11 un sellado abierto es de una sola unidad: este lote lo es, y
+    // conserva su saldo porque el estado se cambia sin la salida de la
+    // unidad que haría la apertura.
     describe("RN-LOT-03 extendida (WP-B08c): un lote sellado abierto es terminal", () => {
-      const THREE_BOTTLE_LOT_ID = "99999999-0000-0000-0000-0000000000b4";
+      const OPEN_SEALED_LOT_WITH_BALANCE_ID = "99999999-0000-0000-0000-0000000000b4";
 
-      async function openThreeBottleLot(): Promise<void> {
+      async function openSealedLotWithBalance(): Promise<void> {
         await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
         await api.query(
           `INSERT INTO app.inventory_lots
              (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
               fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
-           VALUES ($1, $2, $3, 3, 'unit', 0, 'PYG', 1, 0, 0)`,
-          [THREE_BOTTLE_LOT_ID, REAL_TENANT_ID, SEALED_VARIANT_ID],
+           VALUES ($1, $2, $3, 1, 'unit', 0, 'PYG', 1, 0, 0)`,
+          [OPEN_SEALED_LOT_WITH_BALANCE_ID, REAL_TENANT_ID, SEALED_VARIANT_ID],
         );
         await api.query(
           `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
-           VALUES ($2, $1, $3, 3, 'unit', 'purchase_receipt'),
-                  ($2, $1, $3, -1, 'unit', 'transfer_out')`,
-          [THREE_BOTTLE_LOT_ID, REAL_TENANT_ID, SEALED_VARIANT_ID],
+           VALUES ($2, $1, $3, 1, 'unit', 'purchase_receipt')`,
+          [OPEN_SEALED_LOT_WITH_BALANCE_ID, REAL_TENANT_ID, SEALED_VARIANT_ID],
         );
         await api.query("UPDATE app.inventory_lots SET status = 'open_for_decant' WHERE id = $1", [
-          THREE_BOTTLE_LOT_ID,
+          OPEN_SEALED_LOT_WITH_BALANCE_ID,
         ]);
       }
 
@@ -517,17 +522,23 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
         "el vendedor no puede registrar %s %d sobre un sellado de un lote abierto",
         async (movementType, qty) => {
           await api.query("BEGIN");
-          await openThreeBottleLot();
+          await openSealedLotWithBalance();
           await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
           await expect(
             api.query(
               `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
                VALUES ($1, $2, $3, $4, 'unit', $5)`,
-              [REAL_TENANT_ID, THREE_BOTTLE_LOT_ID, SEALED_VARIANT_ID, qty, movementType],
+              [
+                REAL_TENANT_ID,
+                OPEN_SEALED_LOT_WITH_BALANCE_ID,
+                SEALED_VARIANT_ID,
+                qty,
+                movementType,
+              ],
             ),
           ).rejects.toMatchObject({
             code: "23514",
-            message: `El lote ${THREE_BOTTLE_LOT_ID} está abierto para decantar: un sellado abierto no admite movimientos`,
+            message: `El lote ${OPEN_SEALED_LOT_WITH_BALANCE_ID} está abierto para decantar: un sellado abierto no admite movimientos`,
           });
           await api.query("ROLLBACK");
         },
@@ -536,14 +547,14 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       // Sin esto, lo de arriba se elude volviendo el lote a available.
       it("el owner, con todos los permisos, no puede devolver a available un lote sellado abierto", async () => {
         await api.query("BEGIN");
-        await openThreeBottleLot();
+        await openSealedLotWithBalance();
         await expect(
           api.query("UPDATE app.inventory_lots SET status = 'available' WHERE id = $1", [
-            THREE_BOTTLE_LOT_ID,
+            OPEN_SEALED_LOT_WITH_BALANCE_ID,
           ]),
         ).rejects.toMatchObject({
           code: "23514",
-          message: `El lote ${THREE_BOTTLE_LOT_ID} es un sellado abierto para decantar: su estado es terminal`,
+          message: `El lote ${OPEN_SEALED_LOT_WITH_BALANCE_ID} es un sellado abierto para decantar: su estado es terminal`,
         });
         await api.query("ROLLBACK");
       });
@@ -554,11 +565,11 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       // sí lo ve es el trigger, probado arriba con el owner.
       it("el vendedor, sin inventory.stock:read, no alcanza el lote: su UPDATE afecta cero filas", async () => {
         await api.query("BEGIN");
-        await openThreeBottleLot();
+        await openSealedLotWithBalance();
         await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
         const { rowCount } = await api.query(
           "UPDATE app.inventory_lots SET status = 'available' WHERE id = $1",
-          [THREE_BOTTLE_LOT_ID],
+          [OPEN_SEALED_LOT_WITH_BALANCE_ID],
         );
         await api.query("ROLLBACK");
 
@@ -576,6 +587,102 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
         await api.query("ROLLBACK");
 
         expect(rowCount).toBe(1);
+      });
+    });
+
+    // WP-C11 (0028): un sellado abierto es de una sola unidad. Marcar
+    // abierto un lote de varios dejaba los otros frascos cerrados sin poder
+    // venderse (RN-LOT-03, caso borde 21) y el granel heredaba el costo del
+    // lote entero. La apertura separa primero la unidad; la base impide
+    // saltearse eso, con cualquier credencial de la API.
+    describe("RN-LOT-02 (WP-C11): un sellado abierto es de una sola unidad", () => {
+      const THREE_UNIT_LOT_ID = "99999999-0000-0000-0000-0000000000c3";
+      const SINGLE_UNIT_MESSAGE = (lotId: string) =>
+        new RegExp(`^El lote ${lotId} es un sellado abierto de 3(\\.000)? unidades`);
+
+      async function insertThreeUnitLot(status: "available" | "open_for_decant"): Promise<void> {
+        await api.query(
+          `INSERT INTO app.inventory_lots
+             (id, tenant_id, variant_id, status, qty_initial, uom, unit_cost_minor, currency,
+              fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+           VALUES ($1, $2, $3, $4, 3, 'unit', 0, 'PYG', 1, 0, 0)`,
+          [THREE_UNIT_LOT_ID, REAL_TENANT_ID, SEALED_VARIANT_ID, status],
+        );
+      }
+
+      it("el owner no puede marcar abierto un lote sellado de tres unidades", async () => {
+        await api.query("BEGIN");
+        await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+        await insertThreeUnitLot("available");
+        await expect(
+          api.query("UPDATE app.inventory_lots SET status = 'open_for_decant' WHERE id = $1", [
+            THREE_UNIT_LOT_ID,
+          ]),
+        ).rejects.toMatchObject({
+          code: "23514",
+          message: expect.stringMatching(SINGLE_UNIT_MESSAGE(THREE_UNIT_LOT_ID)),
+        });
+        await api.query("ROLLBACK");
+      });
+
+      it("el vendedor no puede crear un lote sellado de tres unidades ya abierto", async () => {
+        await api.query("BEGIN");
+        await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+        await expect(insertThreeUnitLot("open_for_decant")).rejects.toMatchObject({
+          code: "23514",
+          message: expect.stringMatching(SINGLE_UNIT_MESSAGE(THREE_UNIT_LOT_ID)),
+        });
+        await api.query("ROLLBACK");
+      });
+
+      it("el owner no puede agrandar a tres unidades un sellado ya abierto", async () => {
+        await api.query("BEGIN");
+        await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+        await expect(
+          api.query("UPDATE app.inventory_lots SET qty_initial = 3 WHERE id = $1", [
+            SEALED_OPEN_LOT_ID,
+          ]),
+        ).rejects.toMatchObject({
+          code: "23514",
+          message: expect.stringMatching(SINGLE_UNIT_MESSAGE(SEALED_OPEN_LOT_ID)),
+        });
+        await api.query("ROLLBACK");
+      });
+
+      it("un sellado de una unidad se abre (control positivo)", async () => {
+        await api.query("BEGIN");
+        await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+        await api.query(
+          `INSERT INTO app.inventory_lots
+             (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+              fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+           VALUES ($1, $2, $3, 1, 'unit', 0, 'PYG', 1, 0, 0)`,
+          [THREE_UNIT_LOT_ID, REAL_TENANT_ID, SEALED_VARIANT_ID],
+        );
+        const { rowCount } = await api.query(
+          "UPDATE app.inventory_lots SET status = 'open_for_decant' WHERE id = $1",
+          [THREE_UNIT_LOT_ID],
+        );
+        await api.query("ROLLBACK");
+
+        expect(rowCount).toBe(1);
+      });
+
+      it("el owner no puede crear una segunda variante de granel para el mismo producto", async () => {
+        await api.query("BEGIN");
+        await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+        await expect(
+          api.query(
+            `INSERT INTO app.product_variants (tenant_id, product_id, sku, variant_type, uom, price_pyg)
+             SELECT tenant_id, product_id, 'LAY-BULK-2', 'bulk', 'ml', 0
+               FROM app.product_variants WHERE id = $1`,
+            [BULK_VARIANT_ID],
+          ),
+        ).rejects.toMatchObject({
+          code: "23505",
+          constraint: "product_variants_one_bulk_per_product",
+        });
+        await api.query("ROLLBACK");
       });
     });
 

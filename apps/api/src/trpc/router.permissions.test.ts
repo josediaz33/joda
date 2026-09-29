@@ -57,7 +57,7 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
   // riesgo que docs/backlog.md señaló para `pg_temp.expect_fail()` en
   // packages/db/tests/invariants.sql ("ningún error no prueba que un
   // invariante se cumple").
-  it("de verdad recorrió los treinta y cuatro procedimientos montados hoy (example.ping.* + auth.session.* + auth.mfa.* + catalog.*, WP-C08 + inventory.*, WP-C10)", () => {
+  it("de verdad recorrió los treinta y cinco procedimientos montados hoy (example.ping.* + auth.session.* + auth.mfa.* + catalog.*, WP-C08 + inventory.*, WP-C10 y WP-C11)", () => {
     const procedures = flattenProcedures(createAppRouter(null));
 
     expect(Object.keys(procedures).sort()).toEqual([
@@ -94,8 +94,22 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
       "example.ping.requiresPermission",
       "inventory.adjustment.create",
       "inventory.lot.history",
+      "inventory.lot.open",
       "inventory.stock.available",
     ]);
+  });
+
+  // WP-C11: el permiso de la apertura de frasco es el que va a usar WP-B11
+  // para la política de escritura de `inventory_lots` (docs/backlog.md,
+  // fila de WP-B11: "apertura de frasco → el mismo permiso que use el
+  // endpoint de WP-C11"). Si alguien lo cambia acá sin cambiar B11, la
+  // política de la base y el endpoint dejan de coincidir.
+  it("inventory.lot.open exige inventory.decant:execute (RN-LOT-02, mapeo de WP-B11)", () => {
+    const procedures = flattenProcedures(createAppRouter(null));
+
+    expect(procedures["inventory.lot.open"]?._def.meta?.permission).toBe(
+      "inventory.decant:execute",
+    );
   });
 });
 

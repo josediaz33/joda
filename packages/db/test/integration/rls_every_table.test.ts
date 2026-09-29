@@ -104,6 +104,7 @@ const TRIGGER_COVERAGE: Record<string, string> = {
   "inventory_lots.trg_init_lot_balance": "rls_isolation.test.ts (WP-B09)",
   "inventory_lots.trg_lots_updated": "este archivo: set_updated_at",
   "inventory_lots.trg_sealed_lot_terminal": "rls_isolation.test.ts (WP-B08c)",
+  "inventory_lots.trg_sealed_open_single_unit": "rls_isolation.test.ts (WP-C11)",
   "inventory_movements.trg_movement_uom": "rls_isolation.test.ts (WP-B09)",
   "inventory_movements.trg_movements_immutable": "este archivo: REVOKE de 0010 frena antes (42501)",
   "inventory_movements.trg_project_balance": "rls_isolation.test.ts (WP-B09)",

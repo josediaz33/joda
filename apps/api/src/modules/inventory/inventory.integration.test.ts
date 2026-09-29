@@ -450,4 +450,350 @@ describe("WP-C10 · módulo inventario (RF-INV-03…05)", () => {
 
     expect(response.statusCode).toBe(404);
   });
+
+  // -------------------------------------------------------------------
+  // WP-C11 — apertura de frasco (RF-INV-08, RN-LOT-02/03, ADR-009).
+  // -------------------------------------------------------------------
+  // Un producto con su variante sellada Y su granel — la apertura necesita
+  // las dos en el MISMO producto (índice único parcial de 0028). El volumen
+  // nominal es 100 ml (`createSealedVariant` de arriba usa el mismo).
+  let productCounter = 0;
+  async function createSealedAndBulkVariants(): Promise<{
+    sealedVariantId: string;
+    bulkVariantId: string;
+    productId: string;
+  }> {
+    const suffix = `${Date.now()}-${++productCounter}`;
+    const category = await mutateOk<{ id: string }>("catalog.category.create", {
+      slug: `apertura-${suffix}`,
+      name: "Apertura",
+    });
+    const product = await mutateOk<{ id: string }>("catalog.product.create", {
+      kind: "perfume",
+      slug: `layton-apertura-${suffix}`,
+      name: "Layton",
+      categoryIds: [category.id],
+      primaryCategoryId: category.id,
+      perfumeDetails: {
+        concentration: "edp",
+        nominalVolumeMl: 100,
+        olfactoryFamily: "amaderado",
+        notesTop: [],
+        notesHeart: [],
+        notesBase: [],
+        isDecantable: true,
+        wasteFactor: 0.02,
+        unusableResidueMl: 2,
+        evaporationMlYear: 0.5,
+      },
+    });
+    const sealed = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: `SKU-APERTURA-SEALED-${suffix}`,
+      variantType: "sealed",
+      uom: "unit",
+      sizeMl: 100,
+      pricePyg: "500000",
+    });
+    const bulk = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: `SKU-APERTURA-BULK-${suffix}`,
+      variantType: "bulk",
+      uom: "ml",
+      sizeMl: null,
+      pricePyg: "0",
+    });
+    return { sealedVariantId: sealed.id, bulkVariantId: bulk.id, productId: product.id };
+  }
+
+  /** Una venta de `qty` frascos del lote, escrita como superusuario: la API de ventas (WP-C19) todavía no existe. */
+  async function sellSealed(lotId: string, variantId: string, qty: number, unitCostPyg: number) {
+    await testDb.superuserClient.query(
+      `INSERT INTO app.inventory_movements
+         (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg, created_by)
+       VALUES ($1, $2, $3, $4, 'unit', 'sale', $5, $6)`,
+      [TENANT_ID, lotId, variantId, -qty, qty * unitCostPyg, STAFF_OWNER_ID],
+    );
+  }
+
+  type OpenedLot = import("@joda/contracts").OpenLotOutput;
+
+  it("RN-LOT-02 · un lote de una unidad se abre directo: el sellado queda abierto y nace el granel con el costo de un frasco, sin separar nada", async () => {
+    const { sealedVariantId, bulkVariantId } = await createSealedAndBulkVariants();
+    const lotId = await seedSealedLot(sealedVariantId, { qtyInitial: 1, unitCostPyg: 1_496_500 });
+
+    const opened = await mutateOk<OpenedLot>("inventory.lot.open", { lotId });
+
+    expect(opened.sourceLot).toBeNull();
+    expect(opened.openedSealedLot).toMatchObject({
+      id: lotId,
+      status: "open_for_decant",
+      qtyInitial: 1,
+      onHand: 0,
+    });
+    expect(opened.bulkLot).toMatchObject({
+      variantId: bulkVariantId,
+      parentLotId: lotId,
+      status: "open_for_decant",
+      uom: "ml",
+      qtyInitial: 100,
+      onHand: 100,
+      landedCostPyg: "1496500",
+      unitLandedCostPyg: "14965",
+    });
+    expect(opened.movements.map((m) => [m.movementType, m.qty, m.referenceType])).toEqual([
+      ["transfer_out", -1, "lot_opening"],
+      ["transfer_in", 100, "lot_opening"],
+    ]);
+  });
+
+  it("RN-LOT-02, caso borde 21 · un lote de tres frascos separa la unidad que se abre: el original sigue available con DOS frascos vendibles como sellados", async () => {
+    const { sealedVariantId, bulkVariantId } = await createSealedAndBulkVariants();
+    const lotId = await seedSealedLot(sealedVariantId, { qtyInitial: 3, unitCostPyg: 1_496_500 });
+
+    const opened = await mutateOk<OpenedLot>("inventory.lot.open", { lotId });
+
+    expect(opened.sourceLot).toMatchObject({
+      id: lotId,
+      status: "available",
+      qtyInitial: 3,
+      onHand: 2,
+    });
+    expect(opened.openedSealedLot).toMatchObject({
+      status: "open_for_decant",
+      qtyInitial: 1,
+      onHand: 0,
+      parentLotId: lotId,
+      variantId: sealedVariantId,
+      landedCostPyg: "1496500",
+    });
+    expect(opened.bulkLot).toMatchObject({
+      variantId: bulkVariantId,
+      parentLotId: opened.openedSealedLot.id,
+      qtyInitial: 100,
+      landedCostPyg: "1496500",
+      unitLandedCostPyg: "14965",
+    });
+    expect(opened.movements.map((m) => [m.movementType, m.qty, m.referenceType])).toEqual([
+      ["transfer_out", -1, "lot_separation"],
+      ["transfer_in", 1, "lot_separation"],
+      ["transfer_out", -1, "lot_opening"],
+      ["transfer_in", 100, "lot_opening"],
+    ]);
+
+    // Los dos frascos que quedan se siguen vendiendo como sellados: la base
+    // no rechaza la venta (RN-LOT-03 solo alcanza al lote abierto).
+    await expect(sellSealed(lotId, sealedVariantId, 2, 1_496_500)).resolves.toBeUndefined();
+  });
+
+  it("RN-LOT-02 · lote de 3, se venden 2, se abre el tercero: el granel cuesta lo de UN frasco (14.965 Gs./ml), no el del lote entero", async () => {
+    const { sealedVariantId } = await createSealedAndBulkVariants();
+    const lotId = await seedSealedLot(sealedVariantId, { qtyInitial: 3, unitCostPyg: 1_496_500 });
+    await sellSealed(lotId, sealedVariantId, 2, 1_496_500);
+
+    const opened = await mutateOk<OpenedLot>("inventory.lot.open", { lotId });
+
+    // Sin la separación, el granel habría heredado los 4.489.500 del lote de
+    // tres y costado 44.895 Gs./ml: el triple, sin que nada fallara.
+    expect(opened.sourceLot).toMatchObject({ qtyInitial: 3, onHand: 0 });
+    expect(opened.bulkLot.landedCostPyg).toBe("1496500");
+    expect(opened.bulkLot.unitLandedCostPyg).toBe("14965");
+  });
+
+  it("ADR-008 · cada salida de la apertura registra su capa de costo, que cuadra con el movimiento, y el ledger no deriva de la proyección", async () => {
+    const { sealedVariantId } = await createSealedAndBulkVariants();
+    const lotId = await seedSealedLot(sealedVariantId, { qtyInitial: 3, unitCostPyg: 1_496_500 });
+    await mutateOk<OpenedLot>("inventory.lot.open", { lotId });
+
+    const layers = await testDb.superuserClient.query(
+      `SELECT m.total_cost_pyg::text AS declared,
+              COALESCE(sum(a.total_cost_pyg), 0)::text AS allocated
+         FROM app.inventory_movements m
+         LEFT JOIN app.movement_cost_allocations a ON a.movement_id = m.id
+        WHERE m.movement_type = 'transfer_out'
+          AND m.reference_type IN ('lot_separation', 'lot_opening')
+          AND m.lot_id IN (SELECT id FROM app.inventory_lots
+                            WHERE id = $1 OR parent_lot_id = $1)
+        GROUP BY m.id ORDER BY m.id`,
+      [lotId],
+    );
+    expect(layers.rows).toEqual([
+      { declared: "1496500", allocated: "1496500" },
+      { declared: "1496500", allocated: "1496500" },
+    ]);
+
+    const drift = await testDb.superuserClient.query(`SELECT * FROM app.v_balance_drift`);
+    expect(drift.rows).toEqual([]);
+  });
+
+  it("caso borde 5 · abrir dos veces el mismo lote se rechaza, y no nace un segundo granel", async () => {
+    const { sealedVariantId } = await createSealedAndBulkVariants();
+    const lotId = await seedSealedLot(sealedVariantId, { qtyInitial: 1, unitCostPyg: 1_496_500 });
+    await mutateOk<OpenedLot>("inventory.lot.open", { lotId });
+
+    const second = await mutate("inventory.lot.open", { lotId });
+
+    expect(second.statusCode).toBe(409);
+    expect(second.json().error.data.appCode).toBe("CONFLICT_LOT_NOT_OPENABLE");
+    const bulkLots = await testDb.superuserClient.query(
+      `SELECT count(*)::int AS n FROM app.inventory_lots WHERE parent_lot_id = $1`,
+      [lotId],
+    );
+    expect(bulkLots.rows[0].n).toBe(1);
+  });
+
+  it("caso borde 5 · dos aperturas simultáneas del mismo lote: una gana, la otra se rechaza, y hay un solo granel", async () => {
+    const { sealedVariantId } = await createSealedAndBulkVariants();
+    const lotId = await seedSealedLot(sealedVariantId, { qtyInitial: 1, unitCostPyg: 1_496_500 });
+
+    const responses = await Promise.all([
+      mutate("inventory.lot.open", { lotId }),
+      mutate("inventory.lot.open", { lotId }),
+    ]);
+
+    expect(responses.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+    const bulkLots = await testDb.superuserClient.query(
+      `SELECT count(*)::int AS n FROM app.inventory_lots WHERE parent_lot_id = $1`,
+      [lotId],
+    );
+    expect(bulkLots.rows[0].n).toBe(1);
+  });
+
+  it("caso borde 5 · la apertura decide sobre el lote ya bloqueado: si otra transacción lo deja en cuarentena mientras espera, se rechaza", async () => {
+    // Actualización perdida: otra transacción, sin confirmar todavía, deja el
+    // lote en cuarentena. Sin el FOR UPDATE, la apertura leería el estado
+    // viejo (`available`), abriría un lote en cuarentena y respondería 200
+    // (verificado sacándolo). Con él, espera, relee y lo rechaza.
+    const { sealedVariantId } = await createSealedAndBulkVariants();
+    const lotId = await seedSealedLot(sealedVariantId, { qtyInitial: 1, unitCostPyg: 1_496_500 });
+
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    try {
+      await testDb.superuserClient.query(
+        "UPDATE app.inventory_lots SET status = 'quarantine' WHERE id = $1",
+        [lotId],
+      );
+      let settled = false;
+      const pending = mutate("inventory.lot.open", { lotId }).then((response) => {
+        settled = true;
+        return response;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(settled).toBe(false);
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+
+      const response = await pending;
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.data.appCode).toBe("CONFLICT_LOT_NOT_OPENABLE");
+    } finally {
+      if (!released) await testDb.superuserClient.query("ROLLBACK");
+    }
+    const children = await testDb.superuserClient.query(
+      `SELECT count(*)::int AS n FROM app.inventory_lots WHERE parent_lot_id = $1`,
+      [lotId],
+    );
+    expect(children.rows[0].n).toBe(0);
+  });
+
+  it("RN-LOT-02 · un lote sin frascos en saldo no se abre", async () => {
+    const { sealedVariantId } = await createSealedAndBulkVariants();
+    const lotId = await seedSealedLot(sealedVariantId, { qtyInitial: 1, unitCostPyg: 1_496_500 });
+    await sellSealed(lotId, sealedVariantId, 1, 1_496_500);
+
+    const response = await mutate("inventory.lot.open", { lotId });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_INSUFFICIENT_STOCK");
+  });
+
+  it("RN-LOT-02 · el último frasco disponible de la variante, si está reservado, no se abre", async () => {
+    const { sealedVariantId } = await createSealedAndBulkVariants();
+    const lotId = await seedSealedLot(sealedVariantId, { qtyInitial: 1, unitCostPyg: 1_496_500 });
+    await testDb.superuserClient.query(
+      `INSERT INTO app.stock_reservations
+         (tenant_id, variant_id, qty, reason, expires_at, created_by)
+       VALUES ($1, $2, 1, 'checkout', now() + interval '1 hour', $3)`,
+      [TENANT_ID, sealedVariantId, STAFF_OWNER_ID],
+    );
+
+    const response = await mutate("inventory.lot.open", { lotId });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_INSUFFICIENT_STOCK");
+    const lot = await call<{ lot: { status: string } }>("inventory.lot.history", { lotId });
+    expect(lot.lot.status).toBe("available");
+  });
+
+  it("RN-LOT-02 · solo se abre un lote de una variante sellada: el granel se rechaza", async () => {
+    const { bulkVariantId } = await createSealedAndBulkVariants();
+    const bulkLotId = await seedBulkLot(bulkVariantId, { qtyInitial: 100, unitCostPyg: 14_965 });
+
+    const response = await mutate("inventory.lot.open", { lotId: bulkLotId });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_LOT_NOT_SEALED");
+  });
+
+  it("ADR-009 · un producto sin variante de granel no se abre, y el error manda a crearla en el catálogo", async () => {
+    const sealedVariantId = await createSealedVariant();
+    const lotId = await seedSealedLot(sealedVariantId, { qtyInitial: 1, unitCostPyg: 1_496_500 });
+
+    const response = await mutate("inventory.lot.open", { lotId });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_BULK_VARIANT_MISSING");
+    expect(response.json().error.message).toContain("catálogo");
+    const lot = await call<{ lot: { status: string } }>("inventory.lot.history", { lotId });
+    expect(lot.lot.status).toBe("available");
+  });
+
+  it("ADR-009 · un producto tiene una sola variante de granel: una segunda se rechaza (índice de 0028)", async () => {
+    const { productId } = await createSealedAndBulkVariants();
+
+    const response = await mutate("catalog.variant.create", {
+      productId,
+      sku: `SKU-SEGUNDO-GRANEL-${Date.now()}`,
+      variantType: "bulk",
+      uom: "ml",
+      sizeMl: null,
+      pricePyg: "0",
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_BULK_VARIANT_EXISTS");
+  });
+
+  it("RN-LOT-02 · un lote inexistente (o de otro tenant) da 404", async () => {
+    const response = await mutate("inventory.lot.open", {
+      lotId: "00000000-0000-4000-a000-000000000000",
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("docs/api-conventions.md §5 · repetir la apertura con la misma Idempotency-Key devuelve la respuesta original y no abre otro frasco", async () => {
+    const { sealedVariantId } = await createSealedAndBulkVariants();
+    const lotId = await seedSealedLot(sealedVariantId, { qtyInitial: 3, unitCostPyg: 1_496_500 });
+    const send = () =>
+      app.inject({
+        method: "POST",
+        url: "/trpc/inventory.lot.open",
+        headers: { cookie, "idempotency-key": `apertura-${lotId}` },
+        payload: { lotId },
+      });
+
+    const first = await send();
+    const second = await send();
+
+    expect(first.statusCode).toBe(200);
+    expect(second.statusCode).toBe(200);
+    expect(second.json().result.data.bulkLot.id).toBe(first.json().result.data.bulkLot.id);
+    const children = await testDb.superuserClient.query(
+      `SELECT count(*)::int AS n FROM app.inventory_lots WHERE parent_lot_id = $1`,
+      [lotId],
+    );
+    expect(children.rows[0].n).toBe(1);
+  });
 });

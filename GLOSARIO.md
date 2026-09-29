@@ -64,7 +64,7 @@ Estado `open_for_decant`. Un frasco que se abrió para fraccionar **deja de ser 
 
 ### Apertura de frasco
 
-**Conversión entre dos lotes**, no un cambio de estado. Sale 1 unidad del lote sellado (`transfer_out`), nace un lote hijo de granel en mililitros (`transfer_in`) que hereda el costo íntegro y apunta al padre por `parent_lot_id`. Ver ADR-009.
+**Conversión entre lotes**, no un cambio de estado. Sale 1 unidad del lote sellado (`transfer_out`), nace un lote hijo de granel en mililitros (`transfer_in`) que hereda el costo íntegro **de una unidad** y apunta al padre por `parent_lot_id`. Se abre una unidad, siempre: si el lote nació con varias, la apertura las **separa** antes (la unidad que se abre pasa a un lote propio de una unidad). Ver ADR-009 y RN-LOT-02.
 
 ### Kardex / Ledger (`inventory_movements`)
 

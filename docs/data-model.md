@@ -109,7 +109,7 @@ product_variants ──< inventory_lots ──┬──< inventory_movements ─
                           │           │
                           │           └──< serialized_units
                           │
-                          └──── parent_lot_id (autoreferencia: granel → sellado)
+                          └──── parent_lot_id (autoreferencia: lote del que se derivó)
 
 product_variants ──< stock_reservations   (separadas del ledger)
 
@@ -120,7 +120,12 @@ inventory_lots ──< decant_work_orders >── product_variants
 
 **`inventory_balances` la escriben solo los triggers.** `init_lot_balance` y `project_lot_balance` son `SECURITY DEFINER`; `joda_api` solo tiene SELECT (WP-B09b, `0024_revoke_balances_write.sql`, invariante 74). Un saldo equivocado se corrige con un movimiento de ajuste, nunca editando la proyección.
 
-**La autoreferencia `parent_lot_id` es lo que modela la apertura de frasco.** Un lote de granel apunta al lote sellado del que salió, con el costo heredado.
+**La autoreferencia `parent_lot_id` significa "lote del que se derivó"**, y es lo que modela la apertura de frasco. Se distinguen dos casos por el tipo de variante del hijo:
+
+- **Apertura** (sellado → granel): el lote de granel apunta al lote sellado del que salió, con el costo de UNA unidad del sellado heredado íntegro (RN-LOT-02).
+- **Separación** (sellado → sellado): al abrir un frasco de un lote de varias unidades, la unidad que se abre nace como un lote propio de una unidad que apunta al lote original (caso borde 21, WP-C11).
+
+No hay una columna que diga cuál es cuál: el tipo de la variante del hijo lo dice.
 
 ### 3.4 Flujo de compra
 
@@ -164,7 +169,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 78: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 85: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -234,6 +239,13 @@ Desde `0023_cross_tenant_fks.sql`, cada FK entre dos tablas con `tenant_id` es c
 - **ON DELETE SET NULL se escribe `SET NULL (col)`.** Sin la lista de columnas, Postgres pondría en NULL también `tenant_id`.
 - **`inventory_movements.lot_id` incluye además la variante:** `(lot_id, variant_id, tenant_id) REFERENCES inventory_lots (id, variant_id, tenant_id)`. La variante de un movimiento es la de su lote. Un lote con movimientos no cambia de variante.
 - **Los triggers de 0018 siguen verificando el tenant por su cuenta.** Corren antes que las FKs, que son AFTER, y no dependen de ellas (§4.2).
+
+### 4.4 La apertura de frasco (WP-C11, `0028_sealed_open_single_unit.sql`)
+
+Dos invariantes que hacen que la apertura no se pueda hacer mal aunque alguien se saltee la API:
+
+- **Un lote de variante sellada en `open_for_decant` tiene `qty_initial = 1`.** `trg_sealed_open_single_unit`, `BEFORE INSERT OR UPDATE OF status, qty_initial, variant_id`. Es un invariante del estado de la fila, no una transición: no entra en las excepciones de ADR-017. Sin él, marcar abierto un lote de tres dejaba dos frascos sellados con saldo e invendibles (RN-LOT-03), y el granel heredaba el costo del lote entero (caso borde 21). Como todo trigger de invariante, falla cerrado (§4.2): si no encuentra la variante en el tenant del lote, rechaza.
+- **Un producto tiene a lo sumo una variante de granel.** Índice único parcial `product_variants_one_bulk_per_product ON product_variants (product_id) WHERE variant_type = bulk`. Un producto es un solo líquido aunque se venda en varios tamaños; la apertura necesita saber a qué granel va el frasco, y lo impone la base, no la búsqueda.
 
 ---
 

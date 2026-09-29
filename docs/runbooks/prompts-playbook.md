@@ -1130,37 +1130,64 @@ Antes de tocar nada: git checkout -b feat/c11-lot-opening-api
 Tomá WP-C11 del backlog.
 
 Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
-docs/domain-rules.md (RN-LOT-02, RN-LOT-03), ADR-009,
+.claude/rules/database.md, docs/domain-rules.md (RN-LOT-02, RN-LOT-03 y
+los casos borde 5, 21 y 22), ADR-009,
 packages/domain/src/inventory/lotOpening.ts (WP-A13, la función de
-dominio que esta sesión expone por API).
+dominio que esta sesión corrige y expone por API).
 
-Objetivo: endpoint de apertura de frasco, sobre lotOpening.ts de WP-A13.
+Objetivo: endpoint de apertura de frasco (`inventory.lot.open`), sobre
+lotOpening.ts.
 
 Criterio de aceptación: RF-INV-08. Abrir dos veces el mismo lote se
-rechaza (RN-LOT-02, el caso borde 5 del catálogo de domain-rules.md, ya
-cubierto por dominio en WP-A13 — esta sesión verifica que el rechazo
-llega igual a través de la API).
+rechaza (RN-LOT-02, el caso borde 5 del catálogo de domain-rules.md);
+esta sesión verifica que el rechazo llega igual a través de la API, también
+con dos aperturas simultáneas.
 
 TRAMPAS DE ESTA TAREA:
-· La apertura de frasco es una CONVERSIÓN entre dos lotes (ADR-009), no
-  un cambio de estado — cuatro pasos en una sola transacción: transfer_out
-  del sellado, status → open_for_decant, alta del lote de granel hijo con
-  parent_lot_id, transfer_in del granel. lotOpening.ts (WP-A13) ya calcula
-  esto; esta sesión lo envuelve en withTenantTx (WP-C02) y lo persiste,
-  no lo reimplementa.
-· El lote sellado padre TAMBIÉN queda en open_for_decant, igual que el
-  granel hijo — no es un bug de esta sesión, es el resultado correcto
-  (ver la nota de WP-A13 en el propio backlog). RF-INV-09 ("impedir la
-  venta como sellado de un lote abierto") depende de que este estado
-  compartido esté bien persistido.
-· Precondición de estado: solo se abre un lote sellado en `available`.
-  Uno en `quarantine` o `damaged` se rechaza (RN-LOT-02).
-· El costo se hereda ÍNTEGRO al granel, no se recalcula desde ningún otro
-  dato — si el endpoint recalcula el costo puesto en vez de copiarlo, algo
-  está mal.
+· La apertura es una CONVERSIÓN entre lotes (ADR-009), no un cambio de
+  estado, y abre UNA unidad. Un lote sellado puede tener más de una
+  (una recepción de tres frascos iguales, `qty_initial` > 1): marcarlo
+  entero `open_for_decant` deja los otros frascos sin poder venderse,
+  porque un sellado abierto es terminal (RN-LOT-03). Por eso, si
+  `qty_initial` > 1, la apertura SEPARA primero la unidad en su propio
+  lote sellado de una unidad y abre ese (caso borde 21). El original sigue
+  `available`. `lotOpening.ts` (WP-A13) no lo hacía: agregarlo es
+  trabajo de esta sesión, en el dominio, no en el endpoint.
+· La condición es `qty_initial`, NO el saldo. Un lote de tres con dos
+  vendidos tiene saldo 1 y se separa igual: abierto directo, el granel
+  heredaría el costo de tres frascos y cada decant saldría con el margen
+  equivocado sin que nada falle. Test explícito: lote de 3, se venden 2, se
+  abre el tercero, el costo por ml del granel es el de UN frasco.
+· El granel hereda el costo de UNA unidad (`unit_landed_cost_pyg` del
+  sellado, íntegro), no el `landed_cost_pyg` del lote entero. Si el
+  endpoint recalcula el costo desde otro dato, algo está mal.
+· Todo `transfer_out` registra su capa de costo
+  (`movement_cost_allocations`). Sin eso el COGS no cierra.
+· Orden de los pasos, en una sola transacción y con el lote bloqueado
+  (`FOR UPDATE`): la unidad SALE antes de que el sellado cambie de estado
+  (un sellado abierto no admite movimientos, RN-LOT-03), y el granel NACE
+  antes de recibir su entrada.
+· Precondiciones: el lote está `available`; tiene un frasco en saldo; la
+  variante tiene un frasco disponible (saldo menos reservas, desde
+  `v_stock_available`); la variante es sellada (el tester no se
+  fracciona); el producto tiene variante de granel — una sola, impuesto por
+  índice único parcial. Sin granel, error propio en español que manda a
+  crearla en el catálogo.
+· Un invariante nuevo en la base: un sellado en `open_for_decant` tiene
+  `qty_initial` = 1. Se prueba rompiéndolo, en `invariants.sql` y como
+  `joda_api`. Ojo: las pruebas de B09/B08c que armaban "un lote de tres
+  con uno abierto" ya no se pueden construir; se adaptan a un lote de una
+  unidad con saldo, sin perder lo que probaban.
+· El permiso del endpoint es `inventory.decant:execute`, el mismo que
+  usa WP-B11 para la política de escritura de `inventory_lots`. Decilo en
+  el PR.
+· Una apertura registrada por error NO se revierte reabriendo el lote
+  (caso borde 22): se corrige con dos ajustes con motivo obligatorio. Ese
+  alta de lote por ajuste es WP-C11b, no de esta sesión.
 
-Alcance: el endpoint y su transacción. La lógica de conversión ya existe
-en packages/domain, no se reescribe acá.
+Alcance: el endpoint, su transacción, la separación en el dominio y los dos
+invariantes. La conversión de lote ya existía en packages/domain; se corrige,
+no se reescribe entera.
 ```
 
 ---

@@ -156,3 +156,162 @@ export async function insertCostAllocation(
     },
   });
 }
+
+// ---------------------------------------------------------------------
+// Apertura de frasco — WP-C11 (RN-LOT-02, ADR-009).
+// ---------------------------------------------------------------------
+const LOT_FOR_OPENING_INCLUDE = { inventory_balances: true, product_variants: true } as const;
+
+/** El lote sellado a abrir, con su saldo y el tipo/producto de su variante. */
+export type LotForOpeningRow = Prisma.inventory_lotsGetPayload<{
+  include: typeof LOT_FOR_OPENING_INCLUDE;
+}>;
+
+/**
+ * Bloquea la fila del lote y la lee. Prisma no expone `FOR UPDATE`, así que
+ * el bloqueo va por `$queryRaw` y la lectura tipada, después, por el cliente:
+ * en READ COMMITTED cada sentencia toma un snapshot nuevo, y la segunda ya
+ * ve el estado que dejó quien tenía el bloqueo antes.
+ *
+ * Es el único lote que se bloquea: los que nacen en la apertura son nuevos e
+ * invisibles para cualquier otra transacción. Con más de un lote habría que
+ * tomarlos en orden ascendente de `lot_id` y en una sola sentencia
+ * (.claude/rules/api.md, "Concurrencia"). Dos aperturas del mismo lote se
+ * serializan acá: la segunda espera, lee `open_for_decant` y el dominio la
+ * rechaza (caso borde 5).
+ */
+export async function findLotForOpening(
+  tx: TenantTx,
+  lotId: string,
+): Promise<LotForOpeningRow | null> {
+  const locked = await tx.$queryRaw<{ id: string }[]>`
+    SELECT l.id FROM app.inventory_lots l WHERE l.id = ${lotId}::uuid FOR UPDATE OF l`;
+  if (locked.length === 0) return null;
+  return tx.inventory_lots.findFirst({
+    where: { id: lotId },
+    include: LOT_FOR_OPENING_INCLUDE,
+  });
+}
+
+/** Las variantes de granel de un producto: el índice de 0028 garantiza a lo sumo una. */
+export async function findBulkVariantIds(tx: TenantTx, productId: string): Promise<string[]> {
+  const rows = await tx.product_variants.findMany({
+    where: { product_id: productId, variant_type: "bulk" },
+    select: { id: true },
+  });
+  return rows.map((row) => row.id);
+}
+
+/** `perfume_details.nominal_volume_ml` del producto, o `null` si no es un perfume. */
+export async function findNominalVolumeMl(tx: TenantTx, productId: string): Promise<number | null> {
+  const details = await tx.perfume_details.findFirst({
+    where: { product_id: productId },
+    select: { nominal_volume_ml: true },
+  });
+  return details ? details.nominal_volume_ml.toNumber() : null;
+}
+
+export interface InsertLotInput {
+  readonly tenantId: string;
+  readonly variantId: string;
+  readonly parentLotId: string;
+  readonly status: "available" | "open_for_decant";
+  readonly qtyInitial: number;
+  readonly uom: "unit" | "ml";
+  readonly unitCostMinor: bigint;
+  readonly currency: string;
+  readonly fxRateToPyg: Prisma.Decimal;
+  readonly landedCostPyg: bigint;
+  readonly unitLandedCostPyg: bigint;
+  readonly batchCode: string | null;
+  readonly manufacturedAt: Date | null;
+  readonly expiryAt: Date | null;
+  readonly openedAt: Date | null;
+  readonly receivedAt: Date;
+}
+
+/**
+ * Alta de un lote derivado de otro (`parent_lot_id`). El `id` lo genera el
+ * dominio (`IdGenerator`): se pasa acá para que los movimientos, que ya
+ * apuntan a él, no dependan de una segunda lectura. La fila de saldo nace en
+ * cero con el lote (trigger `init_lot_balance`).
+ */
+export async function insertDerivedLot(
+  tx: TenantTx,
+  id: string,
+  input: InsertLotInput,
+): Promise<void> {
+  await tx.inventory_lots.create({
+    data: {
+      id,
+      tenant_id: input.tenantId,
+      variant_id: input.variantId,
+      parent_lot_id: input.parentLotId,
+      status: input.status,
+      qty_initial: input.qtyInitial,
+      uom: input.uom,
+      unit_cost_minor: input.unitCostMinor,
+      currency: input.currency,
+      fx_rate_to_pyg: input.fxRateToPyg,
+      landed_cost_pyg: input.landedCostPyg,
+      unit_landed_cost_pyg: input.unitLandedCostPyg,
+      batch_code: input.batchCode,
+      manufactured_at: input.manufacturedAt,
+      expiry_at: input.expiryAt,
+      opened_at: input.openedAt,
+      received_at: input.receivedAt,
+    },
+  });
+}
+
+/** RN-LOT-02 paso 2: el sellado pasa a `open_for_decant`. Es terminal (RN-LOT-03, 0023). */
+export async function markLotOpenForDecant(
+  tx: TenantTx,
+  lotId: string,
+  openedAt: Date,
+): Promise<void> {
+  await tx.inventory_lots.update({
+    where: { id: lotId },
+    data: { status: "open_for_decant", opened_at: openedAt },
+  });
+}
+
+export interface InsertTransferMovementInput {
+  readonly tenantId: string;
+  readonly lotId: string;
+  readonly variantId: string;
+  readonly qty: number;
+  readonly uom: "unit" | "ml";
+  readonly movementType: "transfer_in" | "transfer_out";
+  readonly totalCostPyg: bigint;
+  readonly referenceType: "lot_separation" | "lot_opening";
+  readonly referenceId: string;
+  readonly createdBy: string;
+}
+
+/** Movimiento de la separación o de la apertura de un frasco: solo `transfer_in`/`transfer_out`. */
+export async function insertTransferMovement(
+  tx: TenantTx,
+  input: InsertTransferMovementInput,
+): Promise<bigint> {
+  const row = await tx.inventory_movements.create({
+    data: {
+      tenant_id: input.tenantId,
+      lot_id: input.lotId,
+      variant_id: input.variantId,
+      qty: input.qty,
+      uom: input.uom,
+      movement_type: input.movementType,
+      total_cost_pyg: input.totalCostPyg,
+      reference_type: input.referenceType,
+      reference_id: input.referenceId,
+      created_by: input.createdBy,
+    },
+    select: { id: true },
+  });
+  return row.id;
+}
+
+export async function findMovementsByIds(tx: TenantTx, ids: bigint[]): Promise<MovementRow[]> {
+  return tx.inventory_movements.findMany({ where: { id: { in: ids } }, orderBy: { id: "asc" } });
+}

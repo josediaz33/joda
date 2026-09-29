@@ -34,3 +34,12 @@ Requiere el tipo de variante `bulk` (granel, medido en ml, no vendible directo) 
 ## Verificado
 
 El intento de vender el sellado desde un lote en `open_for_decant` es rechazado por la base.
+
+## Aclaración (WP-C11, 2026-09-29)
+
+La decisión no cambia: abrir es una conversión entre lotes. Se precisa qué se convierte cuando el lote sellado tiene más de un frasco (una recepción de tres iguales):
+
+- **Se abre una unidad, siempre.** El granel hereda el costo de UNA unidad del sellado (`unit_landed_cost_pyg`), no el del lote entero.
+- **Si `qty_initial` > 1, la apertura separa primero la unidad en su propio lote sellado de una unidad** (`parent_lot_id` = el lote original) y abre ese. El original sigue `available`. Sin la separación, el frasco abierto arrastraba a los demás: un sellado abierto es terminal (RN-LOT-03) y los otros frascos quedaban invendibles.
+- La base lo impone: un lote de variante sellada en `open_for_decant` tiene `qty_initial = 1` (`0028_sealed_open_single_unit.sql`).
+- **Una apertura errónea no se revierte reabriendo el lote.** Se corrige con dos ajustes con motivo obligatorio: baja del granel y alta de un lote sellado nuevo (caso borde 22).

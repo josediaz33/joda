@@ -168,3 +168,30 @@ export const createAdjustmentInput = z
   })
   .strict();
 export type CreateAdjustmentInput = z.infer<typeof createAdjustmentInput>;
+
+// ---------------------------------------------------------------------
+// Apertura de frasco — RF-INV-08, RN-LOT-02, ADR-009 (WP-C11). Una
+// CONVERSIÓN entre lotes, no un cambio de estado: el input es solo el lote
+// sellado. Nada más se acepta del cliente — el volumen sale del producto y
+// el granel de destino de la única variante `bulk` del mismo producto
+// (índice único parcial de 0028), no de quien llama.
+//
+// Abre UNA unidad. Si el lote nació con más de una (`qty_initial` > 1), la
+// apertura separa primero esa unidad en su propio lote de una unidad
+// (caso borde 21) y abre ese: `openedSealedLot` es el lote que quedó
+// `open_for_decant` (el original si tenía una sola unidad, el lote
+// separado si tenía varias) y `sourceLot` es el original, ya sin la unidad
+// — `null` cuando no hubo separación.
+// ---------------------------------------------------------------------
+export const openLotInput = z.object({ lotId: idSchema }).strict();
+export type OpenLotInput = z.infer<typeof openLotInput>;
+
+export const openLotOutput = z
+  .object({
+    sourceLot: adminLotSchema.nullable(),
+    openedSealedLot: adminLotSchema,
+    bulkLot: adminLotSchema,
+    movements: z.array(adminMovementSchema),
+  })
+  .strict();
+export type OpenLotOutput = z.infer<typeof openLotOutput>;
