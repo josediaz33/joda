@@ -2,7 +2,7 @@
 
 Referencia del esquema. La verdad ejecutable está en `packages/db/migrations/`; este documento explica **por qué** está así.
 
-Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 165 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 77/77 invariantes verificados.
+Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 165 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 78/78 invariantes verificados.
 
 ---
 

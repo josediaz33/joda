@@ -1511,6 +1511,36 @@ SELECT pg_temp.expect_true(77,
   has_schema_privilege('joda_readonly', 'public', 'USAGE')
   AND has_schema_privilege('joda_api', 'public', 'USAGE'));
 
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-B16 (0027_revoke_views_write.sql): la API no escribe a través de una
+-- vista.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 78 ─ joda_api no tiene escritura sobre ninguna vista de app.*. El
+-- ALTER DEFAULT PRIVILEGES de 0010 no distingue vistas de tablas, así que
+-- toda vista nueva nace con INSERT, UPDATE y DELETE: esta prueba es lo que
+-- obliga a la migración que la crea a revocarlos. Hoy es inocuo (ninguna
+-- es actualizable); una vista simple sobre inventory_balances reabriría
+-- B09b. has_any_column_privilege ve también el privilegio por columna, que
+-- has_table_privilege no ve. Si falla, el nombre lista las vistas. La
+-- condición EXISTS impide pasar en vacío si dejara de haber vistas en app.
+WITH v AS (
+  SELECT c.oid, c.relname
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND c.relkind = 'v'
+), con_escritura AS (
+  SELECT relname FROM v
+   WHERE has_any_column_privilege('joda_api', oid, 'INSERT')
+      OR has_any_column_privilege('joda_api', oid, 'UPDATE')
+      OR has_table_privilege('joda_api', oid, 'DELETE')
+)
+SELECT pg_temp.expect_true(78,
+  'joda_api no escribe ninguna vista de app.*'
+    || COALESCE(' — con escritura: '
+                || (SELECT string_agg(relname, ', ' ORDER BY relname) FROM con_escritura), ''),
+  EXISTS (SELECT 1 FROM v) AND NOT EXISTS (SELECT 1 FROM con_escritura));
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'

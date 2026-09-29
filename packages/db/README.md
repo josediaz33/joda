@@ -279,6 +279,10 @@ La revisión cruzada de WP-C09 encontró que `product_media` no tenía `tenant_i
 
 **Consecuencia para código de aplicación que ya insertaba en alguna de esas 23 tablas** (WP-C08, catálogo: `perfume_details`/`accessory_details`/`product_categories`/`product_tags`; WP-C09, `product_media`): esos `INSERT` pasaron a fallar por `NOT NULL` en `tenant_id` hasta que se les agregó el valor explícito — Prisma no lo infiere solo. Y **RLS en la tabla hija no reemplaza verificar la pertenencia del padre**: seguía haciendo falta un `findX` tenant-scoped antes de insertar (mismo patrón que `findProductRow` de `createVariant`, WP-C08) para las columnas que aceptan un id de OTRA tabla protegida — `categoryId`/`tagId` en catálogo, `productId`/`variantId` en medios —, porque RLS en la fila hija solo protege que ESA fila sea legible/escribible por el tenant correcto, no evita insertarla apuntando por FK a un id ajeno.
 
+### 12. `ALTER DEFAULT PRIVILEGES ... ON TABLES` también alcanza a las vistas (WP-B16)
+
+No existe `ON VIEWS`: el default de `0010_security_rls.sql` que concede INSERT, UPDATE y DELETE a `joda_api` sobre lo que se cree en `app` cubre tablas y vistas por igual, así que toda vista nueva nace con escritura. `0027_revoke_views_write.sql` lo revocó en las cuatro que había. Para las que vengan no hay default que lo evite: la migración que crea la vista tiene que revocar la escritura, y el invariante 78 (`tests/invariants.sql`) falla y nombra la vista si se olvida.
+
 ---
 
 ## Decisiones no obvias del esquema

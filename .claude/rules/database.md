@@ -35,6 +35,12 @@ ser NULL por falta de visibilidad. Se escribe con `IF NOT FOUND THEN RAISE`,
 no con una comparación que se evalúe a falso. Ejemplo y motivo en
 `docs/data-model.md` §4.2 (`guard_posted_journal`, WP-B10).
 
+## Vistas
+
+Toda vista nueva de `app` revoca en su misma migración `INSERT, UPDATE, DELETE`
+de `joda_api`: el default de 0010 no distingue vistas de tablas. El invariante
+78 falla si se olvida, nombrando la vista.
+
 ## RLS
 
 `tenant_isolation` va `AS RESTRICTIVE`, con una permisiva base `tenant_access`
