@@ -1521,9 +1521,14 @@ SELECT pg_temp.expect_true(77,
 -- toda vista nueva nace con INSERT, UPDATE y DELETE: esta prueba es lo que
 -- obliga a la migración que la crea a revocarlos. Hoy es inocuo (ninguna
 -- es actualizable); una vista simple sobre inventory_balances reabriría
--- B09b. has_any_column_privilege ve también el privilegio por columna, que
--- has_table_privilege no ve. Si falla, el nombre lista las vistas. La
--- condición EXISTS impide pasar en vacío si dejara de haber vistas en app.
+-- B09b. El alcance es app porque ahí aplica el default de 0010: las vistas
+-- de public no lo reciben (joda_readonly las lee, joda_api no tiene nada).
+-- Mira el estado real de los privilegios, no el default: no se esquiva
+-- cambiando el rol que crea la vista. has_any_column_privilege ve también
+-- el privilegio por columna, que has_table_privilege no ve; DELETE no
+-- existe por columna, así que usa has_table_privilege. Si falla, el nombre
+-- lista las vistas. La condición EXISTS impide pasar en vacío si dejara de
+-- haber vistas en app.
 WITH v AS (
   SELECT c.oid, c.relname
     FROM pg_class c
