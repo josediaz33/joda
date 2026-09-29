@@ -49,6 +49,13 @@ export async function resetSchema(client) {
     DROP SCHEMA IF EXISTS app CASCADE;
     DROP SCHEMA IF EXISTS public CASCADE;
     CREATE SCHEMA public;
+    -- Igual que una base recién creada en PG15+: dueño pg_database_owner y
+    -- USAGE para PUBLIC. Sin esto, joda_readonly recibía "permission
+    -- denied for schema public" al leer v_catalog_* en la base local
+    -- reseteada, a diferencia de CI, Testcontainers y producción (hallazgo
+    -- de B12). 0026 además se lo concede a joda_readonly explícitamente.
+    ALTER SCHEMA public OWNER TO pg_database_owner;
+    GRANT USAGE ON SCHEMA public TO PUBLIC;
   `);
 }
 

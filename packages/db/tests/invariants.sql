@@ -1498,6 +1498,19 @@ SELECT pg_temp.expect_fail_like(76, 'Dos borradores de reversión conviven; uno 
   $$,
   'aceptado');
 
+-- ─────────────────────────────────────────────────────────────────────
+-- 0026_public_usage_readonly.sql y scripts/lib/tasks.mjs: el esquema
+-- public conserva USAGE después de un db:reset.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 77 ─ joda_readonly (storefront) y joda_api tienen USAGE sobre public.
+-- CI corre db:reset antes de db:test, así que esto también vigila el
+-- reset: si vuelve a recrear public sin el default, joda_api lo pierde.
+SELECT pg_temp.expect_true(77,
+  'joda_readonly y joda_api tienen USAGE sobre el esquema public',
+  has_schema_privilege('joda_readonly', 'public', 'USAGE')
+  AND has_schema_privilege('joda_api', 'public', 'USAGE'));
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'
