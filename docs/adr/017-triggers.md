@@ -48,6 +48,8 @@ El mismo mapa vive en `packages/domain/src/accounting/journalEntry.ts`, y la apl
 
 `trg_sealed_lot_terminal` (`0023_cross_tenant_fks.sql`) impide que un lote **sellado** salga de `open_for_decant`. Es una transición impuesta en la base.
 
+**Pendiente de confirmación de José.** Lo que José decidió es que el lote sellado abierto "es terminal y rechaza cualquier movimiento". Que "terminal" incluya también el estado es una lectura de quien implementó WP-B08c, no una instrucción textual. Si José la niega, este trigger se quita con una migración nueva y esta sección se borra.
+
 Pasa el criterio de arriba porque es inmutabilidad física, no una regla importante: un frasco abierto no se desabre. Si se permitiera, alcanzaría un UPDATE del estado a `available` para:
 
 - vender como sellado un frasco abierto (RN-LOT-03);

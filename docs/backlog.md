@@ -347,6 +347,19 @@ Pruebas, rojo antes y verde después:
   - las dos capas de costo cruzadas ahora las frena la FK en el INSERT.
 - **`rls_every_table.test.ts`:** el mapa de triggers incluye `trg_sealed_lot_terminal`.
 
+**Revisión cruzada de B08c (2026-09-29, subagente `revisor`, sesión limpia, worktree y Postgres propios; un primer intento se cortó por límite de uso).** Verificó como `joda_api` real y con evidencia:
+
+- el ON DELETE se conserva en las 103 FKs, comparando `pg_constraint` antes y después de 0023, y `SET NULL (col)` deja intacto `tenant_id`;
+- los cruces por vías que el test no cubre se rechazan: INSERT, lote hijo ajeno, reserva y unidad serializada ajenas, y cambiar la variante de un lote con movimientos;
+- RN-LOT-03 extendida resiste un UPDATE de estado y variante a la vez y una sombra en `pg_temp`;
+- **probado rompiéndolo:** sin la composición de una FK, fallan exactamente el invariante 67 y esa FK en el test.
+
+Veredicto: aprobar con cambios.
+
+- **Importante, corregido:** ADR-017 y RN-LOT-03 daban por decidido que el estado es terminal. Ahora dicen que está pendiente de confirmación de José.
+- **Importante, ya anotado:** la pregunta de abajo.
+- **Menor, corregido:** el ON UPDATE de la FK (una fila apuntada no cambia de tenant) no se había aislado, porque como `joda_api` RLS frena antes. Test nuevo como superusuario, rojo sin 0023.
+
 **Preguntas abiertas para José, sin asumir:** `stock_reservations` y `serialized_units` tienen `variant_id` y `lot_id` a la vez, igual que los movimientos, y nada exige que coincidan. No se agregó porque no estaba pedido.
 
 ---

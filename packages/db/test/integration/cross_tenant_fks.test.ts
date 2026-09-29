@@ -375,6 +375,21 @@ describe("toda FK entre tablas con tenant_id rechaza apuntar a otro tenant, como
     expect([...fks.keys()]).toEqual(CROSS_TENANT_FKS);
   });
 
+  // Revisión cruzada de B08c: la FK compuesta también impide el otro lado,
+  // que una fila APUNTADA cambie de tenant. Como joda_api, RLS (WITH CHECK
+  // de tenant_isolation) lo frena antes y no deja ver la FK. Como el
+  // superusuario del contenedor, que elude RLS, la única barrera es la FK.
+  it("una variante con lotes no cambia de tenant: lo frena la FK aunque se eluda RLS", async () => {
+    await db.client.query("BEGIN");
+    await expect(
+      db.client.query("UPDATE app.product_variants SET tenant_id = $1 WHERE id = $2", [
+        PEER_TENANT_ID,
+        "55555555-0000-0000-0000-000000000002",
+      ]),
+    ).rejects.toMatchObject({ code: "23503" });
+    await db.client.query("ROLLBACK");
+  });
+
   it("cada FK tiene una fila del tenant vecino para apuntarle", () => {
     expect(CROSS_TENANT_FKS.filter((key) => !peerRowByFk.has(key))).toEqual([]);
   });
