@@ -1,3 +1,3 @@
-// Esqueleto de WP-A01: solo prueba que el paquete compila y lintea.
-// El design system (tokens, primitivos, format) llega en el bloque E.
+// Las primitivas y los tokens se importan por subruta desde package.json.
+// El formateo compartido llega en WP-E03.
 export {};

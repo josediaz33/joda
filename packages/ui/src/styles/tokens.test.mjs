@@ -107,3 +107,28 @@ describe("RNF-USA-04 · frontend-spec.md §7 · contraste AA", () => {
     assertThemeNonTextAa(dark, "oscuro");
   });
 });
+
+describe("WP-E02 · backlog · shadcn usa roles existentes", () => {
+  test("los siete roles obligatorios son alias y no otra paleta", () => {
+    assert.equal(light["--color-background"], "var(--color-surface)");
+    assert.equal(light["--color-foreground"], "var(--color-text)");
+    assert.equal(light["--color-primary"], "var(--color-accent)");
+    assert.equal(light["--color-destructive"], "var(--color-error)");
+    assert.equal(light["--color-muted"], "var(--color-surface-elevated)");
+    assert.equal(light["--color-ring"], "var(--color-focus)");
+    assert.equal(light["--color-input"], "var(--color-border-strong)");
+  });
+
+  test("texto, foco y controles mantienen contraste en ambos temas", () => {
+    assertContrast("foreground", "background", light, "claro", 4.5);
+    assertContrast("foreground", "background", dark, "oscuro", 4.5);
+    assertContrast("muted-foreground", "muted", light, "claro", 4.5);
+    assertContrast("muted-foreground", "muted", dark, "oscuro", 4.5);
+    assertContrast("primary-foreground", "primary", light, "claro", 4.5);
+    assertContrast("primary-foreground", "primary", dark, "oscuro", 4.5);
+    assertContrast("ring", "background", light, "claro", 3);
+    assertContrast("ring", "background", dark, "oscuro", 3);
+    assertContrast("input", "background", light, "claro", 3);
+    assertContrast("input", "background", dark, "oscuro", 3);
+  });
+});
