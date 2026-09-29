@@ -1,0 +1,15 @@
+-- =====================================================================
+-- 0026_public_usage_readonly.sql
+--
+-- DEFECTO. Hallazgo de la revisión de B12: ninguna migración le daba a
+-- `joda_readonly` USAGE sobre el esquema `public`, donde viven
+-- `v_catalog_*`. Dependía del default de Postgres (USAGE para PUBLIC en
+-- una base nueva). `pnpm db:reset` recreaba `public` sin ese default, y en
+-- la base local el storefront no podía leer el catálogo.
+--
+-- CORRECCIÓN. El reset ahora recrea `public` como una base nueva
+-- (scripts/lib/tasks.mjs), y acá se concede el permiso en forma explícita:
+-- el catálogo público no depende de un default que un proveedor de
+-- Postgres administrado podría no tener. El invariante 77 lo verifica.
+-- =====================================================================
+GRANT USAGE ON SCHEMA public TO joda_readonly;
