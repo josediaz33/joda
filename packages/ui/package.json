@@ -7,11 +7,12 @@
   "exports": {
     "./tokens.css": "./src/styles/tokens.css",
     "./primitives/*": "./src/primitives/*.tsx",
+    "./format/*": "./src/format/*.ts",
     "./lib/*": "./src/lib/*.ts"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node --test src/styles/tokens.test.mjs && vitest run src/primitives/popover.test.tsx",
+    "test": "node --test src/styles/tokens.test.mjs && vitest run src/primitives/popover.test.tsx src/format",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint ."
   },

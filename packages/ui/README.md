@@ -27,3 +27,12 @@ monta Radix. `PopoverTitle` renderiza un encabezado `h2` para el título visible
 
 `tokens.test.mjs` permanece en `node:test` porque solo verifica CSS. La prueba
 de comportamiento de `Popover` usa Vitest y un DOM simulado.
+
+## Fechas
+
+Importá los formateadores desde `@joda/ui/format/date`. Para columnas SQL `date`,
+como `manufacturedAt` y `expiryAt` del DTO de inventario, usá
+`formatCalendarDate`: acepta `YYYY-MM-DD` y el ISO de medianoche UTC que emite
+Prisma para `@db.Date`, sin convertir de zona. Para campos `timestamptz`, como
+`openedAt` y `receivedAt`, usá `formatInstantDate`: convierte el instante a
+`America/Asuncion`. Ambos muestran `dd/mm/aaaa` y rechazan fechas imposibles.
