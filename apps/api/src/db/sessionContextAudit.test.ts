@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -13,7 +13,26 @@ import { describe, expect, it } from "vitest";
 // producción que fije cualquiera de esos valores: ese archivo tiene que
 // auditarse (¿de dónde sale el valor?) y agregarse acá a propósito, no
 // colarse en silencio.
-const SRC_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
+//
+// WP-M06: el directorio auditado se ancla a la raíz del monorepo, no a la
+// carpeta de este archivo. Antes era `join(dirname(<este archivo>), "..")`:
+// si el test corría desde `apps/api/dist` (un build viejo en disco), auditaba
+// el compilado — que solo tiene `.js` — encontraba cero archivos y fallaba
+// con un diff que parecía un hallazgo real. Con el `exclude` de
+// vitest.config.ts el compilado ya no se descubre, pero el guarda no debe
+// depender de eso: audita `apps/api/src` desde donde sea que corra.
+function findRepoRoot(from: string): string {
+  let dir = from;
+  while (!existsSync(join(dir, "pnpm-workspace.yaml"))) {
+    const parent = dirname(dir);
+    if (parent === dir)
+      throw new Error(`No se encontró pnpm-workspace.yaml subiendo desde ${from}`);
+    dir = parent;
+  }
+  return dir;
+}
+
+const SRC_ROOT = join(findRepoRoot(dirname(fileURLToPath(import.meta.url))), "apps/api/src");
 const SESSION_SETTING = /app\.(user_id|tenant_id|audience|session_id)/;
 
 function productionSourceFiles(dir: string): string[] {
