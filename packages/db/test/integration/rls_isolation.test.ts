@@ -1087,6 +1087,40 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       expect(rows).toEqual([{ status: "reversed" }]);
     });
 
+    // WP-B14b (0025_single_reversal.sql): un asiento se revierte una sola
+    // vez. Antes de marcar el original reversed, contabilizar una segunda
+    // reversión pasaba, y v_trial_balance sobre-revertía el saldo. Los dos
+    // borradores conviven; el segundo falla al contabilizarse.
+    it("el owner no puede contabilizar una segunda reversión del mismo asiento", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+      await api.query(
+        `INSERT INTO app.journal_entries (id, tenant_id, period_id, entry_no, entry_date, status, memo, reverses_id)
+         VALUES ('f0000000-0000-0000-0000-0000000000e3', $1, $2, 903, current_date, 'draft', 'Reversión', $3),
+                ('f0000000-0000-0000-0000-0000000000e4', $1, $2, 904, current_date, 'draft', 'Reversión repetida', $3)`,
+        [REAL_TENANT_ID, REAL_PERIOD_ID, POSTED_ENTRY_ID],
+      );
+      await insertBalancedLines(
+        "f0000000-0000-0000-0000-0000000000e3",
+        realRevenueAccountId,
+        realAccountId,
+      );
+      await insertBalancedLines(
+        "f0000000-0000-0000-0000-0000000000e4",
+        realRevenueAccountId,
+        realAccountId,
+      );
+      await api.query(
+        "UPDATE app.journal_entries SET status = 'posted', posted_at = now() WHERE id = 'f0000000-0000-0000-0000-0000000000e3'",
+      );
+      await expect(
+        api.query(
+          "UPDATE app.journal_entries SET status = 'posted', posted_at = now() WHERE id = 'f0000000-0000-0000-0000-0000000000e4'",
+        ),
+      ).rejects.toMatchObject({ code: "23505", constraint: "journal_entries_single_reversal" });
+      await api.query("ROLLBACK");
+    });
+
     // Hallazgo de la revisión cruzada de B14: el vendedor, sin
     // accounting.journal:read, ni siquiera llega al trigger. Para un UPDATE,
     // Postgres solo considera las filas que la política de SELECT deja ver
