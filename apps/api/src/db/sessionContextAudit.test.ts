@@ -15,12 +15,10 @@ import { describe, expect, it } from "vitest";
 // colarse en silencio.
 //
 // WP-M06: el directorio auditado se ancla a la raíz del monorepo, no a la
-// carpeta de este archivo. Antes era `join(dirname(<este archivo>), "..")`:
-// si el test corría desde `apps/api/dist` (un build viejo en disco), auditaba
-// el compilado — que solo tiene `.js` — encontraba cero archivos y fallaba
-// con un diff que parecía un hallazgo real. Con el `exclude` de
-// vitest.config.ts el compilado ya no se descubre, pero el guarda no debe
-// depender de eso: audita `apps/api/src` desde donde sea que corra.
+// carpeta de este archivo. Así audita `apps/api/src` corra donde corra: desde
+// un build en `apps/api/dist`, la carpeta del archivo es el compilado, donde el
+// filtro de `.ts` solo deja pasar `.d.ts` sin esos valores, y el guarda
+// fallaría sin haber encontrado nada real.
 function findRepoRoot(from: string): string {
   let dir = from;
   while (!existsSync(join(dir, "pnpm-workspace.yaml"))) {
