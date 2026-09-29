@@ -686,6 +686,69 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       });
     });
 
+    // WP-C12 (0029): la variante de una unidad serializada es la de su lote.
+    // Hasta 0029 la declaraba quien inserta: un reloj de una variante quedaba
+    // asociado al costo y al saldo de un lote de otra.
+    describe("RN-SER-04 (WP-C12): una unidad serializada es de la variante de su lote", () => {
+      const SERIAL_LOT_ID = "99999999-0000-0000-0000-0000000000d3";
+      // Dos variantes sin serializar del tenant real, sembradas por el smoke.
+      const VARIANT_A_ID = "55555555-0000-0000-0000-00000000a001";
+      const VARIANT_B_ID = "55555555-0000-0000-0000-00000000a002";
+
+      async function insertLotOfVariantA(): Promise<void> {
+        await api.query(
+          `INSERT INTO app.inventory_lots
+             (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+              fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+           VALUES ($1, $2, $3, 1, 'unit', 0, 'PYG', 1, 0, 0)`,
+          [SERIAL_LOT_ID, REAL_TENANT_ID, VARIANT_A_ID],
+        );
+      }
+
+      function insertUnit(variantId: string): Promise<{ rowCount: number | null }> {
+        return api.query(
+          `INSERT INTO app.serialized_units (tenant_id, variant_id, lot_id, serial_number)
+           VALUES ($1, $2, $3, 'SN-RLS-C12')`,
+          [REAL_TENANT_ID, variantId, SERIAL_LOT_ID],
+        );
+      }
+
+      it("el owner no puede crear una unidad que declara otra variante que la de su lote", async () => {
+        await api.query("BEGIN");
+        await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+        await insertLotOfVariantA();
+        await expect(insertUnit(VARIANT_B_ID)).rejects.toMatchObject({
+          code: "23503",
+          constraint: "serialized_units_lot_id_fkey",
+        });
+        await api.query("ROLLBACK");
+      });
+
+      it("el owner no puede cambiar la variante de un lote que ya tiene unidades serializadas", async () => {
+        await api.query("BEGIN");
+        await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+        await insertLotOfVariantA();
+        await insertUnit(VARIANT_A_ID);
+        await expect(
+          api.query("UPDATE app.inventory_lots SET variant_id = $2 WHERE id = $1", [
+            SERIAL_LOT_ID,
+            VARIANT_B_ID,
+          ]),
+        ).rejects.toMatchObject({ code: "23503", constraint: "serialized_units_lot_id_fkey" });
+        await api.query("ROLLBACK");
+      });
+
+      it("la unidad con la variante de su lote se acepta (control positivo)", async () => {
+        await api.query("BEGIN");
+        await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+        await insertLotOfVariantA();
+        const { rowCount } = await insertUnit(VARIANT_A_ID);
+        await api.query("ROLLBACK");
+
+        expect(rowCount).toBe(1);
+      });
+    });
+
     // WP-B08c (0023): la variante de un movimiento es la de su lote. Sobre
     // el granel, que no es sellado, con su uom: lo único que lo frena es la
     // FK compuesta lote+variante.

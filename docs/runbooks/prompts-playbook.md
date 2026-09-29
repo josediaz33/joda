@@ -1200,8 +1200,9 @@ Antes de tocar nada: git checkout -b feat/c12-serialized-units
 Tomá WP-C12 del backlog.
 
 Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
-docs/domain-rules.md (RN-LOT-05, política `serial`; RN-VTA-04),
-docs/especificacion-software.md (RF-INV-10).
+.claude/rules/database.md, docs/domain-rules.md (RN-SER-01…04, RN-LOT-05,
+política `serial`; RN-VTA-04), docs/especificacion-software.md (RF-INV-10),
+docs/data-model.md §4.3 (FK compuestas).
 
 Objetivo: administración de unidades serializadas (relojes) — número de
 serie único, garantía, trazabilidad de venta.
@@ -1211,20 +1212,41 @@ TENANT, no global — dos tenants pueden tener el mismo número de serie sin
 chocar entre sí.
 
 TRAMPAS DE ESTA TAREA:
+· La unicidad del serial es un invariante de esquema (`UNIQUE (tenant_id,
+  serial_number)`, ya existe), no una validación que la API tenga que
+  reimplementar. El servicio solo traduce el rechazo a un error en español.
+  Ojo: el `P2002` de Prisma cae hoy en 500 (WP-C08c): el alta usa
+  `createMany` con `skipDuplicates` (ON CONFLICT DO NOTHING) y mira el
+  conteo, sin leer antes ni depender de ese mapeo.
+· La variante de la unidad es la de su lote (RN-SER-04). Es un invariante
+  nuevo en la base: FK compuesta `(lot_id, variant_id, tenant_id)`, el
+  mismo patrón de WP-B08c para los movimientos, no un trigger. Probalo
+  rompiéndolo en `invariants.sql` y como `joda_api`. La variante la deriva
+  el servidor del lote: el input no la acepta (.strict()).
+· Dos reglas del servicio, que no son invariantes de esquema: la variante
+  tiene que ser `is_serialized` (RN-SER-02) y las unidades registradas del
+  lote no superan su `qty_initial`, contando TODAS, incluidas las vendidas
+  (RN-SER-03). La segunda tiene una carrera: dos altas simultáneas ven "2
+  de 3" y registran la cuarta. Bloqueá el lote con `FOR UPDATE` ANTES de
+  contar, y probalo. Dos peticiones simultáneas NO alcanzan como prueba (se
+  ordenan solas aunque falte el bloqueo): tomá el lote con `FOR NO KEY
+  UPDATE` desde otra transacción y verificá que el alta espera. Con `FOR
+  UPDATE` la FK del `INSERT` (`FOR KEY SHARE`) también esperaría y el test
+  pasaría igual sin el bloqueo. Sacá el bloqueo y comprobá que el test
+  falla.
 · `serial` es una política de selección de lote (RN-LOT-05): "se elige
-  explícitamente", no FIFO/FEFO. El endpoint tiene que dejar elegir la
-  unidad concreta, no aplicar una política automática por encima.
+  explícitamente", no FIFO/FEFO. Elegir la unidad al vender es de WP-C19.
 · RN-VTA-04: una línea de venta con serial_unit_id mueve EXACTAMENTE 1
   unidad. Al confirmarse, la unidad pasa a `sold` y queda vinculada a esa
   línea — esto es de la sesión de confirmación de venta (C19), pero el
   modelo de esta sesión tiene que dejar el campo listo para esa
-  vinculación.
-· La unicidad del serial es un invariante de esquema (constraint), no una
-  validación que la API tenga que reimplementar — si la migración de
-  WP-B01 ya la tiene, no la dupliques en el servicio.
+  vinculación (`sold_order_line_id`).
+· El alta suelta es un ajuste (`inventory.stock:adjust`). El flujo real es
+  otro: los seriales se cargan al recibir la compra, cuando se desempaca
+  cada reloj (WP-C15 lo exige para una variante `is_serialized`).
 
-Alcance: alta, consulta y trazabilidad de unidades serializadas. El
-consumo al vender es WP-C19.
+Alcance: alta, consulta (por serie, lote o variante) y trazabilidad de
+unidades serializadas. El consumo al vender es WP-C19.
 ```
 
 ---

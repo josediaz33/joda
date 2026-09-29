@@ -7,6 +7,7 @@ import { z } from "zod";
 import { uomSchema } from "./catalog.js";
 import { idSchema } from "./shared/id.js";
 import { moneySchema, pygAmountSchema } from "./shared/money.js";
+import { MAX_PAGE_SIZE, paginatedOutputSchema } from "./shared/pagination.js";
 
 export const lotStatusSchema = z.enum([
   "available",
@@ -195,3 +196,89 @@ export const openLotOutput = z
   })
   .strict();
 export type OpenLotOutput = z.infer<typeof openLotOutput>;
+
+// ---------------------------------------------------------------------
+// Unidades serializadas — RF-INV-10 (WP-C12): número de serie único por
+// tenant, garantía y trazabilidad de venta. Admin únicamente. `variantId` NO
+// es un campo de entrada del alta: lo deriva el servidor del lote (la
+// unidad es de la variante de su lote, RN-SER-04); aceptarlo del cliente
+// permitiría declarar otra distinta.
+// ---------------------------------------------------------------------
+// Mismos siete valores que el `CREATE TYPE serial_status` de
+// packages/db/migrations/0001_foundation.sql.
+export const serialStatusSchema = z.enum([
+  "available",
+  "reserved",
+  "sold",
+  "quarantine",
+  "damaged",
+  "returned",
+  "refurbished",
+]);
+export type SerialStatus = z.infer<typeof serialStatusSchema>;
+
+export const adminSerializedUnitSchema = z
+  .object({
+    id: idSchema,
+    variantId: idSchema,
+    lotId: idSchema.nullable(),
+    serialNumber: z.string(),
+    status: serialStatusSchema,
+    // `date` de Postgres: AAAA-MM-DD, sin hora ni zona.
+    warrantyUntil: z.string().nullable(),
+    // Vínculo con la línea de venta: lo llena la confirmación de la venta
+    // (WP-C19, RN-VTA-04); hasta entonces es siempre null.
+    soldOrderLineId: idSchema.nullable(),
+    notes: z.string().nullable(),
+    createdAt: z.string(),
+  })
+  .strict();
+export type AdminSerializedUnit = z.infer<typeof adminSerializedUnitSchema>;
+
+export const createSerializedUnitInput = z
+  .object({
+    lotId: idSchema,
+    serialNumber: z.string().trim().min(1, "El número de serie es obligatorio").max(100),
+    warrantyUntil: z.iso.date().nullable().optional(),
+    notes: z.string().trim().min(1).max(500).nullable().optional(),
+  })
+  .strict();
+export type CreateSerializedUnitInput = z.infer<typeof createSerializedUnitInput>;
+
+// Se consulta por UNO de tres criterios: un número de serie exacto, un lote
+// o una variante. Sin ninguno sería un listado de todas las unidades del
+// tenant, y con dos, ambiguo.
+export const listSerializedUnitsInput = z
+  .object({
+    serialNumber: z.string().trim().min(1).max(100).optional(),
+    lotId: idSchema.optional(),
+    variantId: idSchema.optional(),
+    status: serialStatusSchema.optional(),
+    cursor: z.string().optional(),
+    limit: z.number().int().min(1).max(MAX_PAGE_SIZE).optional(),
+  })
+  .strict()
+  .refine(
+    (input) =>
+      [input.serialNumber, input.lotId, input.variantId].filter((value) => value !== undefined)
+        .length === 1,
+    {
+      message: "Indicá exactamente uno: serialNumber, lotId o variantId.",
+      path: ["serialNumber"],
+    },
+  );
+export type ListSerializedUnitsInput = z.infer<typeof listSerializedUnitsInput>;
+
+export const listSerializedUnitsOutput = paginatedOutputSchema(adminSerializedUnitSchema);
+export type ListSerializedUnitsOutput = z.infer<typeof listSerializedUnitsOutput>;
+
+// Trazabilidad: la unidad y todos los movimientos que la mencionan
+// (`inventory_movements.serial_unit_id`), con su costo. Hoy vacío hasta que
+// exista la venta (WP-C19) o la devolución.
+export const serializedUnitHistoryInput = z.object({ serialUnitId: idSchema }).strict();
+export type SerializedUnitHistoryInput = z.infer<typeof serializedUnitHistoryInput>;
+
+export const serializedUnitHistoryOutput = z
+  .object({ unit: adminSerializedUnitSchema, movements: z.array(adminMovementSchema) })
+  .strict();
+export type SerializedUnitHistory = z.infer<typeof serializedUnitHistoryOutput>;

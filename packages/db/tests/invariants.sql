@@ -1677,6 +1677,97 @@ SELECT pg_temp.expect_fail_like(85, 'Otro producto tiene su propia variante de g
   $$,
   'aceptado');
 
+
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-C12 (0029_serialized_unit_lot_variant.sql): la variante de una unidad
+-- serializada es la de su lote, y el serial es único por tenant.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 86 ─ Una unidad serializada no puede declarar otra variante que la de su
+-- lote. Mismo defecto que el 68 para los movimientos: la variante la
+-- declaraba quien inserta, y la unidad quedaba asociada al costo y al
+-- saldo de un lote de otra variante. Lo único que puede rechazarlo es la
+-- FK compuesta lote+variante.
+SELECT pg_temp.expect_fail_like(86, 'Unidad serializada con una variante distinta de la de su lote',
+  $$INSERT INTO app.serialized_units (tenant_id, variant_id, lot_id, serial_number)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '55555555-0000-0000-0000-00000000a001',
+            '99999999-0000-0000-0000-000000000001', 'SN-INV-85')$$,
+  '%serialized_units_lot_id_fkey%');
+
+-- 87 ─ Control positivo del 86: con la variante de su lote, y sin lote
+-- (una unidad puede existir sin lote: MATCH SIMPLE no verifica nada con
+-- `lot_id` NULL), la unidad se acepta.
+SELECT pg_temp.expect_fail_like(87, 'Unidad serializada con la variante de su lote, y otra sin lote',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.serialized_units (tenant_id, variant_id, lot_id, serial_number)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001',
+              '99999999-0000-0000-0000-0000000000a1', 'SN-INV-86'),
+             ('11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', NULL, 'SN-INV-86-SIN-LOTE');
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+-- 88 ─ Un lote con unidades serializadas no cambia de variante: sin esto,
+-- el 86 se eludía cambiando la variante del lote DESPUÉS de crear la
+-- unidad. El lote es nuevo y sin movimientos, así que la FK de los
+-- movimientos (0023) no interviene: la única barrera es la de la unidad.
+SELECT pg_temp.expect_fail_like(88, 'Un lote con unidades serializadas cambia de variante',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('99999999-0000-0000-0000-000000000087', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'unit', 0, 'PYG', 1, 0, 0);
+      INSERT INTO app.serialized_units (tenant_id, variant_id, lot_id, serial_number)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001',
+              '99999999-0000-0000-0000-000000000087', 'SN-INV-87');
+      UPDATE app.inventory_lots SET variant_id = '55555555-0000-0000-0000-00000000a002'
+       WHERE id = '99999999-0000-0000-0000-000000000087';
+    END $x$
+  $$,
+  '%serialized_units_lot_id_fkey%');
+
+-- 89 ─ RN-SER-01: el número de serie es único por tenant.
+SELECT pg_temp.expect_fail_like(89, 'Dos unidades con el mismo número de serie en el mismo tenant',
+  $$INSERT INTO app.serialized_units (tenant_id, variant_id, serial_number)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '55555555-0000-0000-0000-00000000a001', 'SN-INV-88'),
+           ('11111111-1111-1111-1111-111111111111',
+            '55555555-0000-0000-0000-00000000a001', 'SN-INV-88')$$,
+  '%serialized_units_tenant_id_serial_number_key%');
+
+-- 90 ─ Control positivo del 89: el mismo número de serie en OTRO tenant se
+-- acepta. La unicidad es por tenant, no global: dos negocios distintos
+-- pueden vender un reloj con el mismo serial sin chocar entre sí.
+SELECT pg_temp.expect_fail_like(90, 'El mismo número de serie en dos tenants distintos',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('89898989-0000-0000-0000-000000000089', 'tenant-inv-89', 'Inv 89 SA', 'Inv 89');
+      INSERT INTO app.products (id, tenant_id, kind, slug, name, status)
+      VALUES ('89898989-0000-0000-0000-0000000000a1',
+              '89898989-0000-0000-0000-000000000089', 'accessory', 'inv-89', 'Inv 89', 'draft');
+      INSERT INTO app.product_variants (id, tenant_id, product_id, sku, variant_type, uom, price_pyg)
+      VALUES ('89898989-0000-0000-0000-0000000000b1',
+              '89898989-0000-0000-0000-000000000089',
+              '89898989-0000-0000-0000-0000000000a1', 'INV-89', 'unit', 'unit', 0);
+      INSERT INTO app.serialized_units (tenant_id, variant_id, serial_number)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 'SN-INV-89'),
+             ('89898989-0000-0000-0000-000000000089',
+              '89898989-0000-0000-0000-0000000000b1', 'SN-INV-89');
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'

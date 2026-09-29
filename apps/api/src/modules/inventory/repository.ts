@@ -168,25 +168,32 @@ export type LotForOpeningRow = Prisma.inventory_lotsGetPayload<{
 }>;
 
 /**
- * Bloquea la fila del lote y la lee. Prisma no expone `FOR UPDATE`, así que
- * el bloqueo va por `$queryRaw` y la lectura tipada, después, por el cliente:
- * en READ COMMITTED cada sentencia toma un snapshot nuevo, y la segunda ya
- * ve el estado que dejó quien tenía el bloqueo antes.
+ * Bloquea la fila de UN lote (`FOR UPDATE`) y dice si existe. Prisma no
+ * expone `FOR UPDATE`, así que va por `$queryRaw`; la lectura tipada se hace
+ * después, con el cliente: en READ COMMITTED cada sentencia toma un snapshot
+ * nuevo, y esa lectura (o un conteo) ya ve lo que dejó quien tenía el
+ * bloqueo antes.
  *
- * Es el único lote que se bloquea: los que nacen en la apertura son nuevos e
- * invisibles para cualquier otra transacción. Con más de un lote habría que
- * tomarlos en orden ascendente de `lot_id` y en una sola sentencia
- * (.claude/rules/api.md, "Concurrencia"). Dos aperturas del mismo lote se
- * serializan acá: la segunda espera, lee `open_for_decant` y el dominio la
- * rechaza (caso borde 5).
+ * Es un solo lote. Con más de uno habría que tomarlos en orden ascendente de
+ * `lot_id` y en una sola sentencia (.claude/rules/api.md, "Concurrencia").
+ */
+async function lockLotRow(tx: TenantTx, lotId: string): Promise<boolean> {
+  const locked = await tx.$queryRaw<{ id: string }[]>`
+    SELECT l.id FROM app.inventory_lots l WHERE l.id = ${lotId}::uuid FOR UPDATE OF l`;
+  return locked.length > 0;
+}
+
+/**
+ * Bloquea el lote a abrir y lo lee. Es el único lote que se bloquea: los que
+ * nacen en la apertura son nuevos e invisibles para cualquier otra
+ * transacción. Dos aperturas del mismo lote se serializan acá: la segunda
+ * espera, lee `open_for_decant` y el dominio la rechaza (caso borde 5).
  */
 export async function findLotForOpening(
   tx: TenantTx,
   lotId: string,
 ): Promise<LotForOpeningRow | null> {
-  const locked = await tx.$queryRaw<{ id: string }[]>`
-    SELECT l.id FROM app.inventory_lots l WHERE l.id = ${lotId}::uuid FOR UPDATE OF l`;
-  if (locked.length === 0) return null;
+  if (!(await lockLotRow(tx, lotId))) return null;
   return tx.inventory_lots.findFirst({
     where: { id: lotId },
     include: LOT_FOR_OPENING_INCLUDE,
@@ -314,4 +321,123 @@ export async function insertTransferMovement(
 
 export async function findMovementsByIds(tx: TenantTx, ids: bigint[]): Promise<MovementRow[]> {
   return tx.inventory_movements.findMany({ where: { id: { in: ids } }, orderBy: { id: "asc" } });
+}
+
+// ---------------------------------------------------------------------
+// Unidades serializadas — WP-C12 (RF-INV-10, RN-SER-01…04).
+// ---------------------------------------------------------------------
+export type SerializedUnitRow = Prisma.serialized_unitsGetPayload<Record<string, never>>;
+
+const LOT_FOR_SERIALS_INCLUDE = { product_variants: true } as const;
+
+/** El lote contra el que se registra una unidad, con la variante que dice si es serializada. */
+export type LotForSerialsRow = Prisma.inventory_lotsGetPayload<{
+  include: typeof LOT_FOR_SERIALS_INCLUDE;
+}>;
+
+/**
+ * Bloquea el lote (`FOR UPDATE`) y lo lee. RN-SER-03 (las unidades
+ * registradas no superan `qty_initial`) es una lectura seguida de una
+ * escritura: dos altas simultáneas ven "2 de 3" y registran la cuarta. El
+ * bloqueo tiene que tomarse ANTES de contar, y solo lo cierra si todas las
+ * altas del lote pasan por acá. Un `CHECK` no lo puede impedir: cuenta filas
+ * de otra tabla.
+ */
+export async function findLotForSerialRegistration(
+  tx: TenantTx,
+  lotId: string,
+): Promise<LotForSerialsRow | null> {
+  if (!(await lockLotRow(tx, lotId))) return null;
+  return tx.inventory_lots.findFirst({
+    where: { id: lotId },
+    include: LOT_FOR_SERIALS_INCLUDE,
+  });
+}
+
+/** Unidades registradas del lote, de TODOS los estados: las vendidas también cuentan (RN-SER-03). */
+export async function countSerializedUnitsOfLot(tx: TenantTx, lotId: string): Promise<number> {
+  return tx.serialized_units.count({ where: { lot_id: lotId } });
+}
+
+export interface InsertSerializedUnitInput {
+  readonly id: string;
+  readonly tenantId: string;
+  readonly variantId: string;
+  readonly lotId: string;
+  readonly serialNumber: string;
+  readonly warrantyUntil: Date | null;
+  readonly notes: string | null;
+}
+
+/**
+ * Inserta la unidad y dice si quedó creada. `skipDuplicates` es `INSERT ...
+ * ON CONFLICT DO NOTHING`: un número de serie repetido en el tenant
+ * (RN-SER-01, `UNIQUE (tenant_id, serial_number)`) no lanza, devuelve `false`.
+ * La unicidad la sigue imponiendo la base; esto solo evita que el rechazo
+ * llegue como un error interno, y sin la carrera de "leer si existe y después
+ * insertar".
+ */
+export async function insertSerializedUnit(
+  tx: TenantTx,
+  input: InsertSerializedUnitInput,
+): Promise<boolean> {
+  const { count } = await tx.serialized_units.createMany({
+    data: [
+      {
+        id: input.id,
+        tenant_id: input.tenantId,
+        variant_id: input.variantId,
+        lot_id: input.lotId,
+        serial_number: input.serialNumber,
+        warranty_until: input.warrantyUntil,
+        notes: input.notes,
+      },
+    ],
+    skipDuplicates: true,
+  });
+  return count === 1;
+}
+
+export async function findSerializedUnitById(
+  tx: TenantTx,
+  id: string,
+): Promise<SerializedUnitRow | null> {
+  return tx.serialized_units.findFirst({ where: { id } });
+}
+
+export interface ListSerializedUnitsFilter {
+  readonly serialNumber: string | undefined;
+  readonly lotId: string | undefined;
+  readonly variantId: string | undefined;
+  readonly status: SerializedUnitRow["status"] | undefined;
+  readonly cursorId: string | undefined;
+  readonly limit: number;
+}
+
+export async function listSerializedUnits(
+  tx: TenantTx,
+  filter: ListSerializedUnitsFilter,
+): Promise<SerializedUnitRow[]> {
+  return tx.serialized_units.findMany({
+    where: {
+      serial_number: filter.serialNumber,
+      lot_id: filter.lotId,
+      variant_id: filter.variantId,
+      status: filter.status,
+    },
+    orderBy: [{ created_at: "desc" }, { id: "desc" }],
+    ...(filter.cursorId && { cursor: { id: filter.cursorId }, skip: 1 }),
+    take: filter.limit + 1,
+  });
+}
+
+/** Movimientos que mencionan la unidad, en orden de ocurrencia. */
+export async function listMovementsBySerialUnit(
+  tx: TenantTx,
+  serialUnitId: string,
+): Promise<MovementRow[]> {
+  return tx.inventory_movements.findMany({
+    where: { serial_unit_id: serialUnitId },
+    orderBy: [{ occurred_at: "asc" }, { id: "asc" }],
+  });
 }

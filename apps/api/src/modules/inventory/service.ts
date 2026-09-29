@@ -1,32 +1,47 @@
-import type {
-  AdminMovement,
-  CreateAdjustmentInput,
-  LotHistory,
-  LotHistoryInput,
-  OpenLotInput,
-  OpenLotOutput,
-  StockAvailability,
-  StockAvailabilityInput,
+import {
+  DEFAULT_PAGE_SIZE,
+  type AdminMovement,
+  type AdminSerializedUnit,
+  type CreateAdjustmentInput,
+  type CreateSerializedUnitInput,
+  type ListSerializedUnitsInput,
+  type ListSerializedUnitsOutput,
+  type LotHistory,
+  type LotHistoryInput,
+  type OpenLotInput,
+  type OpenLotOutput,
+  type SerializedUnitHistory,
+  type SerializedUnitHistoryInput,
+  type StockAvailability,
+  type StockAvailabilityInput,
 } from "@joda/contracts";
 import {
   Money,
   Quantity,
   openLot as planLotOpening,
   planInventoryAdjustment,
+  planSerializedUnitRegistration,
   type Clock,
   type IdGenerator,
   type LotOpening,
   type LotOpeningError,
   type LotOpeningMovement,
+  type SerializedUnitRegistrationError,
 } from "@joda/domain";
 import type { PrismaClient } from "@joda/db";
 import { recordAuditEntry } from "../../db/audit.js";
+import { decodeCursor, encodeCursor } from "../../db/cursor.js";
 import { withIdempotentTx } from "../../db/withIdempotentTx.js";
 import { withTenantTx, type TenantTx, type TenantTxContext } from "../../db/withTenantTx.js";
 import { buildIdempotencyRequest } from "../../middleware/idempotency.js";
 import { appError, toTRPCError } from "../../middleware/errorMapper.js";
 import type { RequestContext } from "../../trpc/context.js";
-import { toAdminLot, toAdminMovement, toStockAvailability } from "./mappers.js";
+import {
+  toAdminLot,
+  toAdminMovement,
+  toAdminSerializedUnit,
+  toStockAvailability,
+} from "./mappers.js";
 import * as repo from "./repository.js";
 
 const NOT_FOUND_ERROR = appError("NOT_FOUND", 404, "No encontrado.");
@@ -430,4 +445,160 @@ async function buildOpenLotOutput(
     bulkLot: toAdminLot(bulkRow),
     movements: movementRows.map(toAdminMovement),
   };
+}
+
+// ---------------------------------------------------------------------
+// Unidades serializadas — RF-INV-10, RN-SER-01…04 (WP-C12). Alta,
+// consulta y trazabilidad. El consumo al vender es WP-C19 (RN-VTA-04).
+// ---------------------------------------------------------------------
+const VARIANT_NOT_SERIALIZED_ERROR = appError(
+  "CONFLICT_VARIANT_NOT_SERIALIZED",
+  409,
+  "La variante de este lote no es serializada: no lleva unidades con número de serie.",
+);
+
+const SERIAL_DUPLICATE_ERROR = appError(
+  "CONFLICT_SERIAL_DUPLICATE",
+  409,
+  "Ya existe una unidad con ese número de serie.",
+);
+
+const INVALID_CURSOR_ERROR = appError(
+  "VALIDATION_INVALID_CURSOR",
+  400,
+  "El cursor de paginación no es válido.",
+);
+
+function serialRegistrationError(error: SerializedUnitRegistrationError) {
+  switch (error.code) {
+    case "VARIANT_NOT_SERIALIZED":
+      return VARIANT_NOT_SERIALIZED_ERROR;
+    case "LOT_SERIAL_CAPACITY_EXCEEDED":
+      return appError(
+        "CONFLICT_LOT_SERIAL_CAPACITY",
+        409,
+        "El lote ya tiene registradas todas sus unidades.",
+        { capacity: error.capacity.value, registered: error.registered },
+      );
+  }
+}
+
+/**
+ * RN-SER-02 y RN-SER-03. La unidad es de la variante de su lote (RN-SER-04):
+ * la deriva el servidor, no se acepta del cliente. El lote se bloquea ANTES
+ * de contar las unidades registradas: sin eso, dos altas simultáneas ven "2
+ * de 3" y registran la cuarta.
+ */
+export async function createSerializedUnit(
+  db: PrismaClient,
+  deps: InventoryServiceDeps,
+  ctx: RequestContext,
+  input: CreateSerializedUnitInput,
+): Promise<AdminSerializedUnit> {
+  const session = requireStaffContext(ctx);
+  const idempotency = buildIdempotencyRequest(ctx.req, input);
+
+  const { result } = await withIdempotentTx(db, session, idempotency, async (tx) => {
+    const lot = await repo.findLotForSerialRegistration(tx, input.lotId);
+    if (!lot) throw toTRPCError(NOT_FOUND_ERROR);
+
+    const registeredCount = await repo.countSerializedUnitsOfLot(tx, lot.id);
+    const plan = planSerializedUnitRegistration({
+      variantIsSerialized: lot.product_variants.is_serialized,
+      // Un lote en `ml` no tiene variante serializada (CHECK de product_variants):
+      // llega acá solo para que el dominio lo rechace como VARIANT_NOT_SERIALIZED.
+      lotQtyInitial:
+        lot.uom === "unit"
+          ? Quantity.units(lot.qty_initial.toNumber())
+          : Quantity.ml(lot.qty_initial.toNumber()),
+      registeredCount,
+    });
+    if (!plan.ok) throw toTRPCError(serialRegistrationError(plan.error));
+
+    const id = deps.idGenerator.next();
+    const created = await repo.insertSerializedUnit(tx, {
+      id,
+      tenantId: session.tenantId,
+      variantId: lot.variant_id,
+      lotId: lot.id,
+      serialNumber: input.serialNumber,
+      warrantyUntil: input.warrantyUntil ? new Date(`${input.warrantyUntil}T00:00:00.000Z`) : null,
+      notes: input.notes ?? null,
+    });
+    if (!created) throw toTRPCError(SERIAL_DUPLICATE_ERROR);
+
+    await recordAuditEntry(tx, {
+      tenantId: session.tenantId,
+      actorId: session.userId,
+      audience: session.audience,
+      action: "inventory.serial.create",
+      entity: "serialized_units",
+      entityId: id,
+      before: null,
+      after: {
+        lotId: lot.id,
+        variantId: lot.variant_id,
+        serialNumber: input.serialNumber,
+        warrantyUntil: input.warrantyUntil ?? null,
+      },
+      ip: ctx.req.ip,
+      userAgent: ctx.req.headers["user-agent"] ?? null,
+      requestId: ctx.requestId,
+    });
+
+    const row = await repo.findSerializedUnitById(tx, id);
+    if (!row) throw new Error(`unidad ${id} no se pudo releer dentro de la misma transacción`);
+    return { result: toAdminSerializedUnit(row), statusCode: 200 };
+  });
+
+  return result;
+}
+
+export async function listSerializedUnits(
+  db: PrismaClient,
+  ctx: RequestContext,
+  input: ListSerializedUnitsInput,
+): Promise<ListSerializedUnitsOutput> {
+  const session = requireStaffContext(ctx);
+  const limit = input.limit ?? DEFAULT_PAGE_SIZE;
+  let cursorId: string | undefined;
+  if (input.cursor !== undefined) {
+    const decoded = decodeCursor(input.cursor);
+    if (decoded === null) throw toTRPCError(INVALID_CURSOR_ERROR);
+    cursorId = decoded;
+  }
+
+  return withTenantTx(db, session, async (tx) => {
+    const rows = await repo.listSerializedUnits(tx, {
+      serialNumber: input.serialNumber,
+      lotId: input.lotId,
+      variantId: input.variantId,
+      status: input.status,
+      cursorId,
+      limit,
+    });
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const lastRow = page.at(-1);
+    return {
+      items: page.map(toAdminSerializedUnit),
+      nextCursor: hasMore && lastRow ? encodeCursor(lastRow.id) : null,
+    };
+  });
+}
+
+/** Trazabilidad de una unidad: sus datos y todos los movimientos que la mencionan. */
+export async function getSerializedUnitHistory(
+  db: PrismaClient,
+  ctx: RequestContext,
+  input: SerializedUnitHistoryInput,
+): Promise<SerializedUnitHistory> {
+  const session = requireStaffContext(ctx);
+  return withTenantTx(db, session, async (tx) => {
+    const unit = await repo.findSerializedUnitById(tx, input.serialUnitId);
+    if (!unit) throw toTRPCError(NOT_FOUND_ERROR);
+
+    const movementRows = await repo.listMovementsBySerialUnit(tx, unit.id);
+    return { unit: toAdminSerializedUnit(unit), movements: movementRows.map(toAdminMovement) };
+  });
 }

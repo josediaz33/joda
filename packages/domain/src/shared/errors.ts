@@ -122,6 +122,13 @@ export class InvalidLotOpeningInputError extends DomainError {
   }
 }
 
+/** planSerializedUnitRegistration() (inventory/serializedUnit.ts, RN-SER-03) con una capacidad que no son unidades enteras de al menos 1, o con unidades ya registradas negativas o no enteras: argumento fuera de rango, no un fallo que el negocio contemple. */
+export class InvalidSerializedUnitInputError extends DomainError {
+  constructor(message: string) {
+    super("INVALID_SERIALIZED_UNIT_INPUT", message);
+  }
+}
+
 /** computeManualHoldExpiresAt() (sales/reservation.ts, RN-RES-02) con days no positivo o no finito: argumento fuera de rango, no un fallo que el negocio contemple. */
 export class InvalidReservationInputError extends DomainError {
   constructor(message: string) {

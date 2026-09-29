@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  adminSerializedUnitSchema,
   createAdjustmentInput,
+  createSerializedUnitInput,
+  listSerializedUnitsInput,
   movementIdSchema,
   openLotInput,
   openLotOutput,
@@ -121,5 +124,85 @@ describe("inventory — openLotOutput (RN-LOT-02, caso borde 21: sourceLot nulo 
     expect(() =>
       openLotOutput.parse({ sourceLot: null, openedSealedLot: lot, movements: [] }),
     ).toThrow();
+  });
+});
+
+describe("inventory — createSerializedUnitInput (RF-INV-10, RN-SER-01/04)", () => {
+  const lotId = "11111111-1111-4111-a111-111111111111";
+
+  it("acepta lote y número de serie, con garantía y notas opcionales", () => {
+    expect(() => createSerializedUnitInput.parse({ lotId, serialNumber: "SN-001" })).not.toThrow();
+    expect(() =>
+      createSerializedUnitInput.parse({
+        lotId,
+        serialNumber: "SN-001",
+        warrantyUntil: "2028-03-10",
+        notes: "caja original",
+      }),
+    ).not.toThrow();
+  });
+
+  it("recorta los espacios del número de serie antes de validarlo", () => {
+    expect(
+      createSerializedUnitInput.parse({ lotId, serialNumber: "  SN-001  " }).serialNumber,
+    ).toBe("SN-001");
+  });
+
+  it("rechaza un número de serie vacío o de solo espacios", () => {
+    expect(() => createSerializedUnitInput.parse({ lotId, serialNumber: "" })).toThrow();
+    expect(() => createSerializedUnitInput.parse({ lotId, serialNumber: "   " })).toThrow();
+  });
+
+  it("rechaza una garantía que no es una fecha AAAA-MM-DD", () => {
+    expect(() =>
+      createSerializedUnitInput.parse({
+        lotId,
+        serialNumber: "SN-001",
+        warrantyUntil: "10/03/2028",
+      }),
+    ).toThrow();
+  });
+
+  it("rechaza variantId: la variante la deriva el servidor del lote, no se acepta del cliente (.strict())", () => {
+    expect(() =>
+      createSerializedUnitInput.parse({ lotId, serialNumber: "SN-001", variantId: lotId }),
+    ).toThrow();
+  });
+});
+
+describe("inventory — listSerializedUnitsInput (RF-INV-10: se consulta por serie, lote o variante)", () => {
+  const id = "11111111-1111-4111-a111-111111111111";
+
+  it("acepta exactamente uno de serialNumber, lotId o variantId", () => {
+    expect(() => listSerializedUnitsInput.parse({ serialNumber: "SN-001" })).not.toThrow();
+    expect(() => listSerializedUnitsInput.parse({ lotId: id })).not.toThrow();
+    expect(() =>
+      listSerializedUnitsInput.parse({ variantId: id, status: "available" }),
+    ).not.toThrow();
+  });
+
+  it("rechaza no indicar ninguno: sería un listado de todas las unidades del tenant", () => {
+    expect(() => listSerializedUnitsInput.parse({})).toThrow();
+    expect(() => listSerializedUnitsInput.parse({ status: "sold" })).toThrow();
+  });
+
+  it("rechaza indicar dos: es ambiguo", () => {
+    expect(() => listSerializedUnitsInput.parse({ lotId: id, variantId: id })).toThrow();
+  });
+});
+
+describe("inventory — adminSerializedUnitSchema (sin claves de costo)", () => {
+  it("solo expone los campos de la unidad, ninguno de costo, proveedor ni margen", () => {
+    expect(Object.keys(adminSerializedUnitSchema.shape).sort()).toEqual([
+      "createdAt",
+      "id",
+      "lotId",
+      "notes",
+      "serialNumber",
+      "soldOrderLineId",
+      "status",
+      "variantId",
+      "warrantyUntil",
+    ]);
   });
 });

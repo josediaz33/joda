@@ -57,7 +57,7 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
   // riesgo que docs/backlog.md señaló para `pg_temp.expect_fail()` en
   // packages/db/tests/invariants.sql ("ningún error no prueba que un
   // invariante se cumple").
-  it("de verdad recorrió los treinta y cinco procedimientos montados hoy (example.ping.* + auth.session.* + auth.mfa.* + catalog.*, WP-C08 + inventory.*, WP-C10 y WP-C11)", () => {
+  it("de verdad recorrió los treinta y ocho procedimientos montados hoy (example.ping.* + auth.session.* + auth.mfa.* + catalog.*, WP-C08 + inventory.*, WP-C10, WP-C11 y WP-C12)", () => {
     const procedures = flattenProcedures(createAppRouter(null));
 
     expect(Object.keys(procedures).sort()).toEqual([
@@ -95,6 +95,9 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
       "inventory.adjustment.create",
       "inventory.lot.history",
       "inventory.lot.open",
+      "inventory.serial.create",
+      "inventory.serial.history",
+      "inventory.serial.list",
       "inventory.stock.available",
     ]);
   });
@@ -109,6 +112,21 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
 
     expect(procedures["inventory.lot.open"]?._def.meta?.permission).toBe(
       "inventory.decant:execute",
+    );
+  });
+
+  // WP-C12: el alta suelta de una unidad es un ajuste; leer y trazar exigen
+  // poder ver stock. El flujo real (cargar los seriales al recibir la
+  // compra) tendrá el permiso de recepción, en WP-C15.
+  it("inventory.serial.* exige inventory.stock:adjust para el alta y inventory.stock:read para consultar (RF-INV-10)", () => {
+    const procedures = flattenProcedures(createAppRouter(null));
+
+    expect(procedures["inventory.serial.create"]?._def.meta?.permission).toBe(
+      "inventory.stock:adjust",
+    );
+    expect(procedures["inventory.serial.list"]?._def.meta?.permission).toBe("inventory.stock:read");
+    expect(procedures["inventory.serial.history"]?._def.meta?.permission).toBe(
+      "inventory.stock:read",
     );
   });
 });

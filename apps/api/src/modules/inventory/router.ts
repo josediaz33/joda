@@ -1,10 +1,16 @@
 import {
   adminMovementSchema,
+  adminSerializedUnitSchema,
   createAdjustmentInput,
+  createSerializedUnitInput,
+  listSerializedUnitsInput,
+  listSerializedUnitsOutput,
   lotHistoryInput,
   lotHistoryOutput,
   openLotInput,
   openLotOutput,
+  serializedUnitHistoryInput,
+  serializedUnitHistoryOutput,
   stockAvailabilityInput,
   stockAvailabilitySchema,
 } from "@joda/contracts";
@@ -71,7 +77,31 @@ export function createInventoryRouter(db: PrismaClient | null, deps: InventorySe
       .mutation(({ ctx, input }) => inventoryService.createAdjustment(requireDb(db), ctx, input)),
   });
 
-  return router({ stock, lot, adjustment });
+  // WP-C12. El alta suelta es un ajuste de inventario (`inventory.stock:adjust`);
+  // el flujo real carga los seriales al recibir la compra (WP-C15).
+  const serial = router({
+    create: staffProcedure
+      .meta(ADJUST)
+      .input(createSerializedUnitInput)
+      .output(adminSerializedUnitSchema)
+      .mutation(({ ctx, input }) =>
+        inventoryService.createSerializedUnit(requireDb(db), requireDeps(deps), ctx, input),
+      ),
+    list: staffProcedure
+      .meta(READ)
+      .input(listSerializedUnitsInput)
+      .output(listSerializedUnitsOutput)
+      .query(({ ctx, input }) => inventoryService.listSerializedUnits(requireDb(db), ctx, input)),
+    history: staffProcedure
+      .meta(READ)
+      .input(serializedUnitHistoryInput)
+      .output(serializedUnitHistoryOutput)
+      .query(({ ctx, input }) =>
+        inventoryService.getSerializedUnitHistory(requireDb(db), ctx, input),
+      ),
+  });
+
+  return router({ stock, lot, adjustment, serial });
 }
 
 export type InventoryRouter = ReturnType<typeof createInventoryRouter>;

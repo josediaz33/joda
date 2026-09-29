@@ -86,7 +86,7 @@ Bloqueo temporal de stock, **separado del ledger**. El carrito no reserva; la re
 
 ### Unidad serializada (`serialized_units`)
 
-Un reloj concreto, con número de serie, garantía y trazabilidad de dueño. Un reloj **no es** `cantidad = 1`: es una entidad.
+Un reloj concreto, con número de serie, garantía y trazabilidad de dueño. Un reloj **no es** `cantidad = 1`: es una entidad. El número de serie es único por tenant, la unidad es de la variante de su lote, y las unidades registradas de un lote no superan su `qty_initial`. Ver RN-SER-01…04.
 
 ### Política de asignación (`allocation_policy`)
 

@@ -272,6 +272,37 @@ Ante empate, desempata el `id` ascendente.
 
 ---
 
+## RN-SER — Unidades serializadas
+
+Un reloj de USD 800 no es "cantidad = 1": lleva número de serie, garantía y su propia trazabilidad de venta. Cada reloj es una fila de `serialized_units`, atada al lote que lo trajo (WP-C12, RF-INV-10).
+
+### RN-SER-01 · El número de serie es único por tenant
+
+`UNIQUE (tenant_id, serial_number)`. Dos tenants pueden tener el mismo número de serie sin chocar entre sí: la unicidad no es global. Impuesto por la base; el servicio no lo reimplementa, solo traduce el rechazo a un error en español.
+
+### RN-SER-02 · Solo una variante serializada lleva unidades
+
+Una unidad se registra contra un lote de una variante con `is_serialized = true`. Registrar una sobre un lote de otra variante (un sellado, un insumo, un granel) se rechaza. Una variante serializada se mide en unidades enteras (`CHECK (NOT is_serialized OR uom = 'unit')`).
+
+### RN-SER-03 · Las unidades registradas de un lote no superan su `qty_initial`
+
+Cuentan **todas** las unidades del lote, incluidas las vendidas, en cuarentena o devueltas: una unidad vendida sigue siendo una de las que el lote trajo. Un lote de tres relojes admite tres unidades en total, no tres "disponibles".
+
+**Tiene una carrera.** Dos altas simultáneas sobre un lote con 2 de 3 ven "2 de 3" y registran la cuarta. Un `CHECK` no lo puede impedir, porque cuenta filas de otra tabla. La API bloquea el lote (`SELECT ... FOR UPDATE`) **antes** de contar, y solo lo cierra si todas las altas del lote pasan por ese bloqueo.
+
+### RN-SER-04 · Una unidad es de la variante de su lote
+
+`serialized_units.variant_id` es el `variant_id` de su `lot_id`. Impuesto por la base con una FK compuesta `(lot_id, variant_id, tenant_id) → inventory_lots (id, variant_id, tenant_id)` (WP-C12, `0029`), el mismo patrón que la variante de un movimiento (WP-B08c). La variante de la unidad la deriva el servidor del lote; nunca se acepta del cliente. Un lote con unidades serializadas no cambia de variante. Una unidad puede existir sin lote (`lot_id` nulo).
+
+Lo mismo vale para `stock_reservations` (lote y unidad serializada de la reserva, de la variante de la reserva): lo hereda WP-C18.
+
+### Cómo se cargan y cómo se venden
+
+- **Se cargan al recibir.** Los seriales se cargan cuando se desempaca cada reloj, al recibir la compra: la recepción de una variante `is_serialized` exige cargar los seriales (WP-C15). El alta suelta (`inventory.serial.create`) es para corregir o completar, y es un ajuste (`inventory.stock:adjust`).
+- **Se venden eligiendo la unidad.** `serial` es una política de selección (RN-LOT-05): la unidad se elige explícitamente, no la elige FIFO ni FEFO. Vender una variante serializada exige elegir la unidad (WP-C19), y una línea con `serial_unit_id` mueve exactamente una unidad (RN-VTA-04).
+
+---
+
 ## RN-FRA — Fraccionamiento
 
 ### RN-FRA-01 · Los dos momentos

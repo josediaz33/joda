@@ -796,4 +796,366 @@ describe("WP-C10 · módulo inventario (RF-INV-03…05)", () => {
     );
     expect(children.rows[0].n).toBe(1);
   });
+
+  // -------------------------------------------------------------------
+  // WP-C12 — unidades serializadas (RF-INV-10, RN-SER-01…04).
+  // -------------------------------------------------------------------
+  // Un reloj: producto `watch` con una variante `unit` serializada.
+  let watchCounter = 0;
+  async function createSerializedVariant(): Promise<string> {
+    const suffix = `${Date.now()}-${++watchCounter}`;
+    const category = await mutateOk<{ id: string }>("catalog.category.create", {
+      slug: `relojes-${suffix}`,
+      name: "Relojes",
+    });
+    const product = await mutateOk<{ id: string }>("catalog.product.create", {
+      kind: "watch",
+      slug: `reloj-${suffix}`,
+      name: "Reloj automático",
+      categoryIds: [category.id],
+      primaryCategoryId: category.id,
+      watchDetails: {
+        movement: "automatic",
+        caseMaterial: "acero",
+        caseDiameterMm: 40,
+        waterResistanceM: 100,
+        strapMaterial: null,
+        crystal: "zafiro",
+        warrantyMonths: 24,
+        requiresSerial: true,
+      },
+    });
+    const variant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: `SKU-RELOJ-${suffix}`,
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "3000000",
+      isSerialized: true,
+    });
+    return variant.id;
+  }
+
+  /**
+   * Prueba que `request` toma el bloqueo del lote ANTES de leer. Otra
+   * transacción tiene el lote con `FOR NO KEY UPDATE`: la petición tiene que
+   * quedarse esperando mientras dure, y completarse recién al soltarlo.
+   *
+   * Es `NO KEY UPDATE` y no `UPDATE` a propósito: el `INSERT` de una unidad
+   * toma `FOR KEY SHARE` sobre el lote por la FK, y `FOR UPDATE` lo haría
+   * esperar ahí aunque la petición no hubiera tomado su propio bloqueo (lo
+   * verifiqué sacándolo). Con `NO KEY UPDATE` la FK no espera, así que solo
+   * una petición que bloquea el lote antes de contar queda detenida. Dos
+   * peticiones simultáneas no alcanzan como prueba: se ordenan solas.
+   * Devuelve el status HTTP con el que terminó.
+   */
+  async function requestWaitsForLotLock(
+    lotId: string,
+    request: () => Promise<{ statusCode: number }>,
+  ): Promise<number> {
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    try {
+      await testDb.superuserClient.query(
+        "SELECT id FROM app.inventory_lots WHERE id = $1 FOR NO KEY UPDATE",
+        [lotId],
+      );
+      let settled = false;
+      const pending = request().then((response) => {
+        settled = true;
+        return response;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      expect(settled).toBe(false);
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+      return (await pending).statusCode;
+    } finally {
+      if (!released) await testDb.superuserClient.query("ROLLBACK");
+    }
+  }
+
+  type SerialUnit = import("@joda/contracts").AdminSerializedUnit;
+
+  function createSerial(lotId: string, serialNumber: string, extra: Record<string, unknown> = {}) {
+    return mutate("inventory.serial.create", { lotId, serialNumber, ...extra });
+  }
+
+  it("RF-INV-10 · el alta registra la unidad con la variante de su lote, la garantía y sin venta todavía", async () => {
+    const variantId = await createSerializedVariant();
+    const lotId = await seedSealedLot(variantId, { qtyInitial: 3, unitCostPyg: 1_500_000 });
+
+    const response = await createSerial(lotId, "  SN-ALTA-001  ", { warrantyUntil: "2028-03-10" });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.data).toMatchObject({
+      variantId,
+      lotId,
+      serialNumber: "SN-ALTA-001",
+      status: "available",
+      warrantyUntil: "2028-03-10",
+      soldOrderLineId: null,
+      notes: null,
+    });
+  });
+
+  it("RN-SER-01 · el número de serie es único por tenant: repetirlo en el mismo tenant se rechaza, aunque sea en otro lote", async () => {
+    const variantId = await createSerializedVariant();
+    const lotA = await seedSealedLot(variantId, { qtyInitial: 2, unitCostPyg: 1_500_000 });
+    const lotB = await seedSealedLot(variantId, { qtyInitial: 2, unitCostPyg: 1_500_000 });
+    expect((await createSerial(lotA, "SN-UNICO-001")).statusCode).toBe(200);
+
+    const duplicate = await createSerial(lotB, "SN-UNICO-001");
+
+    expect(duplicate.statusCode).toBe(409);
+    expect(duplicate.json().error.data.appCode).toBe("CONFLICT_SERIAL_DUPLICATE");
+    const stored = await testDb.superuserClient.query(
+      `SELECT count(*)::int AS n FROM app.serialized_units
+        WHERE tenant_id = $1 AND serial_number = 'SN-UNICO-001'`,
+      [TENANT_ID],
+    );
+    expect(stored.rows[0].n).toBe(1);
+  });
+
+  it("RN-SER-01 · el número de serie NO es único global: otro tenant con el mismo serial no choca con este", async () => {
+    const variantId = await createSerializedVariant();
+    const lotId = await seedSealedLot(variantId, { qtyInitial: 1, unitCostPyg: 1_500_000 });
+    const otherTenant = "88888888-8888-4888-a888-888888888812";
+    await testDb.superuserClient.query(
+      `INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+       VALUES ($1, 'otro-tenant-c12', 'Otro SA', 'Otro') ON CONFLICT DO NOTHING`,
+      [otherTenant],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.products (id, tenant_id, kind, slug, name, status)
+       VALUES ('88888888-8888-4888-a888-8888888888a1', $1, 'accessory', 'otro-c12', 'Otro', 'draft')
+       ON CONFLICT DO NOTHING`,
+      [otherTenant],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.product_variants (id, tenant_id, product_id, sku, variant_type, uom, price_pyg)
+       VALUES ('88888888-8888-4888-a888-8888888888b1', $1, '88888888-8888-4888-a888-8888888888a1',
+               'OTRO-C12', 'unit', 'unit', 0) ON CONFLICT DO NOTHING`,
+      [otherTenant],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.serialized_units (tenant_id, variant_id, serial_number)
+       VALUES ($1, '88888888-8888-4888-a888-8888888888b1', 'SN-COMPARTIDO-001')`,
+      [otherTenant],
+    );
+
+    const response = await createSerial(lotId, "SN-COMPARTIDO-001");
+
+    expect(response.statusCode).toBe(200);
+  });
+
+  it("RN-SER-02 · un lote de una variante que no es serializada se rechaza", async () => {
+    const sealedVariantId = await createSealedVariant();
+    const lotId = await seedSealedLot(sealedVariantId, { qtyInitial: 3, unitCostPyg: 500_000 });
+
+    const response = await createSerial(lotId, "SN-NO-SERIALIZADA");
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_VARIANT_NOT_SERIALIZED");
+  });
+
+  it("RN-SER-02 · un lote de granel en ml también se rechaza como no serializado, sin error interno", async () => {
+    const { bulkVariantId } = await createSealedAndBulkVariants();
+    const bulkLotId = await seedBulkLot(bulkVariantId, { qtyInitial: 100.5, unitCostPyg: 14_965 });
+
+    const response = await createSerial(bulkLotId, "SN-GRANEL");
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_VARIANT_NOT_SERIALIZED");
+  });
+
+  it("RN-SER-03 · un lote de tres acepta tres unidades y rechaza la cuarta", async () => {
+    const variantId = await createSerializedVariant();
+    const lotId = await seedSealedLot(variantId, { qtyInitial: 3, unitCostPyg: 1_500_000 });
+    for (const serial of ["SN-CAP-1", "SN-CAP-2", "SN-CAP-3"]) {
+      expect((await createSerial(lotId, serial)).statusCode).toBe(200);
+    }
+
+    const fourth = await createSerial(lotId, "SN-CAP-4");
+
+    expect(fourth.statusCode).toBe(409);
+    expect(fourth.json().error.data.appCode).toBe("CONFLICT_LOT_SERIAL_CAPACITY");
+    expect(fourth.json().error.data.details).toEqual({ capacity: 3, registered: 3 });
+  });
+
+  it("RN-SER-03 · cuentan TODAS las unidades del lote, las vendidas también: con una vendida, el cupo sigue lleno", async () => {
+    const variantId = await createSerializedVariant();
+    const lotId = await seedSealedLot(variantId, { qtyInitial: 2, unitCostPyg: 1_500_000 });
+    const first = await createSerial(lotId, "SN-VEND-1");
+    await createSerial(lotId, "SN-VEND-2");
+    await testDb.superuserClient.query(
+      `UPDATE app.serialized_units SET status = 'sold' WHERE id = $1`,
+      [first.json().result.data.id],
+    );
+
+    const third = await createSerial(lotId, "SN-VEND-3");
+
+    expect(third.statusCode).toBe(409);
+    expect(third.json().error.data.appCode).toBe("CONFLICT_LOT_SERIAL_CAPACITY");
+  });
+
+  it("RN-SER-03 · dos altas simultáneas sobre el último cupo: una gana, la otra se rechaza, y el lote no pasa de tres", async () => {
+    // El resultado de punta a punta con dos altas a la vez. Ojo: por sí solo
+    // NO prueba el bloqueo, porque las dos peticiones se ordenan solas y este
+    // test pasa igual sin el FOR UPDATE (verificado sacándolo). Lo prueba el
+    // test de abajo, que retiene el lote desde otra transacción.
+    const variantId = await createSerializedVariant();
+    const lotId = await seedSealedLot(variantId, { qtyInitial: 3, unitCostPyg: 1_500_000 });
+    await createSerial(lotId, "SN-RACE-1");
+    await createSerial(lotId, "SN-RACE-2");
+
+    const responses = await Promise.all([
+      createSerial(lotId, "SN-RACE-3"),
+      createSerial(lotId, "SN-RACE-4"),
+    ]);
+
+    expect(responses.map((r) => r.statusCode).sort()).toEqual([200, 409]);
+    const stored = await testDb.superuserClient.query(
+      `SELECT count(*)::int AS n FROM app.serialized_units WHERE lot_id = $1`,
+      [lotId],
+    );
+    expect(stored.rows[0].n).toBe(3);
+  });
+
+  it("RN-SER-03 · el alta toma el bloqueo del lote ANTES de contar: con el lote tomado por otra transacción, espera", async () => {
+    const variantId = await createSerializedVariant();
+    const lotId = await seedSealedLot(variantId, { qtyInitial: 3, unitCostPyg: 1_500_000 });
+    await createSerial(lotId, "SN-LOCK-1");
+    await createSerial(lotId, "SN-LOCK-2");
+
+    const statusCode = await requestWaitsForLotLock(lotId, () => createSerial(lotId, "SN-LOCK-3"));
+
+    expect(statusCode).toBe(200);
+  });
+
+  it("RF-INV-10 · un lote inexistente (o de otro tenant) da 404", async () => {
+    const response = await createSerial("00000000-0000-4000-a000-000000000000", "SN-FANTASMA");
+
+    expect(response.statusCode).toBe(404);
+  });
+
+  it("RF-INV-10 · el alta rechaza que el cliente declare la variante (.strict()): la deriva el lote", async () => {
+    const variantId = await createSerializedVariant();
+    const lotId = await seedSealedLot(variantId, { qtyInitial: 1, unitCostPyg: 1_500_000 });
+
+    const response = await createSerial(lotId, "SN-VARIANTE", { variantId });
+
+    expect(response.statusCode).toBe(400);
+  });
+
+  it("RF-INV-10 · se consulta por número de serie exacto y por lote", async () => {
+    const variantId = await createSerializedVariant();
+    const lotId = await seedSealedLot(variantId, { qtyInitial: 3, unitCostPyg: 1_500_000 });
+    await createSerial(lotId, "SN-QRY-1");
+    await createSerial(lotId, "SN-QRY-2");
+
+    const bySerial = await call<{ items: SerialUnit[] }>("inventory.serial.list", {
+      serialNumber: "SN-QRY-2",
+    });
+    const byLot = await call<{ items: SerialUnit[]; nextCursor: string | null }>(
+      "inventory.serial.list",
+      { lotId },
+    );
+
+    expect(bySerial.items.map((u) => u.serialNumber)).toEqual(["SN-QRY-2"]);
+    expect(byLot.items.map((u) => u.serialNumber).sort()).toEqual(["SN-QRY-1", "SN-QRY-2"]);
+    expect(byLot.nextCursor).toBeNull();
+  });
+
+  it("RF-INV-10 · se consulta por variante con paginación por cursor, sin repetir ni saltear unidades", async () => {
+    const variantId = await createSerializedVariant();
+    const lotId = await seedSealedLot(variantId, { qtyInitial: 3, unitCostPyg: 1_500_000 });
+    for (const serial of ["SN-PAG-1", "SN-PAG-2", "SN-PAG-3"]) await createSerial(lotId, serial);
+
+    const first = await call<{ items: SerialUnit[]; nextCursor: string | null }>(
+      "inventory.serial.list",
+      { variantId, limit: 2 },
+    );
+    const second = await call<{ items: SerialUnit[]; nextCursor: string | null }>(
+      "inventory.serial.list",
+      { variantId, limit: 2, cursor: first.nextCursor },
+    );
+
+    expect(first.items).toHaveLength(2);
+    expect(first.nextCursor).not.toBeNull();
+    expect(second.items).toHaveLength(1);
+    expect(second.nextCursor).toBeNull();
+    expect([...first.items, ...second.items].map((u) => u.serialNumber).sort()).toEqual([
+      "SN-PAG-1",
+      "SN-PAG-2",
+      "SN-PAG-3",
+    ]);
+  });
+
+  it("RF-INV-10 · la consulta sin ningún criterio, o con un cursor corrupto, se rechaza con 400", async () => {
+    const sinCriterio = await app.inject({
+      method: "GET",
+      url: `/trpc/inventory.serial.list?input=${encodeURIComponent(JSON.stringify({}))}`,
+      headers: { cookie },
+    });
+    const cursorRoto = await app.inject({
+      method: "GET",
+      url: `/trpc/inventory.serial.list?input=${encodeURIComponent(
+        JSON.stringify({ serialNumber: "X", cursor: "no-es-un-cursor" }),
+      )}`,
+      headers: { cookie },
+    });
+
+    expect(sinCriterio.statusCode).toBe(400);
+    expect(cursorRoto.statusCode).toBe(400);
+    expect(cursorRoto.json().error.data.appCode).toBe("VALIDATION_INVALID_CURSOR");
+  });
+
+  it("RF-INV-10 · la trazabilidad trae la unidad y los movimientos que la mencionan, con su costo", async () => {
+    const variantId = await createSerializedVariant();
+    const lotId = await seedSealedLot(variantId, { qtyInitial: 1, unitCostPyg: 1_500_000 });
+    const created = await createSerial(lotId, "SN-TRAZA-1");
+    const unitId = created.json().result.data.id as string;
+    // La venta (WP-C19) todavía no existe: el movimiento se escribe directo.
+    await testDb.superuserClient.query(
+      `INSERT INTO app.inventory_movements
+         (tenant_id, lot_id, variant_id, serial_unit_id, qty, uom, movement_type,
+          total_cost_pyg, created_by)
+       VALUES ($1, $2, $3, $4, -1, 'unit', 'sale', 1500000, $5)`,
+      [TENANT_ID, lotId, variantId, unitId, STAFF_OWNER_ID],
+    );
+
+    const history = await call<{
+      unit: SerialUnit;
+      movements: {
+        movementType: string;
+        qty: number;
+        serialUnitId: string;
+        totalCostPyg: string;
+      }[];
+    }>("inventory.serial.history", { serialUnitId: unitId });
+
+    expect(history.unit.serialNumber).toBe("SN-TRAZA-1");
+    expect(history.movements).toEqual([
+      expect.objectContaining({
+        movementType: "sale",
+        qty: -1,
+        serialUnitId: unitId,
+        totalCostPyg: "1500000",
+      }),
+    ]);
+  });
+
+  it("RF-INV-10 · una unidad inexistente (o de otro tenant) da 404 en la trazabilidad", async () => {
+    const response = await app.inject({
+      method: "GET",
+      url: `/trpc/inventory.serial.history?input=${encodeURIComponent(
+        JSON.stringify({ serialUnitId: "00000000-0000-4000-a000-000000000000" }),
+      )}`,
+      headers: { cookie },
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
 });

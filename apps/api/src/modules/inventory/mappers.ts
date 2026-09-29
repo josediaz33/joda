@@ -1,5 +1,16 @@
-import type { AdminLot, AdminMovement, MoneyDto, StockAvailability } from "@joda/contracts";
-import type { LotWithBalanceRow, MovementRow, StockAvailabilityRow } from "./repository.js";
+import type {
+  AdminLot,
+  AdminMovement,
+  AdminSerializedUnit,
+  MoneyDto,
+  StockAvailability,
+} from "@joda/contracts";
+import type {
+  LotWithBalanceRow,
+  MovementRow,
+  SerializedUnitRow,
+  StockAvailabilityRow,
+} from "./repository.js";
 
 // Fila de base → DTO (docs/api-conventions.md §1, mismo criterio que
 // modules/catalog/mappers.ts): solo conversión de tipo — Decimal → number,
@@ -60,5 +71,20 @@ export function toAdminMovement(row: MovementRow): AdminMovement {
     occurredAt: row.occurred_at.toISOString(),
     createdBy: row.created_by,
     note: row.note,
+  };
+}
+
+export function toAdminSerializedUnit(row: SerializedUnitRow): AdminSerializedUnit {
+  return {
+    id: row.id,
+    variantId: row.variant_id,
+    lotId: row.lot_id,
+    serialNumber: row.serial_number,
+    status: row.status,
+    // `warranty_until` es `date`: Prisma lo trae como medianoche UTC.
+    warrantyUntil: row.warranty_until?.toISOString().slice(0, 10) ?? null,
+    soldOrderLineId: row.sold_order_line_id,
+    notes: row.notes,
+    createdAt: row.created_at.toISOString(),
   };
 }
