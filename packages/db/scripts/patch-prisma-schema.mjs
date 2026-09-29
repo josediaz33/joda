@@ -2,33 +2,35 @@
 // Parche determinístico sobre schema.prisma, aplicado entre `prisma db pull`
 // y `prisma generate` (ver el script "db:pull" de package.json).
 //
-// Por qué existe: la FK compuesta (product_id, kind) -> products(id, kind)
-// (docs/data-model.md §8, "Cómo agregar una vertical de producto") es lo que
-// impide en Postgres que un producto `watch` tenga `perfume_details`. Como
-// `product_id` ya es PRIMARY KEY de cada tabla de detalle, (product_id, kind)
-// es unique por transitividad — pero Prisma introspecciona uniqueness de
-// forma literal, no transitiva, y sin una anotación @@unique en el modelo
-// el generador de cliente falla con P1012 ("A one-to-one relation must use
-// unique fields on the defining side"). No es una regla de negocio: la FK
-// compuesta ya hace cumplir el invariante real: https://github.com/prisma/prisma/issues/10390
+// Por qué existe: cuando la PK de una tabla es una sola columna y esa misma
+// columna es el comienzo de una FK compuesta, la relación es uno a uno y
+// las columnas de la FK son unique por transitividad — pero Prisma
+// introspecciona uniqueness de forma literal, no transitiva, y sin una
+// anotación @@unique en el modelo el generador de cliente falla con P1012
+// ("A one-to-one relation must use unique fields on the defining side").
+// Un UNIQUE real en Postgres tampoco sirve: Prisma lo omite por redundante
+// con el @id. https://github.com/prisma/prisma/issues/10390
 //
-// La alternativa sería un índice UNIQUE(product_id, kind) real en Postgres,
-// pero sería puramente redundante (product_id solo ya es unique) y violaría
-// el alcance de WP-B04 ("sin cambios al esquema"). En cambio, este script
-// inserta la anotación en cada corrida de `db:pull`, así que sobrevive a que
-// `schema.prisma` se reescriba entero en cada introspección sin que nadie
-// tenga que acordarse de re-anotarlo a mano (ADR-018 prohíbe editar
-// schema.prisma a mano; esto no es una edición manual, es parte del script).
+// Casos de hoy:
+//   · (product_id, kind) -> products(id, kind) en las tablas de detalle
+//     (docs/data-model.md §8): impide que un `watch` tenga `perfume_details`.
+//   · (product_id, tenant_id) en las mismas tablas y (lot_id, tenant_id) en
+//     inventory_balances (WP-B08c, 0023): las FK compuestas con tenant.
+// No es una regla de negocio: las FKs ya hacen cumplir el invariante real.
 //
-// Detecta genéricamente cualquier modelo con una relación
-// "fields: [product_id, kind], references: [id, kind]" — así que la próxima
-// vertical que se agregue (docs/data-model.md §8) queda cubierta sin tocar
-// este archivo. Después de parchar, vuelve a escanear el resultado: si algún
-// modelo que necesitaba la anotación se quedó sin ella (regex que no matchea
-// más por un cambio de formato del introspector, un @@schema distinto de
-// "app", etc.), corta con exit 1 en vez de escribir un schema roto en
-// silencio — `prisma generate` fallaría de todos modos con P1012, pero acá
-// el error señala la causa real en vez de la validación genérica de Prisma.
+// El script inserta la anotación en cada corrida de `db:pull`, así que
+// sobrevive a que `schema.prisma` se reescriba entero en cada introspección
+// sin que nadie tenga que acordarse de re-anotarlo a mano (ADR-018 prohíbe
+// editar schema.prisma a mano; esto no es una edición manual, es parte del
+// script).
+//
+// Detecta genéricamente toda relación cuyo primer campo es el @id de una
+// sola columna del modelo y que tiene más de un campo — la próxima vertical
+// o la próxima FK compuesta quedan cubiertas sin tocar este archivo.
+// Después de parchar vuelve a escanear el resultado: si algún modelo que
+// necesitaba la anotación se quedó sin ella, corta con exit 1 en vez de
+// escribir un schema roto en silencio — `prisma generate` fallaría de todos
+// modos con P1012, pero acá el error señala la causa real.
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -36,25 +38,51 @@ import { dirname, join } from "node:path";
 const dbRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const schemaPath = join(dbRoot, "prisma", "schema.prisma");
 
-const NEEDS_UNIQUE = /fields:\s*\[product_id,\s*kind\],\s*references:\s*\[id,\s*kind\]/;
-const HAS_UNIQUE = /@@unique\(\[product_id,\s*kind\]\)/;
 const modelRegex = /^model (\w+) \{\n([\s\S]*?)\n\}/gm;
+const idFieldRegex = /^\s*(\w+)\s+\S+.*\s@id(\s|$)/m;
+const relationFieldsRegex = /@relation\([^)]*fields:\s*\[([^\]]+)\]/g;
+const uniqueRegex = /@@unique\(\[([^\]]+)\]/g;
 
 function indentOf(body) {
   const firstLine = body.split("\n").find((line) => line.trim().length > 0);
   return firstLine ? firstLine.match(/^\s*/)[0] : "  ";
 }
 
+function normalize(fieldList) {
+  return fieldList
+    .split(",")
+    .map((field) => field.trim())
+    .join(", ");
+}
+
+/** Las listas de campos que necesitan @@unique en este modelo y no lo tienen. */
+function missingUniques(body) {
+  const id = body.match(idFieldRegex)?.[1];
+  if (!id) return [];
+  const present = new Set([...body.matchAll(uniqueRegex)].map((m) => normalize(m[1])));
+  const needed = new Set();
+  for (const match of body.matchAll(relationFieldsRegex)) {
+    const fields = normalize(match[1]);
+    const parts = fields.split(", ");
+    if (parts.length > 1 && parts[0] === id && !present.has(fields)) {
+      needed.add(fields);
+    }
+  }
+  return [...needed];
+}
+
 const source = readFileSync(schemaPath, "utf8");
 
-let patchedCount = 0;
+const added = [];
 const patched = source.replace(modelRegex, (block, name, body) => {
-  if (!NEEDS_UNIQUE.test(body) || HAS_UNIQUE.test(body)) {
+  const missing = missingUniques(body);
+  if (missing.length === 0) {
     return block;
   }
-  patchedCount += 1;
   const indent = indentOf(body);
-  return `model ${name} {\n${body}\n${indent}@@unique([product_id, kind])\n}`;
+  const lines = missing.map((fields) => `${indent}@@unique([${fields}])`).join("\n");
+  added.push(...missing.map((fields) => `${name}(${fields})`));
+  return `model ${name} {\n${body}\n${lines}\n}`;
 });
 
 // Auto-verificación: todo modelo que necesitaba la anotación tiene que
@@ -62,24 +90,22 @@ const patched = source.replace(modelRegex, (block, name, body) => {
 const stillMissing = [];
 for (const match of patched.matchAll(modelRegex)) {
   const [, name, body] = match;
-  if (NEEDS_UNIQUE.test(body) && !HAS_UNIQUE.test(body)) {
-    stillMissing.push(name);
+  for (const fields of missingUniques(body)) {
+    stillMissing.push(`${name}(${fields})`);
   }
 }
 
 if (stillMissing.length > 0) {
   console.error(
-    `[db:pull] patch-prisma-schema: FALLÓ — ${stillMissing.join(", ")} necesita @@unique([product_id, kind]) y no se le pudo agregar. ` +
+    `[db:pull] patch-prisma-schema: FALLÓ — sin @@unique después de parchar: ${stillMissing.join(", ")}. ` +
       "Revisá scripts/patch-prisma-schema.mjs: probablemente el formato de introspección cambió.",
   );
   process.exit(1);
 }
 
-if (patchedCount === 0) {
+if (added.length === 0) {
   console.log("[db:pull] patch-prisma-schema: nada que parchar");
 } else {
   writeFileSync(schemaPath, patched);
-  console.log(
-    `[db:pull] patch-prisma-schema: @@unique([product_id, kind]) agregado en ${patchedCount} modelo(s)`,
-  );
+  console.log(`[db:pull] patch-prisma-schema: @@unique agregado en ${added.join(", ")}`);
 }

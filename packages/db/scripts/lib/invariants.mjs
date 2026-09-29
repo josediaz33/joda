@@ -6,7 +6,7 @@ import { testFile } from "./tasks.mjs";
 // El helper pg_temp.expect_fail() del propio archivo atrapa la excepción y
 // la registra en una tabla `results`; nunca relanza. Por eso "no hubo error
 // de SQL" no alcanza para decir que pasó: hay que leer esa tabla.
-const EXPECTED_INVARIANT_COUNT = 66;
+const EXPECTED_INVARIANT_COUNT = 73;
 
 export async function runInvariants(client) {
   const file = testFile("invariants.sql");

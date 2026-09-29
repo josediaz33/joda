@@ -2,7 +2,7 @@
 
 Referencia del esquema. La verdad ejecutable está en `packages/db/migrations/`; este documento explica **por qué** está así.
 
-Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 133 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 65/65 invariantes verificados.
+Estado: validado contra PostgreSQL 16 — 63 tablas, 106 `CHECK`, 166 claves foráneas, 164 índices, 62 tablas con RLS (todas salvo `permissions`, catálogo global — ver WP-B08), 73/73 invariantes verificados.
 
 ---
 
@@ -162,7 +162,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 65: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 73: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -171,7 +171,7 @@ Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo 
 | 3   | El saldo de un lote nunca es negativo             | `CHECK (on_hand >= 0)` en la proyección                                |
 | 4   | El signo del movimiento coincide con su tipo      | `CHECK` compuesto por `movement_type`                                  |
 | 5   | La unidad del movimiento coincide con la del lote | Trigger `BEFORE INSERT`                                                |
-| 6   | Un frasco abierto no se vende sellado             | Trigger `BEFORE INSERT`                                                |
+| 6   | Un frasco abierto no se vende sellado             | Trigger `BEFORE INSERT` (desde WP-B08c, ningún movimiento)             |
 | 7   | Todo asiento cuadra                               | Constraint trigger **diferida**                                        |
 | 8   | Una línea contable es débito o crédito, no ambos  | `CHECK`                                                                |
 | 9   | Un asiento contabilizado no se modifica           | Triggers sobre líneas y asiento (0020): solo `draft` cambia            |
@@ -221,6 +221,17 @@ Además, una función que impone un invariante verifica integridad, no expone da
 Desde WP-B09 (`0018_invariant_triggers_security_definer.sql`) toda función de disparador de `app.*` sigue este patrón. Los invariantes 28–30 lo verifican de forma estructural: toda función de disparador tiene `search_path = app, pg_temp`; toda es `SECURITY DEFINER` salvo `set_updated_at` y `guard_append_only`, que no leen ninguna tabla; y el dueño de toda función `SECURITY DEFINER` elude RLS. Ese último es una dependencia operativa. `SECURITY DEFINER` corre como el rol que ejecutó la migración, y si ese rol no es superusuario ni `BYPASSRLS`, `FORCE ROW LEVEL SECURITY` lo filtra igual que a `joda_api`.
 
 **Ningún trigger depende de que otro haya corrido antes.** Los `BEFORE INSERT` de una tabla se ejecutan en orden alfabético, y un trigger que rechaza primero puede ocultar que el siguiente falla abierto. Pasó con `assert_sealed_lot_not_open`: desde WP-B01 dejaba vender como sellado un frasco abierto cuando no veía el lote, y no se notaba porque `trg_movement_uom` corría antes y rechazaba. Por eso cada función hace su propia búsqueda con su propio `IF NOT FOUND`. Los invariantes 33 y 34 deshabilitan los demás triggers y prueban cada función por separado.
+
+### 4.3 Toda FK entre tablas con `tenant_id` incluye `tenant_id`
+
+**Una FK no evalúa RLS.** Verifica que la fila apuntada exista, no que sea del mismo tenant. Hasta WP-B08c, un staff creaba un lote propio con la variante de otro tenant.
+
+Desde `0023_cross_tenant_fks.sql`, cada FK entre dos tablas con `tenant_id` es compuesta: `(col, tenant_id) REFERENCES destino (id, tenant_id)`. La tabla destino lleva `UNIQUE (id, tenant_id)`, redundante con la PK, porque Postgres lo exige para ser referenciada así. Es declarativa y falla cerrado por construcción. Con `col` en NULL no verifica nada, y está bien: no hay referencia.
+
+- **Una tabla nueva sigue el mismo patrón.** El invariante 67 falla si aparece una FK entre tablas con `tenant_id` que no incluya `tenant_id`. `cross_tenant_fks.test.ts` compara su inventario contra `pg_constraint` y prueba cada FK como `joda_api`.
+- **ON DELETE SET NULL se escribe `SET NULL (col)`.** Sin la lista de columnas, Postgres pondría en NULL también `tenant_id`.
+- **`inventory_movements.lot_id` incluye además la variante:** `(lot_id, variant_id, tenant_id) REFERENCES inventory_lots (id, variant_id, tenant_id)`. La variante de un movimiento es la de su lote. Un lote con movimientos no cambia de variante.
+- **Los triggers de 0018 siguen verificando el tenant por su cuenta.** Corren antes que las FKs, que son AFTER, y no dependen de ellas (§4.2).
 
 ---
 

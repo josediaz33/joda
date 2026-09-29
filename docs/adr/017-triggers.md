@@ -43,3 +43,18 @@ Lo que sigue fuera de la base es lo que decide:
 El mismo mapa vive en `packages/domain/src/accounting/journalEntry.ts`, y la aplicación lo consulta antes de intentar la transición.
 
 **El criterio para una tercera excepción es el mismo:** la transición se impone en la base solo si permitirla rompe un invariante de inmutabilidad. Que sea "una regla importante" no alcanza.
+
+## Tercera excepción anotada (WP-B08c, 2026-09-25)
+
+`trg_sealed_lot_terminal` (`0023_cross_tenant_fks.sql`) impide que un lote **sellado** salga de `open_for_decant`. Es una transición impuesta en la base.
+
+**Pendiente de confirmación de José.** Lo que José decidió es que el lote sellado abierto "es terminal y rechaza cualquier movimiento". Que "terminal" incluya también el estado es una lectura de quien implementó WP-B08c, no una instrucción textual. Si José la niega, este trigger se quita con una migración nueva y esta sección se borra.
+
+Pasa el criterio de arriba porque es inmutabilidad física, no una regla importante: un frasco abierto no se desabre. Si se permitiera, alcanzaría un UPDATE del estado a `available` para:
+
+- vender como sellado un frasco abierto (RN-LOT-03);
+- abrir dos veces el mismo frasco (caso borde 5).
+
+El granel hijo, que también está en `open_for_decant`, no queda alcanzado: sigue a `depleted` (RN-LOT-04).
+
+Lo que sigue fuera de la base: cuándo abrir un frasco, cuál, y cómo separar la unidad de un lote de varios (caso borde 21, WP-C11).

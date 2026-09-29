@@ -75,7 +75,7 @@ export function toAdminTag(row: TagRow): AdminTag {
 function toProductFacetInput(row: ProductRow): ProductFacetInput {
   switch (row.kind) {
     case "perfume": {
-      const details = row.perfume_details_perfume_details_product_idToproducts;
+      const details = row.perfume_details_perfume_details_product_id_tenant_idToproducts;
       if (!details) throw new Error(`producto ${row.id} es kind=perfume sin perfume_details`);
       return {
         kind: "perfume",
@@ -89,7 +89,7 @@ function toProductFacetInput(row: ProductRow): ProductFacetInput {
       };
     }
     case "watch": {
-      const details = row.watch_details_watch_details_product_idToproducts;
+      const details = row.watch_details_watch_details_product_id_tenant_idToproducts;
       if (!details) throw new Error(`producto ${row.id} es kind=watch sin watch_details`);
       return {
         kind: "watch",
@@ -103,7 +103,7 @@ function toProductFacetInput(row: ProductRow): ProductFacetInput {
       };
     }
     case "accessory": {
-      const details = row.accessory_details_accessory_details_product_idToproducts;
+      const details = row.accessory_details_accessory_details_product_id_tenant_idToproducts;
       if (!details) throw new Error(`producto ${row.id} es kind=accessory sin accessory_details`);
       return {
         kind: "accessory",
@@ -139,7 +139,7 @@ export function toAdminProduct(row: ProductRow): AdminProduct {
 
   switch (kind) {
     case "perfume": {
-      const details = row.perfume_details_perfume_details_product_idToproducts;
+      const details = row.perfume_details_perfume_details_product_id_tenant_idToproducts;
       if (!details) throw new Error(`producto ${row.id} es kind=perfume sin perfume_details`);
       return {
         ...base,
@@ -159,7 +159,7 @@ export function toAdminProduct(row: ProductRow): AdminProduct {
       };
     }
     case "watch": {
-      const details = row.watch_details_watch_details_product_idToproducts;
+      const details = row.watch_details_watch_details_product_id_tenant_idToproducts;
       if (!details) throw new Error(`producto ${row.id} es kind=watch sin watch_details`);
       return {
         ...base,
@@ -177,7 +177,7 @@ export function toAdminProduct(row: ProductRow): AdminProduct {
       };
     }
     case "accessory": {
-      const details = row.accessory_details_accessory_details_product_idToproducts;
+      const details = row.accessory_details_accessory_details_product_id_tenant_idToproducts;
       if (!details) throw new Error(`producto ${row.id} es kind=accessory sin accessory_details`);
       return {
         ...base,

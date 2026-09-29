@@ -404,7 +404,7 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
         ),
       ).rejects.toMatchObject({
         code: "23514",
-        message: `El lote ${SEALED_OPEN_LOT_ID} está abierto para decantar: no puede venderse como sellado`,
+        message: `El lote ${SEALED_OPEN_LOT_ID} está abierto para decantar: un sellado abierto no admite movimientos`,
       });
       await api.query("ROLLBACK");
     });
@@ -442,8 +442,121 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       ).rejects.toMatchObject({
         code: "23514",
         message:
-          "El lote 99999999-0000-0000-0000-0000000000b3 está abierto para decantar: no puede venderse como sellado",
+          "El lote 99999999-0000-0000-0000-0000000000b3 está abierto para decantar: un sellado abierto no admite movimientos",
       });
+      await api.query("ROLLBACK");
+    });
+
+    // WP-B08c (0023): RN-LOT-03 extendida. Un lote sellado en
+    // open_for_decant es terminal y no admite NINGÚN movimiento: hasta 0023
+    // un waste o un adjustment sacaban frascos sellados de un lote de tres
+    // con uno abierto (pregunta de la revisión de B09, decidida por José).
+    describe("RN-LOT-03 extendida (WP-B08c): un lote sellado abierto es terminal", () => {
+      const THREE_BOTTLE_LOT_ID = "99999999-0000-0000-0000-0000000000b4";
+
+      async function openThreeBottleLot(): Promise<void> {
+        await actAs(REAL_OWNER_ID, REAL_TENANT_ID);
+        await api.query(
+          `INSERT INTO app.inventory_lots
+             (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+              fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+           VALUES ($1, $2, $3, 3, 'unit', 0, 'PYG', 1, 0, 0)`,
+          [THREE_BOTTLE_LOT_ID, REAL_TENANT_ID, SEALED_VARIANT_ID],
+        );
+        await api.query(
+          `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+           VALUES ($2, $1, $3, 3, 'unit', 'purchase_receipt'),
+                  ($2, $1, $3, -1, 'unit', 'transfer_out')`,
+          [THREE_BOTTLE_LOT_ID, REAL_TENANT_ID, SEALED_VARIANT_ID],
+        );
+        await api.query("UPDATE app.inventory_lots SET status = 'open_for_decant' WHERE id = $1", [
+          THREE_BOTTLE_LOT_ID,
+        ]);
+      }
+
+      it.each([
+        ["waste", -1],
+        ["adjustment", -1],
+        ["adjustment", 1],
+      ] as const)(
+        "el vendedor no puede registrar %s %d sobre un sellado de un lote abierto",
+        async (movementType, qty) => {
+          await api.query("BEGIN");
+          await openThreeBottleLot();
+          await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+          await expect(
+            api.query(
+              `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+               VALUES ($1, $2, $3, $4, 'unit', $5)`,
+              [REAL_TENANT_ID, THREE_BOTTLE_LOT_ID, SEALED_VARIANT_ID, qty, movementType],
+            ),
+          ).rejects.toMatchObject({
+            code: "23514",
+            message: `El lote ${THREE_BOTTLE_LOT_ID} está abierto para decantar: un sellado abierto no admite movimientos`,
+          });
+          await api.query("ROLLBACK");
+        },
+      );
+
+      // Sin esto, lo de arriba se elude volviendo el lote a available.
+      it("el owner, con todos los permisos, no puede devolver a available un lote sellado abierto", async () => {
+        await api.query("BEGIN");
+        await openThreeBottleLot();
+        await expect(
+          api.query("UPDATE app.inventory_lots SET status = 'available' WHERE id = $1", [
+            THREE_BOTTLE_LOT_ID,
+          ]),
+        ).rejects.toMatchObject({
+          code: "23514",
+          message: `El lote ${THREE_BOTTLE_LOT_ID} es un sellado abierto para decantar: su estado es terminal`,
+        });
+        await api.query("ROLLBACK");
+      });
+
+      // Mismo efecto que en journal_entries (revisión de B14): el vendedor,
+      // sin inventory.stock:read, no ve el lote, y su UPDATE afecta cero
+      // filas sin llegar al trigger. Lo deja escrito; la barrera para quien
+      // sí lo ve es el trigger, probado arriba con el owner.
+      it("el vendedor, sin inventory.stock:read, no alcanza el lote: su UPDATE afecta cero filas", async () => {
+        await api.query("BEGIN");
+        await openThreeBottleLot();
+        await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+        const { rowCount } = await api.query(
+          "UPDATE app.inventory_lots SET status = 'available' WHERE id = $1",
+          [THREE_BOTTLE_LOT_ID],
+        );
+        await api.query("ROLLBACK");
+
+        expect(rowCount).toBe(0);
+      });
+
+      it("el granel abierto, que no es sellado, se sigue moviendo (control positivo)", async () => {
+        await api.query("BEGIN");
+        await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+        const { rowCount } = await api.query(
+          `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+           VALUES ($1, $2, $3, -0.5, 'ml', 'waste')`,
+          [REAL_TENANT_ID, BULK_LOT_ID, BULK_VARIANT_ID],
+        );
+        await api.query("ROLLBACK");
+
+        expect(rowCount).toBe(1);
+      });
+    });
+
+    // WP-B08c (0023): la variante de un movimiento es la de su lote. Sobre
+    // el granel, que no es sellado, con su uom: lo único que lo frena es la
+    // FK compuesta lote+variante.
+    it("el vendedor no puede declarar en un movimiento otra variante que la de su lote", async () => {
+      await api.query("BEGIN");
+      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      await expect(
+        api.query(
+          `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+           VALUES ($1, $2, '55555555-0000-0000-0000-00000000a001', 1, 'ml', 'adjustment')`,
+          [REAL_TENANT_ID, BULK_LOT_ID],
+        ),
+      ).rejects.toMatchObject({ code: "23503", constraint: "inventory_movements_lot_id_fkey" });
       await api.query("ROLLBACK");
     });
 
@@ -646,17 +759,19 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       await api.query("BEGIN");
       await actAs(PEER_OWNER_ID, PEER_TENANT_ID);
       await seedPeerInventory();
-      await api.query(
-        `INSERT INTO app.movement_cost_allocations
-           (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
-         VALUES ($1, $2, $3, 1, 1000, 1000)`,
-        [PEER_TENANT_ID, realMovementId, PEER_LOT_ID],
-      );
+      // Desde WP-B08c (0023) la FK compuesta lo rechaza en el INSERT, antes
+      // que el trigger diferido. El trigger, aislado, lo prueba el
+      // invariante 35.
       await expect(
-        api.query("SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE"),
+        api.query(
+          `INSERT INTO app.movement_cost_allocations
+             (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+           VALUES ($1, $2, $3, 1, 1000, 1000)`,
+          [PEER_TENANT_ID, realMovementId, PEER_LOT_ID],
+        ),
       ).rejects.toMatchObject({
         code: "23503",
-        message: `Movimiento ${realMovementId} no encontrado en el tenant de la capa de costo: no se puede verificar la capa`,
+        constraint: "movement_cost_allocations_movement_id_fkey",
       });
       await api.query("ROLLBACK");
     });
@@ -665,8 +780,11 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       await api.query("BEGIN");
       await actAs(PEER_OWNER_ID, PEER_TENANT_ID);
       await seedPeerInventory();
-      await api.query(
-        `WITH m AS (
+      // Desde WP-B08c (0023) la FK compuesta lo rechaza en el INSERT. El
+      // trigger diferido, aislado, lo prueba el invariante 36.
+      await expect(
+        api.query(
+          `WITH m AS (
            INSERT INTO app.inventory_movements
              (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg)
            VALUES ($1, $2, $3, 1, 'unit', 'adjustment', 1000)
@@ -674,13 +792,11 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
          INSERT INTO app.movement_cost_allocations
            (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
          SELECT $1, m.id, $4, 1, 1000, 1000 FROM m`,
-        [PEER_TENANT_ID, PEER_LOT_ID, PEER_VARIANT_ID, BULK_LOT_ID],
-      );
-      await expect(
-        api.query("SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE"),
+          [PEER_TENANT_ID, PEER_LOT_ID, PEER_VARIANT_ID, BULK_LOT_ID],
+        ),
       ).rejects.toMatchObject({
         code: "23503",
-        message: `Lote ${BULK_LOT_ID} no encontrado en el tenant de la capa de costo: no se puede verificar la capa`,
+        constraint: "movement_cost_allocations_lot_id_fkey",
       });
       await api.query("ROLLBACK");
     });
