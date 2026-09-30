@@ -283,6 +283,8 @@ La revisión cruzada de WP-C09 encontró que `product_media` no tenía `tenant_i
 
 No existe `ON VIEWS`: el default de `0010_security_rls.sql` que concede INSERT, UPDATE y DELETE a `joda_api` sobre lo que se cree en `app` cubre tablas y vistas por igual, así que toda vista nueva nace con escritura. `0027_revoke_views_write.sql` lo revocó en las cuatro que había. Para las que vengan no hay default que lo evite: la migración que crea la vista tiene que revocar la escritura, y el invariante 78 (`tests/invariants.sql`) falla y nombra la vista si se olvida.
 
+Con una vista materializada el riesgo es de lectura, no de escritura: PostgreSQL no aplica RLS a las materializadas, así que una en `app` que herede el `SELECT` de `joda_api` le muestra las filas de todos los tenants. El invariante 78 también falla si hay una materializada en `app` legible por `joda_api`.
+
 ---
 
 ## Decisiones no obvias del esquema

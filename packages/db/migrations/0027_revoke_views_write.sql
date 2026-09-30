@@ -17,9 +17,12 @@
 -- la API las lee.
 --
 -- HACIA ADELANTE. El default no se puede acotar a tablas, así que una
--- vista nueva vuelve a nacer con escritura. La garantía es el invariante
--- 78, que hace fallar `db:test` si alguna vista de `app.*` la tiene: la
--- migración que crea la vista trae su REVOKE.
+-- vista nueva vuelve a nacer con escritura, y una vista materializada
+-- nueva con lectura, que es peor: RLS no se aplica a las materializadas y
+-- `joda_api` vería las filas de todos los tenants. La garantía es el
+-- invariante 78, que hace fallar `db:test` si alguna vista de `app.*`
+-- tiene escritura para `joda_api`, o si alguna materializada tiene
+-- SELECT: la migración que la crea trae su REVOKE.
 -- =====================================================================
 REVOKE INSERT, UPDATE, DELETE ON
   app.v_balance_drift,

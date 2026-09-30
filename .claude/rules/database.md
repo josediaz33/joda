@@ -38,8 +38,11 @@ no con una comparación que se evalúe a falso. Ejemplo y motivo en
 ## Vistas
 
 Toda vista nueva de `app` revoca en su misma migración `INSERT, UPDATE, DELETE`
-de `joda_api`: el default de 0010 no distingue vistas de tablas. El invariante
-78 falla si se olvida, nombrando la vista.
+de `joda_api`: el default de 0010 no distingue vistas de tablas. Una vista
+materializada de `app` no puede ser legible por `joda_api`: RLS no se aplica
+a las materializadas y mostraría las filas de todos los tenants, así que
+también revoca `SELECT`. El invariante 78 falla si se olvida, nombrando la
+vista.
 
 ## RLS
 
