@@ -93,7 +93,7 @@ igual en Windows sin cliente de Postgres y en CI (`.github/workflows/ci.yml`,
 job `db`, con un servicio `postgres:16`). `db:test` no se conforma con que no
 haya un error de SQL: `invariants.sql` atrapa sus propias excepciones y las
 registra en una tabla en vez de relanzarlas, así que el runner falla si el
-conteo de invariantes en verde no es exactamente `EXPECTED_INVARIANT_COUNT` (hoy 65), y en
+conteo de invariantes en verde no es exactamente `EXPECTED_INVARIANT_COUNT` (hoy 78), y en
 `smoke_business_flow.sql` verifica en código que `v_balance_drift` da cero
 filas y que el asiento de la venta cuadra.
 
@@ -278,6 +278,12 @@ La revisión cruzada de WP-C09 encontró que `product_media` no tenía `tenant_i
 `0014_rls_sweep.sql` (WP-B08) barrió las 25 tablas de `app.*` que estaban en esa misma situación: 23 recibieron `tenant_id` propio (retrocompletado desde el padre correspondiente vía `UPDATE ... FROM`, después `NOT NULL` + FK a `tenants`) y entraron al mismo bucle de RLS; dos quedaron exentas por diseño (`tenants`, que no puede tener su propio `tenant_id`, y `permissions`, catálogo global). `packages/db/tests/invariants.sql` (invariante 22) verifica que no quede ninguna otra: falla si aparece una tabla de `app.*` sin RLS y sin estar en esa lista de dos.
 
 **Consecuencia para código de aplicación que ya insertaba en alguna de esas 23 tablas** (WP-C08, catálogo: `perfume_details`/`accessory_details`/`product_categories`/`product_tags`; WP-C09, `product_media`): esos `INSERT` pasaron a fallar por `NOT NULL` en `tenant_id` hasta que se les agregó el valor explícito — Prisma no lo infiere solo. Y **RLS en la tabla hija no reemplaza verificar la pertenencia del padre**: seguía haciendo falta un `findX` tenant-scoped antes de insertar (mismo patrón que `findProductRow` de `createVariant`, WP-C08) para las columnas que aceptan un id de OTRA tabla protegida — `categoryId`/`tagId` en catálogo, `productId`/`variantId` en medios —, porque RLS en la fila hija solo protege que ESA fila sea legible/escribible por el tenant correcto, no evita insertarla apuntando por FK a un id ajeno.
+
+### 12. `ALTER DEFAULT PRIVILEGES ... ON TABLES` también alcanza a las vistas (WP-B16)
+
+No existe `ON VIEWS`: el default de `0010_security_rls.sql` que concede INSERT, UPDATE y DELETE a `joda_api` sobre lo que se cree en `app` cubre tablas y vistas por igual, así que toda vista nueva nace con escritura. `0027_revoke_views_write.sql` lo revocó en las cuatro que había. Para las que vengan no hay default que lo evite: la migración que crea la vista tiene que revocar la escritura, y el invariante 78 (`tests/invariants.sql`) falla y nombra la vista si se olvida.
+
+Con una vista materializada el riesgo es de lectura, no de escritura: PostgreSQL no aplica RLS a las materializadas, así que una en `app` que herede el `SELECT` de `joda_api` le muestra las filas de todos los tenants. El invariante 78 también falla si hay una materializada en `app` legible por `joda_api`.
 
 ---
 

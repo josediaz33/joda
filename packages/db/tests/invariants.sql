@@ -1511,6 +1511,49 @@ SELECT pg_temp.expect_true(77,
   has_schema_privilege('joda_readonly', 'public', 'USAGE')
   AND has_schema_privilege('joda_api', 'public', 'USAGE'));
 
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-B16 (0027_revoke_views_write.sql): la API no escribe a través de una
+-- vista ni lee una vista materializada.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 78 ─ joda_api no escribe ninguna vista de app.* ni lee ninguna vista
+-- materializada de app.*. El ALTER DEFAULT PRIVILEGES de 0010 no distingue
+-- vistas de tablas: toda vista o materializada nueva nace con INSERT,
+-- UPDATE, DELETE y SELECT para joda_api, y esta prueba es lo que obliga a
+-- la migración que la crea a revocar lo que sobra.
+--   · Vistas: la ESCRITURA. Hoy es inocuo (ninguna es actualizable); una
+--     vista simple sobre inventory_balances reabriría B09b.
+--   · Materializadas: la LECTURA. RLS no se aplica a una vista
+--     materializada, así que una legible por joda_api muestra las filas de
+--     todos los tenants. No admiten escritura, por eso solo se mira SELECT.
+-- El alcance es app porque ahí aplica el default de 0010: las vistas de
+-- public no lo reciben (joda_readonly las lee, joda_api no tiene nada).
+-- Mira el estado real de los privilegios, no el default: no se esquiva
+-- cambiando el rol que crea la vista. has_any_column_privilege ve también
+-- el privilegio por columna, que has_table_privilege no ve; DELETE no
+-- existe por columna, así que usa has_table_privilege. Si falla, el nombre
+-- lista las culpables. La condición EXISTS impide pasar en vacío si
+-- dejara de haber vistas en app.
+WITH v AS (
+  SELECT c.oid, c.relname, c.relkind
+    FROM pg_class c
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND c.relkind IN ('v', 'm')
+), con_acceso AS (
+  SELECT relname || CASE relkind WHEN 'v' THEN ' (escritura)' ELSE ' (lectura)' END AS descripcion
+    FROM v
+   WHERE (relkind = 'v'
+          AND (has_any_column_privilege('joda_api', oid, 'INSERT')
+               OR has_any_column_privilege('joda_api', oid, 'UPDATE')
+               OR has_table_privilege('joda_api', oid, 'DELETE')))
+      OR (relkind = 'm' AND has_any_column_privilege('joda_api', oid, 'SELECT'))
+)
+SELECT pg_temp.expect_true(78,
+  'joda_api no escribe ninguna vista de app.* ni lee ninguna vista materializada'
+    || COALESCE(' — con acceso: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM con_acceso), ''),
+  EXISTS (SELECT 1 FROM v WHERE relkind = 'v') AND NOT EXISTS (SELECT 1 FROM con_acceso));
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'
