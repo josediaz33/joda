@@ -5,3 +5,4 @@ export * from "./adjustment.js";
 export * from "./allocation.js";
 export * from "./costing.js";
 export * from "./lotOpening.js";
+export * from "./serializedUnit.js";

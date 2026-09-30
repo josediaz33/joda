@@ -1,3 +1,4 @@
+import { uuidGenerator } from "../adapters/uuidGenerator.js";
 import { createCatalogRouter } from "../modules/catalog/router.js";
 import { createAuthRouter } from "../modules/auth/router.js";
 import type { AuthServiceDeps } from "../modules/auth/service.js";
@@ -18,7 +19,13 @@ export function createAppRouter(authDeps: AuthServiceDeps | null) {
     example: createExampleRouter(authDeps?.db ?? null),
     auth: createAuthRouter(authDeps),
     catalog: createCatalogRouter(authDeps?.db ?? null),
-    inventory: createInventoryRouter(authDeps?.db ?? null),
+    // El reloj es el mismo de `authDeps` (real en producción, fijo en los
+    // tests); los ids de los lotes que nacen en una apertura los genera
+    // `uuidGenerator` (WP-C11).
+    inventory: createInventoryRouter(
+      authDeps?.db ?? null,
+      authDeps ? { clock: authDeps.clock, idGenerator: uuidGenerator } : null,
+    ),
   });
 }
 

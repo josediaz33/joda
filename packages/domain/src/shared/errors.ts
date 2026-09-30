@@ -115,10 +115,17 @@ export class InvalidDecantInputError extends DomainError {
   }
 }
 
-/** openLot() (inventory/lotOpening.ts, ADR-009) con nominalVolumeMl no positivo o no finito: argumento fuera de rango, no un fallo que el negocio contemple. */
+/** openLot() (inventory/lotOpening.ts, ADR-009) con nominalVolumeMl no positivo o no finito, o con `qtyInitial`/`onHand` del lote sellado que no son unidades válidas: argumento fuera de rango, no un fallo que el negocio contemple. */
 export class InvalidLotOpeningInputError extends DomainError {
   constructor(message: string) {
     super("INVALID_LOT_OPENING_INPUT", message);
+  }
+}
+
+/** planSerializedUnitRegistration() (inventory/serializedUnit.ts, RN-SER-03) con una capacidad que no son unidades enteras de al menos 1, o con unidades ya registradas negativas o no enteras: argumento fuera de rango, no un fallo que el negocio contemple. */
+export class InvalidSerializedUnitInputError extends DomainError {
+  constructor(message: string) {
+    super("INVALID_SERIALIZED_UNIT_INPUT", message);
   }
 }
 

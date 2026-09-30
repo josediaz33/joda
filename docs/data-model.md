@@ -109,7 +109,7 @@ product_variants ──< inventory_lots ──┬──< inventory_movements ─
                           │           │
                           │           └──< serialized_units
                           │
-                          └──── parent_lot_id (autoreferencia: granel → sellado)
+                          └──── parent_lot_id (autoreferencia: lote del que se derivó)
 
 product_variants ──< stock_reservations   (separadas del ledger)
 
@@ -120,7 +120,18 @@ inventory_lots ──< decant_work_orders >── product_variants
 
 **`inventory_balances` la escriben solo los triggers.** `init_lot_balance` y `project_lot_balance` son `SECURITY DEFINER`; `joda_api` solo tiene SELECT (WP-B09b, `0024_revoke_balances_write.sql`, invariante 74). Un saldo equivocado se corrige con un movimiento de ajuste, nunca editando la proyección.
 
-**La autoreferencia `parent_lot_id` es lo que modela la apertura de frasco.** Un lote de granel apunta al lote sellado del que salió, con el costo heredado.
+**La autoreferencia `parent_lot_id` significa "lote del que se derivó"**, y es lo que modela la apertura de frasco. Se distinguen dos casos por el tipo de variante del hijo:
+
+- **Apertura** (sellado → granel): el lote de granel apunta al lote sellado del que salió, con el costo de UNA unidad del sellado heredado íntegro (RN-LOT-02).
+- **Separación** (sellado → sellado): al abrir un frasco de un lote de varias unidades, la unidad que se abre nace como un lote propio de una unidad que apunta al lote original (caso borde 21, WP-C11).
+
+No hay una columna que diga cuál es cuál: el tipo de la variante del hijo lo dice.
+
+**Del granel a la compra son dos saltos.** Al abrir un frasco de un lote de varias unidades, el granel apunta al lote de una unidad separado, y ese al lote original. Para llegar a la recepción, el proveedor y el costo de compra hay que seguir `parent_lot_id` hasta el lote que no tiene padre: solo ese conserva `goods_receipt_line_id`. El lote de una unidad que nace de la separación lo deja en NULL a propósito, para no contar la misma recepción dos veces. Con un lote de una unidad, la apertura es directa y hay un solo salto.
+
+**`unit_cost_minor` es el costo de compra por unidad de medida del lote** (con su `currency` y `fx_rate_to_pyg`): por frasco en un sellado, por ml en un granel, el mismo criterio que `unit_landed_cost_pyg`. Al abrir un frasco, el granel lleva el del frasco dividido por el volumen nominal (RN-LOT-02, paso 3), redondeado con la regla de `money.ts`. **El costo de la mercadería vendida sale SIEMPRE de los campos en guaraníes** (`landed_cost_pyg`, `unit_landed_cost_pyg` y las capas de costo). `unit_cost_minor` es informativo y nunca se usa para calcular costos.
+
+**`reference_type` de los movimientos de la apertura** (WP-C11): `lot_separation` en los dos movimientos de la separación (`reference_id` = el lote de una unidad que nace) y `lot_opening` en los dos de la apertura (`reference_id` = el lote sellado que se abre, también en la entrada al granel, no el id del granel).
 
 ### 3.4 Flujo de compra
 
@@ -164,7 +175,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 78: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 90: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -233,7 +244,17 @@ Desde `0023_cross_tenant_fks.sql`, cada FK entre dos tablas con `tenant_id` es c
 - **Una tabla nueva sigue el mismo patrón.** El invariante 67 falla si aparece una FK entre tablas con `tenant_id` que no incluya `tenant_id`. `cross_tenant_fks.test.ts` compara su inventario contra `pg_constraint` y prueba cada FK como `joda_api`.
 - **ON DELETE SET NULL se escribe `SET NULL (col)`.** Sin la lista de columnas, Postgres pondría en NULL también `tenant_id`.
 - **`inventory_movements.lot_id` incluye además la variante:** `(lot_id, variant_id, tenant_id) REFERENCES inventory_lots (id, variant_id, tenant_id)`. La variante de un movimiento es la de su lote. Un lote con movimientos no cambia de variante.
+- **`serialized_units.lot_id` incluye además la variante** (WP-C12, `0029_serialized_unit_lot_variant.sql`): `(lot_id, variant_id, tenant_id) REFERENCES inventory_lots (id, variant_id, tenant_id)`. La variante de una unidad serializada es la de su lote (RN-SER-04), el mismo patrón que los movimientos. Con `lot_id` nulo no verifica nada (una unidad puede existir sin lote), y un lote con unidades no cambia de variante. `stock_reservations` (lote y unidad serializada) hereda lo mismo en WP-C18.
 - **Los triggers de 0018 siguen verificando el tenant por su cuenta.** Corren antes que las FKs, que son AFTER, y no dependen de ellas (§4.2).
+
+### 4.4 La apertura de frasco (WP-C11, `0028_sealed_open_single_unit.sql`)
+
+Dos invariantes que hacen que la apertura no se pueda hacer mal aunque alguien se saltee la API:
+
+- **Un lote de variante sellada en `open_for_decant` tiene `qty_initial = 1`.** `trg_sealed_open_single_unit`, `BEFORE INSERT OR UPDATE OF status, qty_initial, variant_id`. Es un invariante del estado de la fila, no una transición: no es una excepción de ADR-026: es un invariante sobre el contenido de una fila, no una transición, y sería un `CHECK` si `variant_type` estuviera en `inventory_lots`. Sin él, marcar abierto un lote de tres dejaba dos frascos sellados con saldo e invendibles (RN-LOT-03), y el granel heredaba el costo del lote entero (caso borde 21). Como todo trigger de invariante, falla cerrado (§4.2): si no encuentra la variante en el tenant del lote, rechaza.
+- **Un producto tiene a lo sumo una variante de granel.** Índice único parcial `product_variants_one_bulk_per_product ON product_variants (product_id) WHERE variant_type = 'bulk'`. Un producto es un solo líquido aunque se venda en varios tamaños; la apertura necesita saber a qué granel va el frasco, y lo impone la base, no la búsqueda.
+
+**El ETL tiene que respetar los dos** (WP-D03 y WP-D05, con criterio de aceptación). Un lote de varias unidades con alguna abierta en el v2 no se puede cargar tal cual: la migración falla si el dato es incoherente, en vez de aceptarlo.
 
 ---
 

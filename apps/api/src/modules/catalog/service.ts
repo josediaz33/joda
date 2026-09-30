@@ -320,6 +320,12 @@ export async function getVariantById(
   });
 }
 
+const BULK_VARIANT_EXISTS_ERROR = appError(
+  "CONFLICT_BULK_VARIANT_EXISTS",
+  409,
+  "El producto ya tiene una variante de granel: un producto es un solo líquido.",
+);
+
 export async function createVariant(
   db: PrismaClient,
   ctx: TenantTxContext,
@@ -328,6 +334,12 @@ export async function createVariant(
   return withTenantTx(db, ctx, async (tx) => {
     const product = await repo.findProductRow(tx, { id: input.productId });
     if (!product) throw toTRPCError(NOT_FOUND_ERROR);
+
+    // El índice único parcial de 0028 lo impone la base; esto adelanta el
+    // mensaje, en vez de dejar que llegue como un error interno.
+    if (input.variantType === "bulk" && (await repo.productHasBulkVariant(tx, input.productId))) {
+      throw toTRPCError(BULK_VARIANT_EXISTS_ERROR);
+    }
 
     const id = await repo.insertVariantRow(tx, {
       tenantId: ctx.tenantId,
