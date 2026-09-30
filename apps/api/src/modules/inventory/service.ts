@@ -276,6 +276,13 @@ export async function openLot(
     const nominalVolumeMl = await repo.findNominalVolumeMl(tx, productId);
     if (nominalVolumeMl === null) throw toTRPCError(NOMINAL_VOLUME_MISSING_ERROR);
 
+    // Aceptado hasta WP-C18: esta lectura NO bloquea la variante, solo el lote.
+    // Dos aperturas de lotes distintos de la misma variante, con el último
+    // frasco reservado, podrían pasar las dos. Hoy no hay hueco real:
+    // `stock_reservations` está vacía hasta C18, que decide cómo se serializa
+    // esto (bloquear la fila de la variante, o atar la reserva a un lote).
+    // Bloquear la variante acá, sin ese diseño, podría cruzarse con el orden
+    // de bloqueo de lotes de la venta (RN-LOT-05, WP-C19).
     const availability = toStockAvailability(
       lot.variant_id,
       await repo.findStockAvailability(tx, lot.variant_id),

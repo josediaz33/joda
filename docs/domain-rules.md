@@ -212,8 +212,9 @@ Sobre un lote sellado de una unidad (`qty_initial = 1`):
 
 - **El lote no está en `available`.** Uno en `quarantine` o `damaged` no se puede fraccionar: es mercadería que todavía no pasó control de calidad o que ya se descartó. Confirmado como regla de negocio en la revisión cruzada de WP-A13. Uno ya abierto tampoco (caso borde 5).
 - **El lote no tiene un frasco en saldo, o la variante no tiene un frasco disponible.** Disponible es el saldo menos las reservas vivas (RN-RES-03): abrir el último frasco reservado se lo saca al cliente que ya pagó.
-- **La variante del lote no es sellada.** Un `tester` es el frasco de exhibición y no se fracciona. Si alguna vez se compran frascos sin caja para decantar, se cargan como variante sellada con su propio SKU.
+- **La variante del lote no es sellada.** Un `tester` es el frasco de exhibición y no se fracciona (regla decidida en la toma de WP-C11, 2026-09-29). Si alguna vez se compran frascos sin caja para decantar, se cargan como variante sellada con su propio SKU.
 - **El producto no tiene variante de granel.** Hay que crearla en el catálogo. Un producto tiene **una sola**, impuesto por la base: es un solo líquido aunque se venda en varios tamaños.
+- **El producto no tiene volumen nominal.** El granel nace con `nominal_volume_ml` ml (RN-LOT-02, paso 3); sin él, por ejemplo en un producto que no es un perfume, no hay cuántos ml calcular.
 
 **Lote de más de una unidad (caso borde 21).** Si el lote nació con más de una unidad (`qty_initial > 1`: una recepción de tres frascos iguales), la apertura **separa primero** la unidad que se abre en su propio lote de una unidad, y recién abre ese:
 

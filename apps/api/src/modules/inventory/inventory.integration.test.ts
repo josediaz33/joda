@@ -11,10 +11,11 @@ import type { AuthServiceDeps } from "../auth/service.js";
 
 // Integración real contra Postgres (.claude/rules/testing.md: "nunca
 // simulacros de Prisma"), mismo arnés que catalog.integration.test.ts
-// (WP-C08). Cubre RF-INV-03…05 de punta a punta (docs/backlog.md, WP-C10) —
-// las validaciones de forma de createAdjustmentInput (qty en cero, motivo
-// vacío, precisión decimal) ya están cubiertas sin Postgres en
-// packages/contracts/src/inventory.test.ts.
+// (WP-C08). Cubre de punta a punta RF-INV-03…05 (WP-C10), RF-INV-08 (apertura
+// de frasco, WP-C11) y RF-INV-10 (unidades serializadas, WP-C12), en
+// docs/backlog.md — las validaciones de forma de los inputs (qty en cero,
+// motivo vacío, precisión decimal, serial vacío) ya están cubiertas sin
+// Postgres en packages/contracts/src/inventory.test.ts.
 const TENANT_ID = "77777777-7777-4777-a777-777777777777";
 const STAFF_OWNER_ID = "99999999-9999-4999-a999-999999999992";
 const STAFF_OWNER_EMAIL = "owner@jodaparfums-c10.com";
@@ -33,7 +34,7 @@ function toRequestCookie(setCookieHeader: string | string[] | undefined): string
   return separator === -1 ? raw : raw.slice(0, separator);
 }
 
-describe("WP-C10 · módulo inventario (RF-INV-03…05)", () => {
+describe("módulo inventario · WP-C10 (RF-INV-03…05), WP-C11 (RF-INV-08) y WP-C12 (RF-INV-10)", () => {
   let testDb: TestDb;
   let redisContainer: StartedRedisContainer;
   let db: PrismaClient;
@@ -745,6 +746,48 @@ describe("WP-C10 · módulo inventario (RF-INV-03…05)", () => {
     expect(response.statusCode).toBe(409);
     expect(response.json().error.data.appCode).toBe("CONFLICT_BULK_VARIANT_MISSING");
     expect(response.json().error.message).toContain("catálogo");
+    const lot = await call<{ lot: { status: string } }>("inventory.lot.history", { lotId });
+    expect(lot.lot.status).toBe("available");
+  });
+
+  it("RN-LOT-02 · un producto sin volumen nominal (no es un perfume) no se abre: no hay cuántos ml tiene el granel", async () => {
+    // Sellado y granel del mismo producto, pero un accesorio: sin
+    // `perfume_details.nominal_volume_ml` no se puede calcular el granel.
+    const suffix = `${Date.now()}-${++productCounter}`;
+    const category = await mutateOk<{ id: string }>("catalog.category.create", {
+      slug: `sin-volumen-${suffix}`,
+      name: "Sin volumen",
+    });
+    const product = await mutateOk<{ id: string }>("catalog.product.create", {
+      kind: "accessory",
+      slug: `accesorio-${suffix}`,
+      name: "Accesorio",
+      categoryIds: [category.id],
+      primaryCategoryId: category.id,
+      accessoryDetails: { material: null, color: null, sizeLabel: null },
+    });
+    const sealed = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: `SKU-SIN-VOLUMEN-SEALED-${suffix}`,
+      variantType: "sealed",
+      uom: "unit",
+      sizeMl: 100,
+      pricePyg: "500000",
+    });
+    await mutateOk("catalog.variant.create", {
+      productId: product.id,
+      sku: `SKU-SIN-VOLUMEN-BULK-${suffix}`,
+      variantType: "bulk",
+      uom: "ml",
+      sizeMl: null,
+      pricePyg: "0",
+    });
+    const lotId = await seedSealedLot(sealed.id, { qtyInitial: 1, unitCostPyg: 1_496_500 });
+
+    const response = await mutate("inventory.lot.open", { lotId });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_NOMINAL_VOLUME_MISSING");
     const lot = await call<{ lot: { status: string } }>("inventory.lot.history", { lotId });
     expect(lot.lot.status).toBe("available");
   });
