@@ -21,6 +21,7 @@ function sealedLot(overrides: Partial<SealedLotSnapshot> = {}): SealedLotSnapsho
     qtyInitial: Quantity.units(1),
     onHand: Quantity.units(1),
     unitLandedCostPyg: Money.pyg(1_496_500n),
+    unitCost: Money.of(19_000n, "USD"),
     ...overrides,
   };
 }
@@ -53,6 +54,7 @@ describe("RN-LOT-02, ADR-009 · abrir un frasco es una conversión entre dos lot
         qtyInitial: Quantity.ml(125),
         landedCostPyg: Money.pyg(1_496_500n),
         unitLandedCostPyg: Money.pyg(11_972n),
+        unitCost: Money.of(152n, "USD"),
       },
       movements: [
         {
@@ -133,6 +135,7 @@ describe("RN-LOT-02, caso borde 21 · un lote de varias unidades separa primero 
         qtyInitial: Quantity.units(1),
         landedCostPyg: Money.pyg(1_496_500n),
         unitLandedCostPyg: Money.pyg(1_496_500n),
+        unitCost: Money.of(19_000n, "USD"),
       },
     });
     expect(result.value.bulkLot.parentLotId).toBe("LOT-LAY-001-U1");
@@ -209,6 +212,59 @@ describe("RN-LOT-02, caso borde 21 · un lote de varias unidades separa primero 
     expect(result.ok).toBe(true);
     if (!result.ok) throw new Error("expected ok");
     expect(result.value.separation!.sourceLotId).toBe("LOT-LAY-001");
+  });
+});
+
+describe("RN-LOT-02 paso 3 · unit_cost_minor del granel es por ml, el mismo criterio que unit_landed_cost_pyg", () => {
+  it("USD 190,00 el frasco (19.000 centavos) sobre 125 ml son 152 centavos por ml, y por el volumen nominal vuelven a dar el frasco", () => {
+    const result = openLot(openLotInput());
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.value.bulkLot.unitCost).toEqual(Money.of(152n, "USD"));
+    expect(result.value.bulkLot.unitCost.times(125)).toEqual(Money.of(19_000n, "USD"));
+  });
+
+  it("si no divide exacto se redondea como el resto del proyecto: 19.050 centavos sobre 125 ml son 152 por ml, y por 125 dan 19.000, dentro del redondeo (medio centavo por ml)", () => {
+    const result = openLot(
+      openLotInput({ sealedLot: sealedLot({ unitCost: Money.of(19_050n, "USD") }) }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.value.bulkLot.unitCost).toEqual(Money.of(152n, "USD"));
+    expect(result.value.bulkLot.unitCost.times(125)).toEqual(Money.of(19_000n, "USD"));
+  });
+
+  it("una compra en guaraníes da el mismo costo por ml que unit_landed_cost_pyg cuando no hay flete ni impuestos", () => {
+    const result = openLot(
+      openLotInput({
+        sealedLot: sealedLot({
+          unitCost: Money.pyg(1_496_500n),
+          unitLandedCostPyg: Money.pyg(1_496_500n),
+        }),
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error("expected ok");
+    expect(result.value.bulkLot.unitCost).toEqual(Money.pyg(11_972n));
+    expect(result.value.bulkLot.unitLandedCostPyg).toEqual(Money.pyg(11_972n));
+  });
+
+  it("unit_cost_minor es informativo: dos sellados con el mismo costo en guaraníes y distinto costo de compra mueven exactamente lo mismo en el ledger", () => {
+    const cheap = openLot(
+      openLotInput({ sealedLot: sealedLot({ unitCost: Money.of(1n, "USD") }) }),
+    );
+    const dear = openLot(
+      openLotInput({ sealedLot: sealedLot({ unitCost: Money.of(999_999n, "USD") }) }),
+    );
+
+    expect(cheap.ok && dear.ok).toBe(true);
+    if (!cheap.ok || !dear.ok) throw new Error("expected ok");
+    expect(cheap.value.movements).toEqual(dear.value.movements);
+    expect(cheap.value.bulkLot.landedCostPyg).toEqual(dear.value.bulkLot.landedCostPyg);
+    expect(cheap.value.bulkLot.unitLandedCostPyg).toEqual(dear.value.bulkLot.unitLandedCostPyg);
   });
 });
 

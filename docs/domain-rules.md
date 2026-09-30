@@ -205,8 +205,11 @@ Sobre un lote sellado de una unidad (`qty_initial = 1`):
      qty_initial = nominal_volume_ml
      landed_cost_pyg = <unit_landed_cost_pyg del sellado, íntegro>
      unit_landed_cost_pyg = round_pyg(landed_cost_pyg / nominal_volume_ml)
+     unit_cost_minor = round(unit_cost_minor del sellado / nominal_volume_ml), misma moneda de compra
 4. transfer_in  +125 ml     sobre el lote de granel
 ```
+
+**`unit_cost_minor` significa "costo por unidad de medida de este lote"**: por frasco en un sellado, por ml en un granel, el mismo criterio que `unit_landed_cost_pyg`. El granel no hereda el costo del frasco tal cual: lo divide por el volumen nominal, con el mismo redondeo del proyecto (`Money.times`, `money.ts`), así que por el volumen nominal vuelve a dar el costo del frasco dentro del redondeo. **El costo de la mercadería vendida sale SIEMPRE de los campos en guaraníes** (`landed_cost_pyg`, `unit_landed_cost_pyg` y las capas de costo). `unit_cost_minor` es informativo y nunca se usa para calcular costos.
 
 **Precondiciones.** Se rechaza la apertura si:
 

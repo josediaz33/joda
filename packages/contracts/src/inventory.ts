@@ -85,6 +85,10 @@ export const adminLotSchema = z
     uom: uomSchema,
     qtyInitial: z.number(),
     onHand: z.number(),
+    // Costo de compra en la moneda de compra, POR UNIDAD DE MEDIDA de este
+    // lote: por frasco en un sellado, por ml en un granel (igual que
+    // unitLandedCostPyg). Informativo: el costo de la mercadería vendida sale
+    // siempre de los campos en guaraníes, nunca de este.
     unitCost: moneySchema,
     fxRateToPyg: z.number().positive(),
     landedCostPyg: pygAmountSchema,

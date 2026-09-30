@@ -15,8 +15,9 @@
 --   1. Un lote de variante SELLADA en `open_for_decant` tiene
 --      `qty_initial` = 1. La apertura separa primero la unidad en su propio
 --      lote de una unidad (RN-LOT-02, WP-C11) y abre ese. Es un invariante
---      de estado de la fila, no una transición (ADR-017: no es una
---      excepción). Se valida al INSERT y al UPDATE de `status`,
+--      sobre el contenido de una fila, no una transición: sería un CHECK si
+--      `variant_type` estuviera en `inventory_lots`. No es una excepción de
+--      ninguna regla (ADR-026). Se valida al INSERT y al UPDATE de `status`,
 --      `qty_initial` y `variant_id`: nada de eso deja un sellado abierto de
 --      varias unidades por el camino.
 --      Como un CHECK no ve el tipo de la variante, es un trigger, y como

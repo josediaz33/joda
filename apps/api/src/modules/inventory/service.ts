@@ -22,6 +22,7 @@ import {
   planInventoryAdjustment,
   planSerializedUnitRegistration,
   type Clock,
+  type Currency,
   type IdGenerator,
   type LotOpening,
   type LotOpeningError,
@@ -295,6 +296,8 @@ export async function openLot(
         qtyInitial: Quantity.units(lot.qty_initial.toNumber()),
         onHand: Quantity.units(lot.inventory_balances?.on_hand.toNumber() ?? 0),
         unitLandedCostPyg: Money.pyg(lot.unit_landed_cost_pyg),
+        // Informativo: el costo de la mercadería sale de los campos en guaraníes.
+        unitCost: Money.of(lot.unit_cost_minor, lot.currency as Currency),
       },
       nominalVolumeMl,
       variantAvailable: Quantity.units(availability.available),
@@ -347,8 +350,6 @@ async function persistOpening(
 ): Promise<bigint[]> {
   const inherited = {
     tenantId: session.tenantId,
-    unitCostMinor: lot.unit_cost_minor,
-    currency: lot.currency,
     fxRateToPyg: lot.fx_rate_to_pyg,
     batchCode: lot.batch_code,
     manufacturedAt: lot.manufactured_at,
@@ -395,6 +396,9 @@ async function persistOpening(
       status: "available",
       qtyInitial: unitLot.qtyInitial.value,
       uom: "unit",
+      // Por frasco, como el lote original.
+      unitCostMinor: unitLot.unitCost.minor,
+      currency: unitLot.unitCost.currency,
       landedCostPyg: unitLot.landedCostPyg.minor,
       unitLandedCostPyg: unitLot.unitLandedCostPyg.minor,
       openedAt: null,
@@ -415,6 +419,10 @@ async function persistOpening(
     status: "open_for_decant",
     qtyInitial: opening.bulkLot.qtyInitial.value,
     uom: "ml",
+    // POR ML, no por frasco: "costo por unidad de medida de este lote", como
+    // unit_landed_cost_pyg. Informativo, nunca entra en un cálculo de costo.
+    unitCostMinor: opening.bulkLot.unitCost.minor,
+    currency: opening.bulkLot.unitCost.currency,
     landedCostPyg: opening.bulkLot.landedCostPyg.minor,
     unitLandedCostPyg: opening.bulkLot.unitLandedCostPyg.minor,
     openedAt: opening.openedAt,

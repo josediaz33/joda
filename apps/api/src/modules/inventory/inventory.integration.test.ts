@@ -541,11 +541,35 @@ describe("módulo inventario · WP-C10 (RF-INV-03…05), WP-C11 (RF-INV-08) y WP
       onHand: 100,
       landedCostPyg: "1496500",
       unitLandedCostPyg: "14965",
+      // Por ml: 1.496.500 Gs. por frasco sobre 100 ml.
+      unitCost: { minor: "14965", currency: "PYG" },
     });
     expect(opened.movements.map((m) => [m.movementType, m.qty, m.referenceType])).toEqual([
       ["transfer_out", -1, "lot_opening"],
       ["transfer_in", 100, "lot_opening"],
     ]);
+  });
+
+  it("RN-LOT-02 paso 3 · una compra en USD: el granel lleva el costo de compra por ml en USD, y el costo en guaraníes sigue saliendo de los campos en guaraníes", async () => {
+    const { sealedVariantId } = await createSealedAndBulkVariants();
+    const lotId = await seedSealedLot(sealedVariantId, { qtyInitial: 1, unitCostPyg: 1_496_500 });
+    // USD 190,00 el frasco (19.000 centavos), tipo de cambio 7.300.
+    await testDb.superuserClient.query(
+      `UPDATE app.inventory_lots
+          SET currency = 'USD', unit_cost_minor = 19000, fx_rate_to_pyg = 7300
+        WHERE id = $1`,
+      [lotId],
+    );
+
+    const opened = await mutateOk<OpenedLot>("inventory.lot.open", { lotId });
+
+    // 19.000 centavos sobre 100 ml: 190 centavos por ml, y por 100 vuelven a dar el frasco.
+    expect(opened.bulkLot.unitCost).toEqual({ minor: "190", currency: "USD" });
+    expect(opened.bulkLot.fxRateToPyg).toBe(7300);
+    // El costo en guaraníes no depende de unit_cost_minor: es el del frasco sobre el volumen.
+    expect(opened.bulkLot.landedCostPyg).toBe("1496500");
+    expect(opened.bulkLot.unitLandedCostPyg).toBe("14965");
+    expect(opened.openedSealedLot.unitCost).toEqual({ minor: "19000", currency: "USD" });
   });
 
   it("RN-LOT-02, caso borde 21 · un lote de tres frascos separa la unidad que se abre: el original sigue available con DOS frascos vendibles como sellados", async () => {
@@ -567,13 +591,16 @@ describe("módulo inventario · WP-C10 (RF-INV-03…05), WP-C11 (RF-INV-08) y WP
       parentLotId: lotId,
       variantId: sealedVariantId,
       landedCostPyg: "1496500",
+      unitCost: { minor: "1496500", currency: "PYG" },
     });
+    expect(opened.sourceLot).toMatchObject({ unitCost: { minor: "1496500", currency: "PYG" } });
     expect(opened.bulkLot).toMatchObject({
       variantId: bulkVariantId,
       parentLotId: opened.openedSealedLot.id,
       qtyInitial: 100,
       landedCostPyg: "1496500",
       unitLandedCostPyg: "14965",
+      unitCost: { minor: "14965", currency: "PYG" },
     });
     expect(opened.movements.map((m) => [m.movementType, m.qty, m.referenceType])).toEqual([
       ["transfer_out", -1, "lot_separation"],

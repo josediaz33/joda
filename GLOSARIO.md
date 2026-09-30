@@ -43,7 +43,7 @@ La unidad vendible y la unidad de inventario. Un mismo perfume genera varias:
 | `decant` | `ml`   | Fracción vendible: 5, 10, 30 ml                                  |
 | `unit`   | `unit` | Un reloj, un accesorio                                           |
 | `supply` | `unit` | **Insumo**: vial, atomizador, etiqueta, empaque                  |
-| `tester` | `ml`   | Frasco de exhibición                                             |
+| `tester` | `unit` | Frasco de exhibición: un frasco entero, con `size_ml`            |
 
 ### Modo de producción (`production_mode`)
 

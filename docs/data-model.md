@@ -129,6 +129,8 @@ No hay una columna que diga cuál es cuál: el tipo de la variante del hijo lo d
 
 **Del granel a la compra son dos saltos.** Al abrir un frasco de un lote de varias unidades, el granel apunta al lote de una unidad separado, y ese al lote original. Para llegar a la recepción, el proveedor y el costo de compra hay que seguir `parent_lot_id` hasta el lote que no tiene padre: solo ese conserva `goods_receipt_line_id`. El lote de una unidad que nace de la separación lo deja en NULL a propósito, para no contar la misma recepción dos veces. Con un lote de una unidad, la apertura es directa y hay un solo salto.
 
+**`unit_cost_minor` es el costo de compra por unidad de medida del lote** (con su `currency` y `fx_rate_to_pyg`): por frasco en un sellado, por ml en un granel, el mismo criterio que `unit_landed_cost_pyg`. Al abrir un frasco, el granel lleva el del frasco dividido por el volumen nominal (RN-LOT-02, paso 3), redondeado con la regla de `money.ts`. **El costo de la mercadería vendida sale SIEMPRE de los campos en guaraníes** (`landed_cost_pyg`, `unit_landed_cost_pyg` y las capas de costo). `unit_cost_minor` es informativo y nunca se usa para calcular costos.
+
 **`reference_type` de los movimientos de la apertura** (WP-C11): `lot_separation` en los dos movimientos de la separación (`reference_id` = el lote de una unidad que nace) y `lot_opening` en los dos de la apertura (`reference_id` = el lote sellado que se abre, también en la entrada al granel, no el id del granel).
 
 ### 3.4 Flujo de compra
@@ -249,8 +251,8 @@ Desde `0023_cross_tenant_fks.sql`, cada FK entre dos tablas con `tenant_id` es c
 
 Dos invariantes que hacen que la apertura no se pueda hacer mal aunque alguien se saltee la API:
 
-- **Un lote de variante sellada en `open_for_decant` tiene `qty_initial = 1`.** `trg_sealed_open_single_unit`, `BEFORE INSERT OR UPDATE OF status, qty_initial, variant_id`. Es un invariante del estado de la fila, no una transición: no entra en las excepciones de ADR-017. Sin él, marcar abierto un lote de tres dejaba dos frascos sellados con saldo e invendibles (RN-LOT-03), y el granel heredaba el costo del lote entero (caso borde 21). Como todo trigger de invariante, falla cerrado (§4.2): si no encuentra la variante en el tenant del lote, rechaza.
-- **Un producto tiene a lo sumo una variante de granel.** Índice único parcial `product_variants_one_bulk_per_product ON product_variants (product_id) WHERE variant_type = bulk`. Un producto es un solo líquido aunque se venda en varios tamaños; la apertura necesita saber a qué granel va el frasco, y lo impone la base, no la búsqueda.
+- **Un lote de variante sellada en `open_for_decant` tiene `qty_initial = 1`.** `trg_sealed_open_single_unit`, `BEFORE INSERT OR UPDATE OF status, qty_initial, variant_id`. Es un invariante del estado de la fila, no una transición: no es una excepción de ADR-026: es un invariante sobre el contenido de una fila, no una transición, y sería un `CHECK` si `variant_type` estuviera en `inventory_lots`. Sin él, marcar abierto un lote de tres dejaba dos frascos sellados con saldo e invendibles (RN-LOT-03), y el granel heredaba el costo del lote entero (caso borde 21). Como todo trigger de invariante, falla cerrado (§4.2): si no encuentra la variante en el tenant del lote, rechaza.
+- **Un producto tiene a lo sumo una variante de granel.** Índice único parcial `product_variants_one_bulk_per_product ON product_variants (product_id) WHERE variant_type = 'bulk'`. Un producto es un solo líquido aunque se venda en varios tamaños; la apertura necesita saber a qué granel va el frasco, y lo impone la base, no la búsqueda.
 
 **El ETL tiene que respetar los dos** (WP-D03 y WP-D05, con criterio de aceptación). Un lote de varias unidades con alguna abierta en el v2 no se puede cargar tal cual: la migración falla si el dato es incoherente, en vez de aceptarlo.
 

@@ -66,6 +66,14 @@ export interface SealedLotSnapshot {
    * hereda íntegro el granel (RN-LOT-02 paso 3).
    */
   readonly unitLandedCostPyg: Money;
+  /**
+   * `inventory_lots.unit_cost_minor` con su `currency`: el costo de compra de
+   * UN frasco, en la moneda de compra. **Informativo**: el costo de la
+   * mercadería vendida sale SIEMPRE de los campos en guaraníes
+   * (`unit_landed_cost_pyg` y las capas de costo), nunca de este. El granel lo
+   * hereda POR ML (RN-LOT-02 paso 3).
+   */
+  readonly unitCost: Money;
 }
 
 export interface OpenLotInput {
@@ -99,6 +107,8 @@ export interface SealedUnitLotDraft {
   readonly qtyInitial: Quantity;
   readonly landedCostPyg: Money;
   readonly unitLandedCostPyg: Money;
+  /** Por frasco, como el del lote original: el lote de una unidad sigue midiéndose en frascos. */
+  readonly unitCost: Money;
 }
 
 /** El lote de granel hijo que nace de la conversión (RN-LOT-02 paso 3). */
@@ -108,6 +118,14 @@ export interface BulkLotDraft {
   readonly qtyInitial: Quantity;
   readonly landedCostPyg: Money;
   readonly unitLandedCostPyg: Money;
+  /**
+   * Costo de compra POR ML, en la moneda de compra del sellado: el
+   * `unit_cost_minor` del frasco sobre el volumen nominal. Significa "costo por
+   * unidad de medida de este lote", igual que `unitLandedCostPyg` (por frasco
+   * en un sellado, por ml en un granel). Informativo: nunca se usa para
+   * calcular costos.
+   */
+  readonly unitCost: Money;
 }
 
 export type LotOpeningMovementType = "transfer_out" | "transfer_in";
@@ -230,7 +248,10 @@ export function openLot(input: OpenLotInput): Result<LotOpening, LotOpeningError
     return err({ code: "SEALED_VARIANT_NOT_AVAILABLE", available: input.variantAvailable });
   }
 
-  const unitCost = sealedLot.unitLandedCostPyg;
+  // El costo de UN frasco, en guaraníes: lo que se hereda íntegro y lo que
+  // mueve el ledger. `unitCost` (moneda de compra) es informativo y no
+  // participa de ningún cálculo de costo.
+  const unitLandedCost = sealedLot.unitLandedCostPyg;
   const separates = sealedLot.qtyInitial.compare(ONE_UNIT) > 0;
 
   // Los ids salen en orden fijo: primero el lote separado (si hay), después
@@ -240,8 +261,9 @@ export function openLot(input: OpenLotInput): Result<LotOpening, LotOpeningError
         id: input.idGenerator.next(),
         parentLotId: sealedLot.id,
         qtyInitial: ONE_UNIT,
-        landedCostPyg: unitCost,
-        unitLandedCostPyg: unitCost,
+        landedCostPyg: unitLandedCost,
+        unitLandedCostPyg: unitLandedCost,
+        unitCost: sealedLot.unitCost,
       }
     : null;
   const openedLotId = unitLot ? unitLot.id : sealedLot.id;
@@ -251,12 +273,12 @@ export function openLot(input: OpenLotInput): Result<LotOpening, LotOpeningError
 
   const separationMovements: LotOpeningMovement[] = unitLot
     ? [
-        transferOut(sealedLot.id, unitCost, "separation"),
+        transferOut(sealedLot.id, unitLandedCost, "separation"),
         {
           lotId: unitLot.id,
           qty: ONE_UNIT,
           movementType: "transfer_in",
-          totalCost: unitCost,
+          totalCost: unitLandedCost,
           purpose: "separation",
           costLayer: null,
         },
@@ -272,17 +294,21 @@ export function openLot(input: OpenLotInput): Result<LotOpening, LotOpeningError
       id: bulkLotId,
       parentLotId: openedLotId,
       qtyInitial,
-      landedCostPyg: unitCost,
-      unitLandedCostPyg: computeUnitLandedCost(unitCost, qtyInitial),
+      landedCostPyg: unitLandedCost,
+      unitLandedCostPyg: computeUnitLandedCost(unitLandedCost, qtyInitial),
+      // El `unit_cost_minor` del granel es por ml, no por frasco. Mismo
+      // redondeo que el costo por ml en guaraníes: `Money.times` es la única
+      // vía (money.ts), y `qtyInitial` es positivo (validateNominalVolume).
+      unitCost: sealedLot.unitCost.times(1 / qtyInitial.value),
     },
     movements: [
       ...separationMovements,
-      transferOut(openedLotId, unitCost, "opening"),
+      transferOut(openedLotId, unitLandedCost, "opening"),
       {
         lotId: bulkLotId,
         qty: qtyInitial,
         movementType: "transfer_in",
-        totalCost: unitCost,
+        totalCost: unitLandedCost,
         purpose: "opening",
         costLayer: null,
       },
