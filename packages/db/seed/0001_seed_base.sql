@@ -134,11 +134,15 @@ BEGIN
 
   -- Vendedor: vende y consulta stock. SIN contabilidad ni sourcing:
   -- que alguien cargue una venta no implica que vea el flujo de caja
-  -- ni lo que te cuesta cada frasco.
+  -- ni lo que te cuesta cada frasco. Sí maneja señas: las registra y las
+  -- aplica al vender, y con RLS escribir una seña exige poder leerla
+  -- (INSERT ... RETURNING y UPDATE ... WHERE evalúan la política de
+  -- lectura, WP-B11). `accounting.cashbox:read` sigue oculto.
   INSERT INTO role_permissions (tenant_id, role_id, permission_code) VALUES
     (p_tenant, v_vendedor, 'catalog.product:read'),
     (p_tenant, v_vendedor, 'sales.order:read'),
     (p_tenant, v_vendedor, 'sales.order:write'),
+    (p_tenant, v_vendedor, 'accounting.deposit:read'),
     (p_tenant, v_vendedor, 'accounting.deposit:write'),
     (p_tenant, v_vendedor, 'fiscal.document:issue')
   ON CONFLICT DO NOTHING;

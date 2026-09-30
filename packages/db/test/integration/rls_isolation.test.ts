@@ -44,6 +44,13 @@ const REAL_SELLER_ID = "22222222-2222-2222-2222-2222222200b1";
 // el trigger, no RLS. Hallazgo de la revisión cruzada de B14.
 const REAL_AUDITOR_ID = "22222222-2222-2222-2222-2222222200c1";
 
+// WP-B11: desde 0030 el vendedor ya no escribe lotes (RLS exige un permiso de
+// recepción, apertura, devolución o ajuste). Las pruebas de B09 que lo usaban
+// para crear un lote probaban que los triggers SECURITY DEFINER funcionan para
+// quien NO lee lotes; este rol conserva esa condición: escribe lotes con
+// market.purchase_order:receive y no tiene inventory.stock:read.
+const REAL_RECEIVER_ID = "22222222-2222-2222-2222-2222222200d1";
+
 // WP-B13: has_permission() exige una sesión viva del usuario en el tenant
 // de contexto. Una por usuario, sembradas en beforeAll; actAs() fija la
 // que corresponde.
@@ -52,6 +59,7 @@ const SESSION_BY_USER = {
   [PEER_OWNER_ID]: "5e550000-0000-0000-0000-0000000000a2",
   [REAL_SELLER_ID]: "5e550000-0000-0000-0000-0000000000a3",
   [REAL_AUDITOR_ID]: "5e550000-0000-0000-0000-0000000000a4",
+  [REAL_RECEIVER_ID]: "5e550000-0000-0000-0000-0000000000a5",
 } as const;
 type StaffUserId = keyof typeof SESSION_BY_USER;
 
@@ -186,6 +194,16 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       VALUES ('${REAL_AUDITOR_ID}', 'aaaa0000-0000-0000-0000-0000000000c1', '${REAL_TENANT_ID}');
       INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at)
       VALUES ('${SESSION_BY_USER[REAL_AUDITOR_ID]}', '${REAL_TENANT_ID}', '${REAL_AUDITOR_ID}', now() + interval '8 hours');
+      INSERT INTO app.roles (id, tenant_id, code, name)
+      VALUES ('aaaa0000-0000-0000-0000-0000000000d1', '${REAL_TENANT_ID}', 'recepcion', 'Recepción');
+      INSERT INTO app.role_permissions (tenant_id, role_id, permission_code)
+      VALUES ('${REAL_TENANT_ID}', 'aaaa0000-0000-0000-0000-0000000000d1', 'market.purchase_order:receive');
+      INSERT INTO app.staff_users (id, tenant_id, auth_subject, email, full_name)
+      VALUES ('${REAL_RECEIVER_ID}', '${REAL_TENANT_ID}', 'sub-real-receiver', 'recepcion@joda.test', 'Recepción');
+      INSERT INTO app.staff_user_roles (staff_user_id, role_id, tenant_id)
+      VALUES ('${REAL_RECEIVER_ID}', 'aaaa0000-0000-0000-0000-0000000000d1', '${REAL_TENANT_ID}');
+      INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at)
+      VALUES ('${SESSION_BY_USER[REAL_RECEIVER_ID]}', '${REAL_TENANT_ID}', '${REAL_RECEIVER_ID}', now() + interval '8 hours');
     `);
     await db.client.query(`ALTER ROLE joda_api PASSWORD '${JODA_API_TEST_PASSWORD}'`);
 
@@ -625,9 +643,11 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
         await api.query("ROLLBACK");
       });
 
-      it("el vendedor no puede crear un lote sellado de tres unidades ya abierto", async () => {
+      // Quien recibe puede escribir lotes y no leerlos: el trigger tiene que
+      // rechazar con su propio mensaje, no ser un efecto de RLS.
+      it("quien recibe, sin inventory.stock:read, no puede crear un lote sellado de tres unidades ya abierto", async () => {
         await api.query("BEGIN");
-        await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+        await actAs(REAL_RECEIVER_ID, REAL_TENANT_ID);
         await expect(insertThreeUnitLot("open_for_decant")).rejects.toMatchObject({
           code: "23514",
           message: expect.stringMatching(SINGLE_UNIT_MESSAGE(THREE_UNIT_LOT_ID)),
@@ -765,9 +785,11 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       await api.query("ROLLBACK");
     });
 
-    it("el lote que crea el vendedor nace con su fila de saldo en cero (init_lot_balance)", async () => {
+    // WP-B11: antes lo creaba el vendedor. Ahora lo crea quien recibe, que
+    // escribe lotes sin poder leerlos, la misma condición que probaba B09.
+    it("el lote que crea quien recibe, sin inventory.stock:read, nace con su fila de saldo en cero (init_lot_balance)", async () => {
       await api.query("BEGIN");
-      await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
+      await actAs(REAL_RECEIVER_ID, REAL_TENANT_ID);
       await api.query(
         `INSERT INTO app.inventory_lots
            (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
