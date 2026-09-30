@@ -351,6 +351,6 @@ Si un supuesto se rompe, se revisan los requerimientos de escalabilidad y rendim
 | Reservas y ventas       | RF-VTA-04/05, RF-ECO-03/04                                   | ADR-019                   |
 | Pagos                   | RF-ECO-05…08, RNF-SEG-04                                     | ADR-020                   |
 | Migración               | RF-MIG-*                                                     | ADR-021                   |
-| Base de datos           | RNF-MAN-05, RNF-SEG-02                                       | ADR-017, ADR-018, ADR-022 |
+| Base de datos           | RNF-MAN-05, RNF-SEG-02                                       | ADR-026, ADR-018, ADR-022 |
 | Frontend y diseño       | RF-ECO-16, RNF-USA-01…07                                     | ADR-003, ADR-023          |
 | Posicionamiento         | RF-ECO-01, RF-ECO-10, RF-ECO-12…15, RF-CAT-13, RNF-PER-03/04 | ADR-003, ADR-023          |
