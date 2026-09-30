@@ -57,13 +57,14 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
   // riesgo que docs/backlog.md señaló para `pg_temp.expect_fail()` en
   // packages/db/tests/invariants.sql ("ningún error no prueba que un
   // invariante se cumple").
-  it("de verdad recorrió los treinta y cuatro procedimientos montados hoy (example.ping.* + auth.session.* + auth.mfa.* + catalog.*, WP-C08 + inventory.*, WP-C10)", () => {
+  it("de verdad recorrió los treinta y cinco procedimientos montados hoy (example.ping.* + auth.session.* + auth.mfa.* + catalog.*, WP-C08 + inventory.*, WP-C10)", () => {
     const procedures = flattenProcedures(createAppRouter(null));
 
     expect(Object.keys(procedures).sort()).toEqual([
       "auth.mfa.confirmEnroll",
       "auth.mfa.enroll",
       "auth.mfa.verify",
+      "auth.session.current",
       "auth.session.login",
       "auth.session.logout",
       "auth.session.refresh",

@@ -149,6 +149,35 @@ describe("WP-C03 · sesión de personal (auth.session.login/refresh/logout)", ()
     });
   });
 
+  describe("docs/security-spec.md §4.3 · restauración de sesión del admin (WP-E04)", () => {
+    it("sin cookie no revela perfil ni permisos", async () => {
+      const response = await app.inject({ method: "GET", url: "/trpc/auth.session.current" });
+      expect(response.statusCode).toBe(401);
+    });
+
+    it("con MFA sin inscribir devuelve solo el estado pendiente y ningún token", async () => {
+      const loginResponse = await login(app);
+      const cookie = toRequestCookie(loginResponse.headers["set-cookie"]);
+      const response = await app.inject({
+        method: "GET",
+        url: "/trpc/auth.session.current",
+        headers: { cookie },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().result.data).toEqual({
+        profile: {
+          id: STAFF_USER_ID,
+          email: STAFF_EMAIL,
+          fullName: "José",
+          mfaStatus: "pending_enrollment",
+        },
+        permissions: [],
+      });
+      expect(JSON.stringify(response.json())).not.toContain("token");
+    });
+  });
+
   describe("docs/backlog.md WP-C03 · criterio de aceptación — reusar un refresco invalida toda la familia", () => {
     it("refresh rota el token: la cookie vieja ya no sirve para un refresh posterior", async () => {
       const loginResponse = await login(app);

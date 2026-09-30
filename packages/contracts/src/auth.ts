@@ -6,6 +6,7 @@
 // campo `token`.
 import { z } from "zod";
 import { idSchema } from "./shared/id.js";
+import { permissionCode } from "./security/permissions.js";
 
 export const staffLoginInput = z
   .object({
@@ -32,6 +33,16 @@ export const staffSessionProfile = z
   })
   .strict();
 export type StaffSessionProfile = z.infer<typeof staffSessionProfile>;
+
+// Consulta de sesión para restaurar el admin después de recargar. El servidor
+// resuelve permisos en cada petición; el cliente solo los usa para la UX.
+export const staffSessionCurrentOutput = z
+  .object({
+    profile: staffSessionProfile,
+    permissions: z.array(permissionCode),
+  })
+  .strict();
+export type StaffSessionCurrentOutput = z.infer<typeof staffSessionCurrentOutput>;
 
 // auth.session.refresh y auth.session.logout no toman entrada: leen la
 // cookie del pedido (apps/api/src/trpc/context.ts), no un id de sesión que
