@@ -22,7 +22,7 @@ Formato: contexto → decisión → consecuencias → alternativas descartadas.
 | [ADR-014](014-frontera-fiscal.md)            | Frontera fiscal con puerto y adaptadores                                                | Fiscal                        |
 | [ADR-015](015-identidades-separadas.md)      | Identidades separadas: customers y staff_users                                          | Seguridad                     |
 | [ADR-016](016-rbac-tres-capas.md)            | RBAC en tres capas, con la API en un rol NOBYPASSRLS                                    | Seguridad                     |
-| [ADR-017](017-triggers.md)                   | Triggers solo para invariantes                                                          | Base de datos                 |
+| [ADR-017](017-triggers.md)                   | Triggers solo para invariantes (reemplazado por ADR-026)                                | Base de datos                 |
 | [ADR-018](018-sql-first.md)                  | SQL-first; Prisma se regenera por introspección                                         | Base de datos                 |
 | [ADR-019](019-reserva-checkout.md)           | La reserva de stock nace en el checkout, no en el carrito                               | Ventas · Inventario           |
 | [ADR-020](020-pagos.md)                      | Checkout hospedado y webhooks idempotentes                                              | Pagos                         |
@@ -31,6 +31,7 @@ Formato: contexto → decisión → consecuencias → alternativas descartadas.
 | [ADR-023](023-stack-frontend.md)             | Stack de frontend y sistema de diseño                                                   | Frontend                      |
 | [ADR-024](024-objetos-de-valor-en-shared.md) | Los objetos de valor de dinero y cantidad viven en packages/domain/src/shared/          | Estructura de packages/domain |
 | [ADR-025](025-imagenes-supabase-storage.md)  | Imágenes de catálogo en Supabase Storage, no Cloudflare R2 (reemplaza parte de ADR-004) | Infraestructura               |
+| [ADR-026](026-irreversibilidad.md)           | Irreversibilidad en la base, matriz de transiciones en el dominio (reemplaza a ADR-017) | Base de datos                 |
 
 ---
 

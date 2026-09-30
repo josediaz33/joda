@@ -230,7 +230,10 @@ INSERT INTO inventory_lots (id, tenant_id, variant_id, parent_lot_id, lot_code,
 VALUES ('99999999-0000-0000-0000-000000000002',
         '11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-000000000002',
         '99999999-0000-0000-0000-000000000001', 'LOT-LAY-001-BULK',
-        125, 'ml', 19000, 'USD', 7300.00000000, 1496500,
+        -- unit_cost_minor es por unidad de medida del lote: por ml en un
+        -- granel. USD 190,00 el frasco (19.000 centavos) / 125 ml = 152
+        -- centavos por ml. Informativo: el costo sale de los campos en Gs.
+        125, 'ml', 152, 'USD', 7300.00000000, 1496500,
         -- 1.496.500 / 125 ml = 11.972 Gs. por ml
         11972, 'open_for_decant', now());
 

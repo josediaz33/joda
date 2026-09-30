@@ -661,10 +661,13 @@ SELECT pg_temp.expect_fail_like(37, 'Mover una línea entre borradores descuadra
 
 -- 38 ─ RN-LOT-03 no se elude declarando otra variante. Hallazgo de la
 -- revisión cruzada de B09: el trigger decidía con `NEW.variant_id`, que
--- pone quien inserta. Un lote de tres frascos sellados con uno abierto
--- (quedan dos sellados de verdad, con el lote en `open_for_decant`): la
--- venta que declara la variante de GRANEL pasaba. El lote tiene saldo, así
--- que el único que puede rechazarla es el guard del frasco abierto.
+-- pone quien inserta. Un sellado en `open_for_decant` que conserva saldo:
+-- la venta que declara la variante de GRANEL pasaba. El lote tiene saldo,
+-- así que el único que puede rechazarla es el guard del frasco abierto.
+-- (Desde WP-C11 la apertura nunca deja saldo, y un sellado abierto es de
+-- una sola unidad — el 79 —; este lote sale de un UPDATE manual del estado
+-- sin la salida de la unidad. El guard tiene que rechazar igual, por sí
+-- solo: no depende de que la apertura se haya hecho bien.)
 SELECT pg_temp.expect_fail_like(38, 'Venta de un sellado abierto declarando la variante de granel',
   $$DO $x$
     BEGIN
@@ -673,15 +676,12 @@ SELECT pg_temp.expect_fail_like(38, 'Venta de un sellado abierto declarando la v
          fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
       VALUES ('99999999-0000-0000-0000-000000000038',
               '11111111-1111-1111-1111-111111111111',
-              '55555555-0000-0000-0000-000000000001', 3, 'unit', 0, 'PYG', 1, 0, 0);
+              '55555555-0000-0000-0000-000000000001', 1, 'unit', 0, 'PYG', 1, 0, 0);
       INSERT INTO app.inventory_movements
         (tenant_id, lot_id, variant_id, qty, uom, movement_type)
       VALUES ('11111111-1111-1111-1111-111111111111',
               '99999999-0000-0000-0000-000000000038',
-              '55555555-0000-0000-0000-000000000001', 3, 'unit', 'purchase_receipt'),
-             ('11111111-1111-1111-1111-111111111111',
-              '99999999-0000-0000-0000-000000000038',
-              '55555555-0000-0000-0000-000000000001', -1, 'unit', 'transfer_out');
+              '55555555-0000-0000-0000-000000000001', 1, 'unit', 'purchase_receipt');
       UPDATE app.inventory_lots SET status = 'open_for_decant'
        WHERE id = '99999999-0000-0000-0000-000000000038';
       INSERT INTO app.inventory_movements
@@ -1375,8 +1375,11 @@ SELECT pg_temp.expect_fail_like(68, 'Movimiento que declara una variante distint
 
 -- 69 y 70 ─ RN-LOT-03 extendida: un lote sellado abierto no admite NINGÚN
 -- movimiento. Hasta 0023 solo rechazaba `sale`; un `waste` o un
--- `adjustment` sacaban frascos sellados de un lote de tres con uno
--- abierto (pregunta de la revisión de B09, decidida por José).
+-- `adjustment` sacaban frascos sellados de un lote abierto con saldo
+-- (pregunta de la revisión de B09, decidida por José). Desde WP-C11 un
+-- sellado abierto es de una sola unidad (el 79): el lote de este test tiene
+-- una, y conserva su saldo porque el UPDATE de estado se hace sin la salida
+-- de la unidad que haría la apertura.
 SELECT pg_temp.expect_fail_like(69, 'waste sobre un lote sellado abierto con saldo',
   $$DO $x$
     BEGIN
@@ -1384,12 +1387,10 @@ SELECT pg_temp.expect_fail_like(69, 'waste sobre un lote sellado abierto con sal
         (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
          fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
       VALUES ('99999999-0000-0000-0000-000000000069', '11111111-1111-1111-1111-111111111111',
-              '55555555-0000-0000-0000-000000000001', 3, 'unit', 0, 'PYG', 1, 0, 0);
+              '55555555-0000-0000-0000-000000000001', 1, 'unit', 0, 'PYG', 1, 0, 0);
       INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
       VALUES ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-000000000069',
-              '55555555-0000-0000-0000-000000000001', 3, 'unit', 'purchase_receipt'),
-             ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-000000000069',
-              '55555555-0000-0000-0000-000000000001', -1, 'unit', 'transfer_out');
+              '55555555-0000-0000-0000-000000000001', 1, 'unit', 'purchase_receipt');
       UPDATE app.inventory_lots SET status = 'open_for_decant'
        WHERE id = '99999999-0000-0000-0000-000000000069';
       INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
@@ -1553,6 +1554,219 @@ SELECT pg_temp.expect_true(78,
     || COALESCE(' — con acceso: '
                 || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM con_acceso), ''),
   EXISTS (SELECT 1 FROM v WHERE relkind = 'v') AND NOT EXISTS (SELECT 1 FROM con_acceso));
+
+-- WP-C11 (0028_sealed_open_single_unit.sql): apertura de frasco. Un
+-- sellado abierto es de una sola unidad, y un producto tiene un solo
+-- granel.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 79 ─ Un lote sellado de varias unidades no pasa a `open_for_decant`.
+-- Es el caso borde 21: marcarlo abierto entero dejaba los otros frascos
+-- cerrados sin poder venderse (RN-LOT-03) y el granel heredaba el costo del
+-- lote entero, no el de un frasco. La apertura separa primero la unidad.
+SELECT pg_temp.expect_fail_like(79, 'Lote sellado de tres unidades pasa a open_for_decant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('99999999-0000-0000-0000-000000000078', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-000000000001', 3, 'unit', 0, 'PYG', 1, 0, 0);
+      UPDATE app.inventory_lots SET status = 'open_for_decant'
+       WHERE id = '99999999-0000-0000-0000-000000000078';
+    END $x$
+  $$,
+  'El lote 99999999-0000-0000-0000-000000000078 es un sellado abierto de %');
+
+-- 80 ─ Tampoco nace abierto con varias unidades: el INSERT directo con el
+-- estado ya en `open_for_decant` es la otra vía.
+SELECT pg_temp.expect_fail_like(80, 'Lote sellado de tres unidades nace en open_for_decant',
+  $$INSERT INTO app.inventory_lots
+      (id, tenant_id, variant_id, status, qty_initial, uom, unit_cost_minor, currency,
+       fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+    VALUES ('99999999-0000-0000-0000-000000000079', '11111111-1111-1111-1111-111111111111',
+            '55555555-0000-0000-0000-000000000001', 'open_for_decant', 3, 'unit', 0,
+            'PYG', 1, 0, 0)$$,
+  'El lote 99999999-0000-0000-0000-000000000079 es un sellado abierto de %');
+
+-- 81 ─ Y un sellado ya abierto no crece: cambiar `qty_initial` del lote de
+-- la apertura del smoke (una unidad) a tres lo dejaría abierto de varias.
+SELECT pg_temp.expect_fail_like(81, 'Un sellado abierto pasa de una unidad a tres',
+  $$UPDATE app.inventory_lots SET qty_initial = 3
+     WHERE id = '99999999-0000-0000-0000-000000000001'$$,
+  'El lote 99999999-0000-0000-0000-000000000001 es un sellado abierto de %');
+
+-- 82 ─ Control positivo: un sellado de UNA unidad se abre, y el granel hijo
+-- de 125 ml también está en `open_for_decant` sin ser sellado. Es lo que
+-- hace la apertura de WP-C11 (RN-LOT-02); si esto se rechazara, el
+-- invariante rompería el caso feliz.
+SELECT pg_temp.expect_fail_like(82, 'Un sellado de una unidad se abre, y su granel también',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('99999999-0000-0000-0000-000000000081', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-000000000001', 1, 'unit', 0, 'PYG', 1, 0, 0);
+      UPDATE app.inventory_lots SET status = 'open_for_decant'
+       WHERE id = '99999999-0000-0000-0000-000000000081';
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, parent_lot_id, status, qty_initial, uom, unit_cost_minor,
+         currency, fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('99999999-0000-0000-0000-000000000082', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-000000000002', '99999999-0000-0000-0000-000000000081',
+              'open_for_decant', 125, 'ml', 0, 'PYG', 1, 0, 0);
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+-- 83 ─ Falla cerrado: si no encuentra la variante del lote en su tenant,
+-- rechaza, en vez de no poder decidir y dejar pasar (docs/data-model.md
+-- §4.2). El lote con la variante de OTRO tenant se fabrica con los
+-- triggers y las FKs deshabilitados (desde 0023 la FK compuesta ya no lo
+-- deja crear, como en el 39) y se vuelven a habilitar antes del UPDATE.
+SELECT pg_temp.expect_fail_like(83, 'Abrir un lote cuya variante es de otro tenant',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('82828282-0000-0000-0000-000000000082', 'tenant-inv-82', 'Inv 82 SA', 'Inv 82');
+      INSERT INTO app.products (id, tenant_id, kind, slug, name, status)
+      VALUES ('82828282-0000-0000-0000-0000000000a1',
+              '82828282-0000-0000-0000-000000000082', 'accessory', 'inv-82', 'Inv 82', 'draft');
+      INSERT INTO app.product_variants
+        (id, tenant_id, product_id, sku, variant_type, uom, size_ml, price_pyg)
+      VALUES ('82828282-0000-0000-0000-0000000000b1',
+              '82828282-0000-0000-0000-000000000082',
+              '82828282-0000-0000-0000-0000000000a1', 'INV-82', 'sealed', 'unit', 100, 0);
+      ALTER TABLE app.inventory_lots DISABLE TRIGGER ALL;
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('99999999-0000-0000-0000-000000000083',
+              '11111111-1111-1111-1111-111111111111',
+              '82828282-0000-0000-0000-0000000000b1', 1, 'unit', 0, 'PYG', 1, 0, 0);
+      ALTER TABLE app.inventory_lots ENABLE TRIGGER ALL;
+      UPDATE app.inventory_lots SET status = 'open_for_decant'
+       WHERE id = '99999999-0000-0000-0000-000000000083';
+    END $x$
+  $$,
+  'Variante del lote 99999999-0000-0000-0000-000000000083 no encontrada en su tenant%');
+
+-- 84 ─ Un producto es un solo líquido: una segunda variante de granel del
+-- mismo producto se rechaza. La apertura necesita saber a qué granel va el
+-- frasco, y lo impone la base, no la búsqueda.
+SELECT pg_temp.expect_fail_like(84, 'Segunda variante de granel del mismo producto',
+  $$INSERT INTO app.product_variants
+      (tenant_id, product_id, sku, variant_type, uom, price_pyg)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '44444444-4444-4444-4444-444444444444', 'LAY-BULK-2', 'bulk', 'ml', 0)$$,
+  '%product_variants_one_bulk_per_product%');
+
+-- 85 ─ Control positivo del 84: otro producto sí puede tener su propio
+-- granel. El índice es por producto, no global.
+SELECT pg_temp.expect_fail_like(85, 'Otro producto tiene su propia variante de granel',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.product_variants
+        (tenant_id, product_id, sku, variant_type, uom, price_pyg)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '44444444-0000-0000-0000-00000000aaaa', 'INSUMOS-BULK', 'bulk', 'ml', 0);
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-C12 (0029_serialized_unit_lot_variant.sql): la variante de una unidad
+-- serializada es la de su lote, y el serial es único por tenant.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 86 ─ Una unidad serializada no puede declarar otra variante que la de su
+-- lote. Mismo defecto que el 68 para los movimientos: la variante la
+-- declaraba quien inserta, y la unidad quedaba asociada al costo y al
+-- saldo de un lote de otra variante. Lo único que puede rechazarlo es la
+-- FK compuesta lote+variante.
+SELECT pg_temp.expect_fail_like(86, 'Unidad serializada con una variante distinta de la de su lote',
+  $$INSERT INTO app.serialized_units (tenant_id, variant_id, lot_id, serial_number)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '55555555-0000-0000-0000-00000000a001',
+            '99999999-0000-0000-0000-000000000001', 'SN-INV-85')$$,
+  '%serialized_units_lot_id_fkey%');
+
+-- 87 ─ Control positivo del 86: con la variante de su lote, y sin lote
+-- (una unidad puede existir sin lote: MATCH SIMPLE no verifica nada con
+-- `lot_id` NULL), la unidad se acepta.
+SELECT pg_temp.expect_fail_like(87, 'Unidad serializada con la variante de su lote, y otra sin lote',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.serialized_units (tenant_id, variant_id, lot_id, serial_number)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001',
+              '99999999-0000-0000-0000-0000000000a1', 'SN-INV-86'),
+             ('11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', NULL, 'SN-INV-86-SIN-LOTE');
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+-- 88 ─ Un lote con unidades serializadas no cambia de variante: sin esto,
+-- el 86 se eludía cambiando la variante del lote DESPUÉS de crear la
+-- unidad. El lote es nuevo y sin movimientos, así que la FK de los
+-- movimientos (0023) no interviene: la única barrera es la de la unidad.
+SELECT pg_temp.expect_fail_like(88, 'Un lote con unidades serializadas cambia de variante',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('99999999-0000-0000-0000-000000000087', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'unit', 0, 'PYG', 1, 0, 0);
+      INSERT INTO app.serialized_units (tenant_id, variant_id, lot_id, serial_number)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001',
+              '99999999-0000-0000-0000-000000000087', 'SN-INV-87');
+      UPDATE app.inventory_lots SET variant_id = '55555555-0000-0000-0000-00000000a002'
+       WHERE id = '99999999-0000-0000-0000-000000000087';
+    END $x$
+  $$,
+  '%serialized_units_lot_id_fkey%');
+
+-- 89 ─ RN-SER-01: el número de serie es único por tenant.
+SELECT pg_temp.expect_fail_like(89, 'Dos unidades con el mismo número de serie en el mismo tenant',
+  $$INSERT INTO app.serialized_units (tenant_id, variant_id, serial_number)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '55555555-0000-0000-0000-00000000a001', 'SN-INV-88'),
+           ('11111111-1111-1111-1111-111111111111',
+            '55555555-0000-0000-0000-00000000a001', 'SN-INV-88')$$,
+  '%serialized_units_tenant_id_serial_number_key%');
+
+-- 90 ─ Control positivo del 89: el mismo número de serie en OTRO tenant se
+-- acepta. La unicidad es por tenant, no global: dos negocios distintos
+-- pueden vender un reloj con el mismo serial sin chocar entre sí.
+SELECT pg_temp.expect_fail_like(90, 'El mismo número de serie en dos tenants distintos',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('89898989-0000-0000-0000-000000000089', 'tenant-inv-89', 'Inv 89 SA', 'Inv 89');
+      INSERT INTO app.products (id, tenant_id, kind, slug, name, status)
+      VALUES ('89898989-0000-0000-0000-0000000000a1',
+              '89898989-0000-0000-0000-000000000089', 'accessory', 'inv-89', 'Inv 89', 'draft');
+      INSERT INTO app.product_variants (id, tenant_id, product_id, sku, variant_type, uom, price_pyg)
+      VALUES ('89898989-0000-0000-0000-0000000000b1',
+              '89898989-0000-0000-0000-000000000089',
+              '89898989-0000-0000-0000-0000000000a1', 'INV-89', 'unit', 'unit', 0);
+      INSERT INTO app.serialized_units (tenant_id, variant_id, serial_number)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 'SN-INV-89'),
+             ('89898989-0000-0000-0000-000000000089',
+              '89898989-0000-0000-0000-0000000000b1', 'SN-INV-89');
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
 
 \echo ''
 \echo '=============================================================='

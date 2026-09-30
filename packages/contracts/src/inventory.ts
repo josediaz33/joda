@@ -7,6 +7,7 @@ import { z } from "zod";
 import { uomSchema } from "./catalog.js";
 import { idSchema } from "./shared/id.js";
 import { moneySchema, pygAmountSchema } from "./shared/money.js";
+import { MAX_PAGE_SIZE, paginatedOutputSchema } from "./shared/pagination.js";
 
 export const lotStatusSchema = z.enum([
   "available",
@@ -84,6 +85,10 @@ export const adminLotSchema = z
     uom: uomSchema,
     qtyInitial: z.number(),
     onHand: z.number(),
+    // Costo de compra en la moneda de compra, POR UNIDAD DE MEDIDA de este
+    // lote: por frasco en un sellado, por ml en un granel (igual que
+    // unitLandedCostPyg). Informativo: el costo de la mercadería vendida sale
+    // siempre de los campos en guaraníes, nunca de este.
     unitCost: moneySchema,
     fxRateToPyg: z.number().positive(),
     landedCostPyg: pygAmountSchema,
@@ -168,3 +173,116 @@ export const createAdjustmentInput = z
   })
   .strict();
 export type CreateAdjustmentInput = z.infer<typeof createAdjustmentInput>;
+
+// ---------------------------------------------------------------------
+// Apertura de frasco — RF-INV-08, RN-LOT-02, ADR-009 (WP-C11). Una
+// CONVERSIÓN entre lotes, no un cambio de estado: el input es solo el lote
+// sellado. Nada más se acepta del cliente — el volumen sale del producto y
+// el granel de destino de la única variante `bulk` del mismo producto
+// (índice único parcial de 0028), no de quien llama.
+//
+// Abre UNA unidad. Si el lote nació con más de una (`qty_initial` > 1), la
+// apertura separa primero esa unidad en su propio lote de una unidad
+// (caso borde 21) y abre ese: `openedSealedLot` es el lote que quedó
+// `open_for_decant` (el original si tenía una sola unidad, el lote
+// separado si tenía varias) y `sourceLot` es el original, ya sin la unidad
+// — `null` cuando no hubo separación.
+// ---------------------------------------------------------------------
+export const openLotInput = z.object({ lotId: idSchema }).strict();
+export type OpenLotInput = z.infer<typeof openLotInput>;
+
+export const openLotOutput = z
+  .object({
+    sourceLot: adminLotSchema.nullable(),
+    openedSealedLot: adminLotSchema,
+    bulkLot: adminLotSchema,
+    movements: z.array(adminMovementSchema),
+  })
+  .strict();
+export type OpenLotOutput = z.infer<typeof openLotOutput>;
+
+// ---------------------------------------------------------------------
+// Unidades serializadas — RF-INV-10 (WP-C12): número de serie único por
+// tenant, garantía y trazabilidad de venta. Admin únicamente. `variantId` NO
+// es un campo de entrada del alta: lo deriva el servidor del lote (la
+// unidad es de la variante de su lote, RN-SER-04); aceptarlo del cliente
+// permitiría declarar otra distinta.
+// ---------------------------------------------------------------------
+// Mismos siete valores que el `CREATE TYPE serial_status` de
+// packages/db/migrations/0001_foundation.sql.
+export const serialStatusSchema = z.enum([
+  "available",
+  "reserved",
+  "sold",
+  "quarantine",
+  "damaged",
+  "returned",
+  "refurbished",
+]);
+export type SerialStatus = z.infer<typeof serialStatusSchema>;
+
+export const adminSerializedUnitSchema = z
+  .object({
+    id: idSchema,
+    variantId: idSchema,
+    lotId: idSchema.nullable(),
+    serialNumber: z.string(),
+    status: serialStatusSchema,
+    // `date` de Postgres: AAAA-MM-DD, sin hora ni zona.
+    warrantyUntil: z.string().nullable(),
+    // Vínculo con la línea de venta: lo llena la confirmación de la venta
+    // (WP-C19, RN-VTA-04); hasta entonces es siempre null.
+    soldOrderLineId: idSchema.nullable(),
+    notes: z.string().nullable(),
+    createdAt: z.string(),
+  })
+  .strict();
+export type AdminSerializedUnit = z.infer<typeof adminSerializedUnitSchema>;
+
+export const createSerializedUnitInput = z
+  .object({
+    lotId: idSchema,
+    serialNumber: z.string().trim().min(1, "El número de serie es obligatorio").max(100),
+    warrantyUntil: z.iso.date().nullable().optional(),
+    notes: z.string().trim().min(1).max(500).nullable().optional(),
+  })
+  .strict();
+export type CreateSerializedUnitInput = z.infer<typeof createSerializedUnitInput>;
+
+// Se consulta por UNO de tres criterios: un número de serie exacto, un lote
+// o una variante. Sin ninguno sería un listado de todas las unidades del
+// tenant, y con dos, ambiguo.
+export const listSerializedUnitsInput = z
+  .object({
+    serialNumber: z.string().trim().min(1).max(100).optional(),
+    lotId: idSchema.optional(),
+    variantId: idSchema.optional(),
+    status: serialStatusSchema.optional(),
+    cursor: z.string().optional(),
+    limit: z.number().int().min(1).max(MAX_PAGE_SIZE).optional(),
+  })
+  .strict()
+  .refine(
+    (input) =>
+      [input.serialNumber, input.lotId, input.variantId].filter((value) => value !== undefined)
+        .length === 1,
+    {
+      message: "Indicá exactamente uno: serialNumber, lotId o variantId.",
+      path: ["serialNumber"],
+    },
+  );
+export type ListSerializedUnitsInput = z.infer<typeof listSerializedUnitsInput>;
+
+export const listSerializedUnitsOutput = paginatedOutputSchema(adminSerializedUnitSchema);
+export type ListSerializedUnitsOutput = z.infer<typeof listSerializedUnitsOutput>;
+
+// Trazabilidad: la unidad y todos los movimientos que la mencionan
+// (`inventory_movements.serial_unit_id`), con su costo. Hoy vacío hasta que
+// exista la venta (WP-C19) o la devolución.
+export const serializedUnitHistoryInput = z.object({ serialUnitId: idSchema }).strict();
+export type SerializedUnitHistoryInput = z.infer<typeof serializedUnitHistoryInput>;
+
+export const serializedUnitHistoryOutput = z
+  .object({ unit: adminSerializedUnitSchema, movements: z.array(adminMovementSchema) })
+  .strict();
+export type SerializedUnitHistory = z.infer<typeof serializedUnitHistoryOutput>;

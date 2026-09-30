@@ -333,6 +333,14 @@ export async function findVariantRow(tx: TenantTx, id: string): Promise<VariantR
   return tx.product_variants.findFirst({ where: { id } });
 }
 
+/** Si el producto ya tiene su variante de granel — a lo sumo una, impuesto por el índice único parcial de 0028 (WP-C11). */
+export async function productHasBulkVariant(tx: TenantTx, productId: string): Promise<boolean> {
+  const count = await tx.product_variants.count({
+    where: { product_id: productId, variant_type: "bulk" },
+  });
+  return count > 0;
+}
+
 export async function listVariantRows(tx: TenantTx, productId: string): Promise<VariantRow[]> {
   return tx.product_variants.findMany({
     where: { product_id: productId },
