@@ -3,7 +3,7 @@
 - **Estado:** Reemplazado por ADR-026 (2026-09-30)
 - **Fecha:** 2026-09-09
 - **Ámbito:** Base de datos
-- **Nota (2026-09-30):** se conserva íntegro, con su redacción original: las migraciones `0018`, `0020` y `0023` citan sus excepciones y no se pueden editar. La lectura del lote sellado que la «Tercera excepción anotada» deja pendiente de confirmación la confirmó José el 2026-09-30; ver ADR-026.
+- **Nota (2026-09-30):** se conserva íntegro, con su redacción original: las migraciones `0018` y `0023` citan sus excepciones, `0020` cita su regla, y ninguna se puede editar. La lectura del lote sellado que la «Tercera excepción anotada» deja pendiente de confirmación la confirmó José el 2026-09-30; ver ADR-026.
 
 ---
 
