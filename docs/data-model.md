@@ -322,6 +322,13 @@ CREATE POLICY tenant_access ON app.<tabla>
 
 Encima, políticas de permiso sobre lo sensible: `journal_entries`, `chart_of_accounts`, `customer_deposits`, `sourcing_scenarios`, `suppliers`, `purchase_orders`, `inventory_lots`. En esas tablas no hay `tenant_access` para los comandos que cubre la política de permiso: ahí la permisiva es la de permiso, así que el resultado es tenant **Y** permiso.
 
+Qué comandos cubre la política de permiso, en cada una:
+
+- **Lectura (SELECT):** las siete, desde 0010.
+- **Escritura:** `suppliers`, `purchase_orders`, `inventory_lots`, `chart_of_accounts` y `customer_deposits` desde 0030 (WP-B11): INSERT y UPDATE con su permiso de escritura, una política por comando, y DELETE denegado salvo en `purchase_orders` en borrador. `journal_entries` tiene su INSERT desde 0010 y su mapa de estados desde 0020; `sourcing_scenarios` tiene INSERT y todavía solo tenant en UPDATE y DELETE.
+
+La tabla de permisos por comando y la trampa de la lectura (un rol que escribe sin poder leer) están en `docs/security-spec.md` §3.1.
+
 **Por qué RESTRICTIVE.** Las políticas permisivas se combinan con OR. Hasta WP-B10, `tenant_isolation` era permisiva (el default de Postgres), así que en las siete tablas de arriba alcanzaba con tener el permiso para leer filas de **cualquier** tenant. Una restrictiva se combina con AND contra todas las demás. El invariante 23 falla si aparece una tabla con RLS sin `tenant_isolation` RESTRICTIVE.
 
 **`FORCE` es necesario** porque sin él el dueño de la tabla eludiría las políticas. Y la API se conecta con `joda_api`, creado `NOBYPASSRLS`: si usara `service_role`, nada de esto se evaluaría.

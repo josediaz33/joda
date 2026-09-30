@@ -75,7 +75,7 @@ Forma: `recurso.subrecurso:acción`.
 | `sales.order:refund`       |   ✓   |    ✓    |          |          |
 | `accounting.cashbox:read`  |   ✓   |    ✓    |          |          |
 | `accounting.cashbox:write` |   ✓   |    ✓    |          |          |
-| `accounting.deposit:read`  |   ✓   |    ✓    |          |          |
+| `accounting.deposit:read`  |   ✓   |    ✓    |    ✓     |          |
 | `accounting.deposit:write` |   ✓   |    ✓    |    ✓     |          |
 | `accounting.journal:*`     |   ✓   |    ✓    |          |          |
 | `market.*`                 |   ✓   |    ✓    |          | receive  |
@@ -86,7 +86,7 @@ Forma: `recurso.subrecurso:acción`.
 
 **Dos decisiones deliberadas:**
 
-- **`vendedor` no ve caja ni costos.** Que alguien cargue una venta no implica que vea el flujo financiero del negocio ni lo que cuesta cada frasco. Sí puede recibir señas, porque es parte de vender.
+- **`vendedor` no ve caja ni costos.** Que alguien cargue una venta no implica que vea el flujo financiero del negocio ni lo que cuesta cada frasco. Sí maneja señas, porque es parte de vender: las registra y las aplica al vender, y por eso tiene `accounting.deposit:write` **y** `accounting.deposit:read`. Con RLS, escribir una seña exige poder leerla (§3.1, "La trampa de la lectura"). `accounting.cashbox:read` sigue fuera de su alcance.
 - **`deposito` no ve precios de compra.** Mueve mercadería. `inventory.stock:read` incluye costos de lote, así que si más adelante hace falta un depósito sin acceso a costos, se separa en `inventory.stock:read` e `inventory.cost:read`.
 
 ---
@@ -128,6 +128,32 @@ CREATE POLICY accounting_read ON app.journal_entries
 CREATE POLICY lots_read ON app.inventory_lots
   FOR SELECT USING (app.has_permission('inventory.stock:read'));
 ```
+
+#### Escritura sobre lo sensible (WP-B11, `0030_write_permissions_sensitive_tables.sql`)
+
+Leer exigía un permiso desde 0010; escribir solo exigía tenant. Desde 0030, en `suppliers`, `purchase_orders`, `inventory_lots`, `chart_of_accounts` y `customer_deposits`, escribir exige el permiso de escritura, una política por comando. Combinado con `tenant_isolation` (RESTRICTIVE), el resultado es tenant **Y** permiso:
+
+| Tabla               | INSERT                                                                                                       | UPDATE                                                 | DELETE                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ | ---------------------------------------------------- |
+| `suppliers`         | `market.supplier:write`                                                                                      | `market.supplier:write`                                | nadie (se desactiva con `is_active`)                 |
+| `purchase_orders`   | `market.purchase_order:write`                                                                                | `market.purchase_order:write`, `:approve` o `:receive` | `market.purchase_order:write`, y **solo en `draft`** |
+| `inventory_lots`    | `market.purchase_order:receive`, `inventory.decant:execute`, `sales.order:refund` o `inventory.stock:adjust` | los mismos cuatro                                      | nadie (historial de costo; se corrige con un ajuste) |
+| `chart_of_accounts` | `accounting.journal:write`                                                                                   | `accounting.journal:write`                             | nadie (se desactiva con `is_active`)                 |
+| `customer_deposits` | `accounting.deposit:write`                                                                                   | `accounting.deposit:write`                             | nadie (se devuelve o se aplica, nunca se borra)      |
+
+Los cuatro permisos de los lotes son el mapeo que aprobó José el 2026-09-25: recepción de compra, apertura de frasco y decant por anticipado, devolución a cuarentena, y ajuste o saldo de apertura.
+
+**La base impone el piso, no la operación.** La capa 1 no sabe cuál de las operaciones está haciendo quien escribe: en `inventory_lots` acepta cualquiera de los cuatro permisos, y en el UPDATE de `purchase_orders` la unión de los tres **sobre la fila entera**. Qué transición puede hacer cada permiso (aprobar, recibir, cancelar) lo imponen la capa 2 (`requirePermission`) y `packages/domain`, no la base. Un DELETE sin política permisiva no da error: afecta cero filas.
+
+**La trampa de la lectura.** Con RLS, `INSERT ... RETURNING` y `UPDATE ... WHERE` evalúan también la política de **lectura** de la tabla. Un rol con el permiso de escribir y sin el de leer no recibe un error que lo explique: el `INSERT ... RETURNING` que emite Prisma se rechaza con `42501`, y el `UPDATE ... WHERE` o `DELETE ... WHERE` afecta cero filas (la API lo devuelve como 404). Consecuencias:
+
+- **En los roles sembrados, todo permiso de escritura de estas tablas viene con el de lectura de la misma tabla.** El invariante 94 de `packages/db/tests/invariants.sql` falla si no, nombrando rol y tabla. Un permiso de escritura nuevo entra en ese invariante en el mismo PR.
+- **Una excepción registrada:** `deposito` tiene `market.purchase_order:receive` y no `market.purchase_order:read`, así que no ve la orden que recibe. No se resuelve en la capa 1: WP-C15 define que el depósito carga la recepción en borrador (`goods_receipts`, con las cantidades y sin precios) y la contabiliza quien lee la orden.
+- **Un rol personalizado** que combine un permiso de escritura con uno de lectura distinto de su par queda en ese mismo hueco. La base no lo impide; al crearlo hay que darle el par.
+
+**Nunca `FOR ALL` en una política de permiso.** Un `FOR ALL` permisivo también cubre `SELECT`: quien puede escribir leería la tabla entera aunque no tenga el permiso de leer. El invariante 92 lo verifica.
+
+**Solo audiencia `staff`.** `has_permission` exige una sesión de staff viva (WP-B13), así que un contexto `system` o `customer` no escribe en estas cinco tablas. Hoy ningún código lo necesita; el día que un webhook de pago tenga que registrar una seña, necesita una política propia o una función `SECURITY DEFINER` acotada, no un permiso prestado.
 
 **La condición que hace que esta capa exista de verdad:**
 
