@@ -217,7 +217,7 @@ Un lote **sellado** en `open_for_decant` es **terminal**: no admite ningún movi
 Impuesto por la base:
 
 - `assert_sealed_lot_not_open` rechaza el movimiento. Mira la variante del lote, no solo la que declara el movimiento. Hasta la revisión de WP-B09, declarar otra variante eludía la regla. Desde WP-B08c, además, las dos no pueden diferir.
-- `trg_sealed_lot_terminal` rechaza sacar el lote de `open_for_decant`. Si no, volverlo a `available` eludía lo anterior y permitía abrir dos veces el mismo frasco (caso borde 5). **Pendiente de confirmación de José:** que "terminal" incluya el estado, no solo los movimientos, es una lectura de WP-B08c (ver ADR-017, tercera excepción).
+- `trg_sealed_lot_terminal` rechaza sacar el lote de `open_for_decant`. Si no, volverlo a `available` eludía lo anterior y permitía abrir dos veces el mismo frasco (caso borde 5). José confirmó el 2026-09-30 que "terminal" incluye el estado, no solo los movimientos (ver ADR-026, «Lote sellado abierto»).
 
 Hasta WP-B08c solo se rechazaba `sale`; un `waste` o un `adjustment` sacaban frascos sellados de un lote abierto. Decidido por José el 2026-09-25.
 

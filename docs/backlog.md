@@ -330,7 +330,7 @@ Pruebas, rojo antes y verde después:
   - Se reemplazan en vez de agregarse al lado. Con dos FKs entre el mismo par de tablas, `db pull` renombra los campos de relación y la API deja de compilar. Aun así cambiaron los tres de las tablas de detalle, que ya tenían dos FKs: renombre mecánico en `modules/catalog`.
   - `patch-prisma-schema.mjs` se generalizó: las relaciones uno a uno `(product_id, tenant_id)` y `(lot_id, tenant_id)` daban P1012, igual que `(product_id, kind)` en B04.
 - **Variante del movimiento = variante del lote.** La FK de `inventory_movements.lot_id` es `(lot_id, variant_id, tenant_id)`. Todos los movimientos existentes (smoke, C10) ya cumplían.
-- **RN-LOT-03 extendida.** Un lote sellado en `open_for_decant` rechaza cualquier movimiento, no solo `sale`. Trigger nuevo `trg_sealed_lot_terminal`: ese lote no cambia de estado. Sin él, volverlo a `available` eludía la regla. Anotado en `domain-rules.md` y como tercera excepción de ADR-017. **José lo tiene que confirmar:** "terminal" se interpretó también como estado, no solo como movimientos.
+- **RN-LOT-03 extendida.** Un lote sellado en `open_for_decant` rechaza cualquier movimiento, no solo `sale`. Trigger nuevo `trg_sealed_lot_terminal`: ese lote no cambia de estado. Sin él, volverlo a `available` eludía la regla. Anotado en `domain-rules.md` y como tercera excepción de ADR-017. **José lo confirmó el 2026-09-30:** "terminal" incluye el estado, no solo los movimientos (ADR-026).
 
 Pruebas, rojo antes y verde después:
 
@@ -359,7 +359,7 @@ Pruebas, rojo antes y verde después:
 
 Veredicto: aprobar con cambios.
 
-- **Importante, corregido:** ADR-017 y RN-LOT-03 daban por decidido que el estado es terminal. Ahora dicen que está pendiente de confirmación de José.
+- **Importante, corregido:** ADR-017 y RN-LOT-03 daban por decidido que el estado es terminal. Ahora dicen que está pendiente de confirmación de José; la confirmó el 2026-09-30 (ADR-026).
 - **Importante, ya anotado:** la pregunta de abajo.
 - **Menor, corregido:** el ON UPDATE de la FK (una fila apuntada no cambia de tenant) no se había aislado, porque como `joda_api` RLS frena antes. Test nuevo como superusuario, rojo sin 0023.
 
