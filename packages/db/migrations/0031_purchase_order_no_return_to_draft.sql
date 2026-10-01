@@ -24,32 +24,43 @@
 -- `pending_approval` es el otro estado en el que la orden todavía no se
 -- aprobó, y desde él se llega a `draft`. Por eso la guarda cubre la entrada a
 -- los dos: se entra a `draft` o a `pending_approval` solo desde `draft` o
--- `pending_approval`. Es exactamente lo que permite la máquina de A08 (a
+-- `pending_approval`. Es lo que permite la máquina de A08 (a
 -- `pending_approval` solo se llega desde `draft`; a `draft`, desde
--- `pending_approval`: una orden devuelta a corregir antes de aprobarse), así
--- que la base no agrega ninguna arista, solo impide las que la máquina nunca
--- tuvo. De `approved` en adelante, rechaza.
+-- `pending_approval`: una orden devuelta a corregir antes de aprobarse), más
+-- las identidades `draft → draft` y `pending_approval → pending_approval`,
+-- que un UPDATE que reenvía `status` necesita. La base no agrega ninguna
+-- arista entre estados distintos, solo impide las que la máquina nunca tuvo.
+-- De `approved` en adelante, rechaza.
 --
 -- QUÉ NO ES. No es la matriz de transiciones de la orden de compra, que
 -- sigue en el dominio (`packages/domain/src/procurement/purchaseOrder.ts`,
--- WP-A08), ni toca los terminales `received` y `cancelled`, que ADR-026
--- deja allí. Tampoco decide qué sigue a qué después de aprobarse. Solo
--- impide volver a los estados previos a la aprobación.
+-- WP-A08). No hace terminales a `received` y `cancelled`, que ADR-026 deja
+-- allí, ni decide qué sigue a qué después de aprobarse. Solo impide volver a
+-- los estados previos a la aprobación. Eso sí los alcanza, como
+-- consecuencia: para la política de DELETE de 0030, `received → draft →
+-- DELETE` desarma la premisa igual que `sent → draft` (invariantes 98 y 99).
 --
--- FALLA CERRADO. Un `OLD.status` que no sea ninguno de los dos valores
--- permitidos (incluido NULL) rechaza: la comparación es `IS DISTINCT FROM`,
--- no `<>`. Lee solo OLD y NEW, ninguna otra tabla, así que no necesita
--- SECURITY DEFINER ni puede decidir sobre algo que RLS le oculte: corre con
--- los privilegios de quien edita y ve exactamente lo que necesita. Fija
+-- FALLA CERRADO, POR LISTA BLANCA. Se entra a un estado previo a la
+-- aprobación solo desde los dos que la guarda nombra; cualquier otro estado
+-- de origen rechaza, incluido uno que se agregue al enum más adelante. Lee
+-- solo OLD y NEW, ninguna otra tabla, así que no necesita SECURITY DEFINER ni
+-- puede decidir sobre algo que RLS le oculte: corre con los privilegios de
+-- quien edita y ve exactamente lo que necesita. Compara con `IS DISTINCT
+-- FROM` y no con `<>`, que hoy da lo mismo (`status` es NOT NULL) y que
+-- seguiría rechazando un NULL si la columna dejara de serlo. Fija
 -- `search_path = app, pg_temp` como toda función de disparador de `app.*`
 -- (invariante 28). El invariante 29, que exige SECURITY DEFINER a las que
--- leen tablas, la admite junto a `set_updated_at` y `guard_append_only`.
+-- leen tablas, la admite por nombre junto a `set_updated_at` y
+-- `guard_append_only`: que solo lea OLD y NEW lo afirma este comentario, no
+-- lo verifica el invariante.
 --
 -- `BEFORE UPDATE OF status` dispara aunque el UPDATE no traiga WHERE ni
 -- RETURNING, y para toda fila que la política de UPDATE deje pasar: el
 -- depósito (`:receive`, sin `:read`) con un `UPDATE purchase_orders SET
 -- status = 'draft'` sin WHERE queda frenado en la primera fila que no sea un
--- borrador. Los invariantes 95-103 lo prueban por comportamiento.
+-- borrador. Ese caso, con RLS de por medio, lo prueba
+-- `write_permissions.test.ts` como `joda_api`. Los invariantes 95-103 corren
+-- como superusuario y prueban el trigger en sí, por comportamiento.
 -- =====================================================================
 SET search_path = app, public;
 

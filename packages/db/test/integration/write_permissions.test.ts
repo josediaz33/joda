@@ -33,6 +33,8 @@ const SENT_PO_ID = "b1100000-0000-0000-0000-0000000000d2";
 const PENDING_PO_ID = "b1100000-0000-0000-0000-0000000000d3";
 const APPROVED_PO_ID = "b1100000-0000-0000-0000-0000000000d4";
 const PARTIAL_PO_ID = "b1100000-0000-0000-0000-0000000000d5";
+const RECEIVED_PO_ID = "b1100000-0000-0000-0000-0000000000d6";
+const CANCELLED_PO_ID = "b1100000-0000-0000-0000-0000000000d7";
 const LOT_ID = "b1100000-0000-0000-0000-0000000000c1";
 const NEW_LOT_ID = "b1100000-0000-0000-0000-0000000000c2";
 const DEPOSIT_ID = "b1100000-0000-0000-0000-0000000000e1";
@@ -253,7 +255,11 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
              ('${PARTIAL_PO_ID}', '${REAL_TENANT_ID}', '${SUPPLIER_ID}', 'OC-B11-PARCIAL',
               'partially_received', 'USD', '${REAL_OWNER_ID}', '${REAL_OWNER_ID}', now()),
              ('${SENT_PO_ID}', '${REAL_TENANT_ID}', '${SUPPLIER_ID}', 'OC-B11-ENVIADA', 'sent',
-              'USD', '${REAL_OWNER_ID}', '${REAL_OWNER_ID}', now());
+              'USD', '${REAL_OWNER_ID}', '${REAL_OWNER_ID}', now()),
+             ('${RECEIVED_PO_ID}', '${REAL_TENANT_ID}', '${SUPPLIER_ID}', 'OC-B11-RECIBIDA', 'received',
+              'USD', '${REAL_OWNER_ID}', '${REAL_OWNER_ID}', now()),
+             ('${CANCELLED_PO_ID}', '${REAL_TENANT_ID}', '${SUPPLIER_ID}', 'OC-B11-CANCELADA',
+              'cancelled', 'USD', '${REAL_OWNER_ID}', NULL, NULL);
       INSERT INTO app.inventory_lots
         (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
          fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
@@ -450,6 +456,8 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       ["approved", APPROVED_PO_ID],
       ["sent", SENT_PO_ID],
       ["partially_received", PARTIAL_PO_ID],
+      ["received", RECEIVED_PO_ID],
+      ["cancelled", CANCELLED_PO_ID],
     ])("el owner, con :write y :read, no devuelve una orden %s a borrador", async (_status, id) => {
       await expect(as(owner, RETURN_TO_DRAFT(id))).rejects.toMatchObject({
         code: "23514",
@@ -461,6 +469,8 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       ["approved", APPROVED_PO_ID],
       ["sent", SENT_PO_ID],
       ["partially_received", PARTIAL_PO_ID],
+      ["received", RECEIVED_PO_ID],
+      ["cancelled", CANCELLED_PO_ID],
     ])(
       "el owner no devuelve una orden %s a pending_approval: sería el primer paso de un rodeo de tres",
       async (_status, id) => {
