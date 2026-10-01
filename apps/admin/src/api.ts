@@ -12,7 +12,6 @@ import {
 } from "@joda/contracts";
 
 // La cookie __Host-joda_a es httpOnly: fetch la envía, JavaScript nunca la lee.
-// En producción la API se publica bajo el mismo host del admin (/trpc).
 const trpc = createTRPCUntypedClient({
   links: [
     httpBatchLink({
