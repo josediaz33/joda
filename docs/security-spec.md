@@ -86,7 +86,7 @@ Forma: `recurso.subrecurso:acción`.
 
 **Dos decisiones deliberadas:**
 
-- **`vendedor` no ve caja ni costos.** Que alguien cargue una venta no implica que vea el flujo financiero del negocio ni lo que cuesta cada frasco. Sí maneja señas, porque es parte de vender: las registra y las aplica al vender, y por eso tiene `accounting.deposit:write` **y** `accounting.deposit:read`. Con RLS, escribir una seña exige poder leerla (§3.1, "La trampa de la lectura"). `accounting.cashbox:read` sigue fuera de su alcance.
+- **`vendedor` no ve caja ni costos.** Que alguien cargue una venta no implica que vea el flujo financiero del negocio ni lo que cuesta cada frasco. Sí maneja señas, porque es parte de vender: las registra y las aplica al vender, y por eso tiene `accounting.deposit:write` **y** `accounting.deposit:read`. Con RLS, escribir una seña exige poder leerla (§3.1, "La trampa de la lectura"). `accounting.cashbox:read` sigue fuera de su alcance. **Lee todas las señas del tenant, no solo las de su cliente:** la base filtra por tenant, no por vendedor. Decisión aceptada (2026-10-01): acotarlo por cliente no se justifica en un negocio de este tamaño.
 - **`deposito` no ve precios de compra.** Mueve mercadería. `inventory.stock:read` incluye costos de lote, así que si más adelante hace falta un depósito sin acceso a costos, se separa en `inventory.stock:read` e `inventory.cost:read`.
 
 ---
@@ -145,15 +145,17 @@ Los cuatro permisos de los lotes son el mapeo que aprobó José el 2026-09-25: r
 
 **La base impone el piso, no la operación.** La capa 1 no sabe cuál de las operaciones está haciendo quien escribe: en `inventory_lots` acepta cualquiera de los cuatro permisos, y en el UPDATE de `purchase_orders` la unión de los tres **sobre la fila entera**. Qué transición puede hacer cada permiso (aprobar, recibir, cancelar) lo imponen la capa 2 (`requirePermission`) y `packages/domain`, no la base. Un DELETE sin política permisiva no da error: afecta cero filas.
 
-**La trampa de la lectura.** Con RLS, `INSERT ... RETURNING` y `UPDATE ... WHERE` evalúan también la política de **lectura** de la tabla. Un rol con el permiso de escribir y sin el de leer no recibe un error que lo explique: el `INSERT ... RETURNING` que emite Prisma se rechaza con `42501`, y el `UPDATE ... WHERE` o `DELETE ... WHERE` afecta cero filas (la API lo devuelve como 404). Consecuencias:
+**El filtro `draft` del DELETE de órdenes es una barrera del DELETE directo, no una máquina de estados.** La política de UPDATE no mira el estado: un rol con `:write` y `:read` puede devolver una orden a `draft` con un UPDATE y borrarla en una segunda transacción. Hoy lo frenan, de forma incidental, `purchase_order_transitions` (append-only: una orden con su transición registrada no se borra) y la FK RESTRICT de `goods_receipts`. Que una orden no vuelva a borrador lo imponen la capa 2 y el dominio. Si hace falta que la imponga la base, es un guarda aparte con el criterio de inmutabilidad de ADR-017.
+
+**La trampa de la lectura.** Con RLS, `INSERT ... RETURNING` y los `UPDATE` o `DELETE` que **leen columnas** (con `WHERE` o `RETURNING`) evalúan también la política de **lectura** de la tabla. Un rol con el permiso de escribir y sin el de leer no recibe un error que lo explique: el `INSERT ... RETURNING` que emite Prisma se rechaza con `42501`, y el `UPDATE ... WHERE` o `DELETE ... WHERE` afecta cero filas (la API lo devuelve como 404). Un `UPDATE` sin `WHERE` ni `RETURNING` (o con `WHERE true`) no lee nada y solo necesita el permiso de escritura: el depósito, que tiene `:receive` y no `:read`, no edita una orden por id pero sí podría con un `UPDATE` sin `WHERE`, porque `:receive` habilita la fila entera. Consecuencias:
 
 - **En los roles sembrados, todo permiso de escritura de estas tablas viene con el de lectura de la misma tabla.** El invariante 94 de `packages/db/tests/invariants.sql` falla si no, nombrando rol y tabla. Un permiso de escritura nuevo entra en ese invariante en el mismo PR.
 - **Una excepción registrada:** `deposito` tiene `market.purchase_order:receive` y no `market.purchase_order:read`, así que no ve la orden que recibe. No se resuelve en la capa 1: WP-C15 define que el depósito carga la recepción en borrador (`goods_receipts`, con las cantidades y sin precios) y la contabiliza quien lee la orden.
-- **Un rol personalizado** que combine un permiso de escritura con uno de lectura distinto de su par queda en ese mismo hueco. La base no lo impide; al crearlo hay que darle el par.
+- **Un rol personalizado** que combine un permiso de escritura con uno de lectura distinto de su par queda en ese mismo hueco. La base no lo impide; se impide al administrar roles: WP-C24 exige que asignar un permiso de escritura sobre estas cinco tablas asigne también el de lectura de su par.
 
 **Nunca `FOR ALL` en una política de permiso.** Un `FOR ALL` permisivo también cubre `SELECT`: quien puede escribir leería la tabla entera aunque no tenga el permiso de leer. El invariante 92 lo verifica.
 
-**Solo audiencia `staff`.** `has_permission` exige una sesión de staff viva (WP-B13), así que un contexto `system` o `customer` no escribe en estas cinco tablas. Hoy ningún código lo necesita; el día que un webhook de pago tenga que registrar una seña, necesita una política propia o una función `SECURITY DEFINER` acotada, no un permiso prestado.
+**Solo audiencia `staff`.** `has_permission` exige una sesión de staff viva (WP-B13), así que un contexto `system` o `customer` no escribe en estas cinco tablas. Hoy ningún código lo necesita; el día que un webhook de pago tenga que registrar una seña, necesita una política propia o una función `SECURITY DEFINER` acotada, no un permiso prestado. Ese camino no está definido todavía: queda anotado en WP-C20 (señas) y WP-G13 (webhooks de pago).
 
 **La condición que hace que esta capa exista de verdad:**
 

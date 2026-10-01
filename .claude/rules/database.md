@@ -53,13 +53,15 @@ la tabla entera. El invariante 23 lo verifica. Detalle en
 
 Una política de permiso va **por comando, nunca `FOR ALL`**: un `FOR ALL`
 también cubre `SELECT` y le abre la lectura a quien solo debía escribir
-(invariante 92). Y `INSERT ... RETURNING` y `UPDATE ... WHERE` evalúan también
-la política de lectura, así que todo permiso de escritura de una tabla
-sensible viene con el de lectura de esa tabla (invariante 94). Al probar una
-política de escritura, probá la operación que emite Prisma, con el rol real
-conectado como `joda_api`: un rol sin lectura queda afuera por la lectura y
-la prueba pasa aunque la política de escritura no exista
-(`test/integration/write_permissions.test.ts`).
+(invariante 92). Y `INSERT ... RETURNING` y los `UPDATE`/`DELETE` que leen
+columnas (con `WHERE` o `RETURNING`) evalúan también la política de lectura,
+así que todo permiso de escritura de una tabla sensible viene con el de
+lectura de esa tabla (invariante 94). Al probar una política de escritura,
+probá la operación que emite Prisma, con el rol real conectado como
+`joda_api`; y la denegación de un rol sin lectura, con las formas que no leen
+(`INSERT` sin `RETURNING`, `UPDATE` sin `WHERE`): con las otras ese rol queda
+afuera por la lectura y la prueba pasa aunque la política de escritura no
+exista (`test/integration/write_permissions.test.ts`).
 
 ## Expand/contract
 

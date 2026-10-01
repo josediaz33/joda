@@ -68,12 +68,18 @@ const CUSTOM_ROLES = {
   stockReader: { n: 10, permissions: ["inventory.stock:read"] },
   // Lee y escribe la contabilidad del plan de cuentas.
   accountant: { n: 11, permissions: ["accounting.journal:read", "accounting.journal:write"] },
+  // Recibe y lee órdenes: la combinación que el depósito del seed no tiene.
+  orderReceiver: {
+    n: 12,
+    permissions: ["market.purchase_order:receive", "market.purchase_order:read"],
+  },
 } as const;
 
 // Las denegaciones de un rol que tampoco LEE usan las formas que no
 // necesitan la política de lectura: un INSERT sin RETURNING y un UPDATE sin
-// WHERE. Con RETURNING o con WHERE ese rol ya queda afuera por la lectura, y
-// la prueba pasaría aunque la política de escritura no existiera.
+// WHERE. Con RETURNING, o con un WHERE que lee columnas, ese rol ya queda
+// afuera por la lectura, y la prueba pasaría aunque la política de escritura
+// no existiera. (Un UPDATE sin WHERE, o con `WHERE true`, no lee nada.)
 const UPDATE_ALL_SUPPLIERS = `UPDATE app.suppliers SET notes = 'editado'`;
 const UPDATE_ALL_POS = `UPDATE app.purchase_orders SET notes = 'editada'`;
 const UPDATE_ALL_LOTS = `UPDATE app.inventory_lots SET batch_code = 'B11'`;
@@ -364,10 +370,34 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
     // Su permiso alcanza para la política de UPDATE, pero no ve la orden, así
     // que no la puede modificar. El depósito carga la recepción en borrador
     // (goods_receipts) y la contabiliza quien lee la orden.
-    it("el depósito, con :receive y sin :read, no ve la orden que recibe: su UPDATE afecta cero filas", async () => {
+    it("el depósito, con :receive y sin :read, no ve la orden que recibe: su UPDATE ... WHERE afecta cero filas", async () => {
       const { rowCount } = await as(warehouse, UPDATE_PO);
 
       expect(rowCount).toBe(0);
+    });
+
+    // El otro lado de lo mismo, fijado a propósito: un UPDATE que no lee
+    // columnas no necesita la lectura, y `:receive` habilita el UPDATE de la
+    // FILA ENTERA. La capa 1 no sabe qué campo toca; que el depósito solo
+    // registre recepciones lo imponen la capa 2 y el dominio.
+    it("el depósito, con :receive, sí edita órdenes con un UPDATE sin WHERE: la capa 1 no ve qué campo toca", async () => {
+      const { rowCount } = await as(warehouse, UPDATE_ALL_POS);
+
+      expect(rowCount).toBeGreaterThan(0);
+    });
+
+    // Sin esta, quitar `:receive` de la política de UPDATE no lo detecta
+    // ninguna prueba: la del depósito da cero filas con o sin ese permiso.
+    it("quien recibe y lee órdenes, sin :write ni :approve, edita la orden (UPDATE con WHERE)", async () => {
+      const { rowCount } = await as(custom.orderReceiver, UPDATE_PO);
+
+      expect(rowCount).toBe(1);
+    });
+
+    it("quien recibe y lee órdenes, sin :write, no puede crear una orden", async () => {
+      await expect(as(custom.orderReceiver, INSERT_PO)).rejects.toMatchObject({
+        code: "42501",
+      });
     });
 
     it("el owner borra una orden en borrador", async () => {
@@ -573,6 +603,14 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       await expect(as(custom.readOnly, `${INSERT_DEPOSIT} RETURNING id`)).rejects.toMatchObject({
         code: "42501",
       });
+    });
+
+    // Sin esta, cambiar `:write` por `:read` en la política de UPDATE no lo
+    // detecta ninguna prueba: la lectura le alcanzaría para editar señas.
+    it("un rol que solo lee señas las ve pero su UPDATE afecta cero filas", async () => {
+      const { rowCount } = await as(custom.readOnly, UPDATE_DEPOSIT);
+
+      expect(rowCount).toBe(0);
     });
 
     it("nadie borra una seña, ni el owner: se devuelve o se aplica", async () => {

@@ -1775,17 +1775,24 @@ SELECT pg_temp.expect_fail_like(90, 'El mismo número de serie en dos tenants di
 -- cada rol conectado como joda_api, lo prueba write_permissions.test.ts.
 -- ─────────────────────────────────────────────────────────────────────
 
+-- Los invariantes 91 a 93 leen el TEXTO de las políticas (pg_get_expr): no
+-- pueden probar que la política haga lo que dice, solo que no se la reemplazó
+-- por una que ni lo intenta. Que lo haga lo prueba, con cada rol conectado
+-- como joda_api, write_permissions.test.ts.
+
 -- 91 ─ Toda política permisiva de escritura (INSERT, UPDATE, DELETE o ALL)
 -- de esas cinco tablas exige un permiso, y cada una tiene las de INSERT y
 -- UPDATE. Con la `tenant_access_*` con `true` de 0016 la escritura vuelve a
--- pedir solo tenant. El nombre lista las políticas culpables.
+-- pedir solo tenant; un `true OR has_permission(..)` tampoco cuenta como
+-- exigir un permiso. El nombre lista las políticas culpables y las tablas a
+-- las que les falta la de INSERT o la de UPDATE.
 WITH sensibles(tabla) AS (
   VALUES ('suppliers'), ('purchase_orders'), ('inventory_lots'),
          ('chart_of_accounts'), ('customer_deposits')
 ), politicas AS (
   SELECT c.relname AS tabla, p.polname, p.polcmd,
          COALESCE(pg_get_expr(p.polqual, p.polrelid), '')
-           || COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') AS expresion
+           || ' ' || COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') AS expresion
     FROM pg_policy p
     JOIN pg_class c ON c.oid = p.polrelid
     JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -1793,78 +1800,93 @@ WITH sensibles(tabla) AS (
    WHERE n.nspname = 'app' AND p.polpermissive AND p.polcmd IN ('a', 'w', 'd', '*')
 ), sin_permiso AS (
   SELECT tabla || '.' || polname AS descripcion
-    FROM politicas WHERE expresion NOT LIKE '%has_permission(%'
+    FROM politicas
+   WHERE expresion NOT LIKE '%has_permission(%' OR expresion ~ '\mtrue\M'
+), falta AS (
+  SELECT s.tabla || CASE c.cmd WHEN 'a' THEN ' (INSERT)' ELSE ' (UPDATE)' END AS descripcion
+    FROM sensibles s
+   CROSS JOIN (VALUES ('a'::"char"), ('w'::"char")) AS c(cmd)
+   WHERE NOT EXISTS (SELECT 1 FROM politicas p WHERE p.tabla = s.tabla AND p.polcmd = c.cmd)
 )
 SELECT pg_temp.expect_true(91,
   'Escribir en las tablas sensibles exige un permiso, no solo tenant'
     || COALESCE(' — sin permiso: '
-                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sin_permiso), ''),
-  NOT EXISTS (SELECT 1 FROM sin_permiso)
-  AND (SELECT count(DISTINCT tabla) FROM politicas WHERE polcmd = 'a') = 5
-  AND (SELECT count(DISTINCT tabla) FROM politicas WHERE polcmd = 'w') = 5);
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sin_permiso), '')
+    || COALESCE(' — sin política: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM falta), ''),
+  NOT EXISTS (SELECT 1 FROM sin_permiso) AND NOT EXISTS (SELECT 1 FROM falta));
 
 -- 92 ─ Ninguna política permisiva de esas tablas es FOR ALL. Un FOR ALL
 -- también cubre SELECT: quien puede escribir leería la tabla entera aunque
 -- no tenga el permiso de leer, y con él se abre la lectura de costos y
--- proveedores. Una política por comando.
+-- proveedores. Una política por comando. El nombre lista las culpables.
+WITH for_all AS (
+  SELECT c.relname || '.' || p.polname AS descripcion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app'
+     AND c.relname IN ('suppliers', 'purchase_orders', 'inventory_lots',
+                       'chart_of_accounts', 'customer_deposits')
+     AND p.polpermissive
+     AND p.polcmd = '*'
+)
 SELECT pg_temp.expect_true(92,
-  'Ninguna política de permiso de las tablas sensibles es FOR ALL',
-  NOT EXISTS (
-    SELECT 1
-      FROM pg_policy p
-      JOIN pg_class c ON c.oid = p.polrelid
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-     WHERE n.nspname = 'app'
-       AND c.relname IN ('suppliers', 'purchase_orders', 'inventory_lots',
-                         'chart_of_accounts', 'customer_deposits')
-       AND p.polpermissive
-       AND p.polcmd = '*'));
+  'Ninguna política de permiso de las tablas sensibles es FOR ALL'
+    || COALESCE(' — FOR ALL: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM for_all), ''),
+  NOT EXISTS (SELECT 1 FROM for_all));
 
 -- 93 ─ Nadie borra lotes, señas, cuentas ni proveedores: sin política
 -- permisiva de DELETE. En purchase_orders hay una sola, con
 -- `market.purchase_order:write` Y el estado `draft` dentro de la política:
--- una orden enviada no se borra aunque quien lo intenta tenga el permiso.
+-- el DELETE directo de una orden enviada no pasa aunque quien lo intenta
+-- tenga el permiso. (No impide devolver la orden a `draft` con un UPDATE: ver
+-- el encabezado de 0030.) El nombre lista las políticas de DELETE que sobran,
+-- o avisa que la de órdenes no es la esperada.
+WITH borrado AS (
+  SELECT c.relname AS tabla, p.polname,
+         COALESCE(pg_get_expr(p.polqual, p.polrelid), '') AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app'
+     AND c.relname IN ('suppliers', 'purchase_orders', 'inventory_lots',
+                       'chart_of_accounts', 'customer_deposits')
+     AND p.polpermissive
+     AND p.polcmd IN ('d', '*')
+), sobran AS (
+  SELECT tabla || '.' || polname AS descripcion FROM borrado WHERE tabla <> 'purchase_orders'
+), orden_ok AS (
+  SELECT count(*) AS n
+    FROM borrado
+   WHERE tabla = 'purchase_orders'
+     AND expresion LIKE '%market.purchase_order:write%'
+     AND expresion LIKE '%(status = ''draft''%'
+     AND expresion NOT LIKE '% OR %'
+)
 SELECT pg_temp.expect_true(93,
-  'Sin DELETE en lotes, señas, cuentas y proveedores; en órdenes de compra, solo borradores',
-  NOT EXISTS (
-    SELECT 1
-      FROM pg_policy p
-      JOIN pg_class c ON c.oid = p.polrelid
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-     WHERE n.nspname = 'app'
-       AND c.relname IN ('suppliers', 'inventory_lots', 'chart_of_accounts', 'customer_deposits')
-       AND p.polpermissive
-       AND p.polcmd IN ('d', '*'))
-  AND (
-    SELECT count(*)
-      FROM pg_policy p
-      JOIN pg_class c ON c.oid = p.polrelid
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-     WHERE n.nspname = 'app'
-       AND c.relname = 'purchase_orders'
-       AND p.polpermissive
-       AND p.polcmd IN ('d', '*')
-       AND pg_get_expr(p.polqual, p.polrelid) LIKE '%market.purchase_order:write%'
-       AND pg_get_expr(p.polqual, p.polrelid) LIKE '%''draft''%') = 1
-  AND (
-    SELECT count(*)
-      FROM pg_policy p
-      JOIN pg_class c ON c.oid = p.polrelid
-      JOIN pg_namespace n ON n.oid = c.relnamespace
-     WHERE n.nspname = 'app'
-       AND c.relname = 'purchase_orders'
-       AND p.polpermissive
-       AND p.polcmd IN ('d', '*')) = 1);
+  'Sin DELETE en lotes, señas, cuentas y proveedores; en órdenes de compra, solo borradores'
+    || COALESCE(' — DELETE que sobra: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sobran), '')
+    || CASE WHEN (SELECT n FROM orden_ok) = 1
+             AND (SELECT count(*) FROM borrado WHERE tabla = 'purchase_orders') = 1
+            THEN '' ELSE ' — la política de DELETE de purchase_orders no es la esperada' END,
+  NOT EXISTS (SELECT 1 FROM sobran)
+  AND (SELECT n FROM orden_ok) = 1
+  AND (SELECT count(*) FROM borrado WHERE tabla = 'purchase_orders') = 1);
 
--- 94 ─ En los roles sembrados, todo permiso de escritura de esas tablas
--- viene con el de lectura de la MISMA tabla. Con RLS, INSERT ... RETURNING
--- y UPDATE ... WHERE evalúan también la política de lectura: un rol que
--- escribe sin leer recibe 42501 en el INSERT de Prisma y cero filas en el
--- UPDATE, sin un error que explique por qué (el vendedor, que registra
--- señas con accounting.deposit:write y no tenía :read). Única excepción,
--- registrada para WP-C15: depósito recibe (market.purchase_order:receive)
--- sin leer órdenes de compra; carga la recepción en borrador y la
--- contabiliza quien las lee. Si C15 la resuelve, se quita de acá.
+-- 94 ─ En los roles sembrados (`is_system`, de cualquier tenant), todo
+-- permiso de escritura de esas tablas viene con el de lectura de la MISMA
+-- tabla. Con RLS, INSERT ... RETURNING y los UPDATE o DELETE que leen
+-- columnas evalúan también la política de lectura: un rol que escribe sin
+-- leer recibe 42501 en el INSERT de Prisma y cero filas en el UPDATE, sin un
+-- error que explique por qué (el vendedor, que registra señas con
+-- accounting.deposit:write y no tenía :read). Única excepción, registrada
+-- para WP-C15: depósito recibe (market.purchase_order:receive) sin leer
+-- órdenes de compra; carga la recepción en borrador y la contabiliza quien
+-- las lee. Si C15 la resuelve, se quita de acá. Los roles que crea un
+-- administrador no entran: validar el par al crearlos es de WP-C24.
 WITH par(tabla, escribe, lee) AS (
   VALUES
     ('suppliers',         'market.supplier:write',         'market.supplier:read'),
@@ -1878,10 +1900,10 @@ WITH par(tabla, escribe, lee) AS (
     ('chart_of_accounts', 'accounting.journal:write',      'accounting.journal:read'),
     ('customer_deposits', 'accounting.deposit:write',      'accounting.deposit:read')
 ), roles_sembrados AS (
-  SELECT id, code FROM app.roles
-   WHERE tenant_id = '11111111-1111-1111-1111-111111111111' AND is_system
+  SELECT id, code, tenant_id FROM app.roles WHERE is_system
 ), escribe_sin_leer AS (
-  SELECT r.code || ' → ' || p.tabla || ' (' || p.escribe || ')' AS descripcion
+  SELECT r.code || ' (' || left(r.tenant_id::text, 8) || ') → ' || p.tabla
+           || ' (' || p.escribe || ')' AS descripcion
     FROM roles_sembrados r
     JOIN app.role_permissions w ON w.role_id = r.id
     JOIN par p ON p.escribe = w.permission_code
@@ -1894,7 +1916,7 @@ SELECT pg_temp.expect_true(94,
   'Ningún rol sembrado escribe en una tabla sensible sin poder leerla (salvo depósito en órdenes, WP-C15)'
     || COALESCE(' — escriben sin leer: '
                 || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM escribe_sin_leer), ''),
-  (SELECT count(*) FROM roles_sembrados) = 4 AND NOT EXISTS (SELECT 1 FROM escribe_sin_leer));
+  (SELECT count(*) FROM roles_sembrados) >= 4 AND NOT EXISTS (SELECT 1 FROM escribe_sin_leer));
 
 \echo ''
 \echo '=============================================================='

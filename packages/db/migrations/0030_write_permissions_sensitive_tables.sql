@@ -47,12 +47,24 @@
 -- una orden enviada no se borra aunque quien lo intenta tenga el permiso.
 -- Pasado el borrador, la orden se cancela por la máquina de estados.
 --
--- LA TRAMPA DE LA LECTURA. Con RLS, `INSERT ... RETURNING` y
--- `UPDATE ... WHERE` también evalúan la política de LECTURA de la tabla.
--- Un rol con el permiso de escribir y sin el de leer no falla con un error
--- claro: su INSERT ... RETURNING (el que emite Prisma) es rechazado con
--- 42501, y su UPDATE ... WHERE o DELETE ... WHERE afecta cero filas, sin
--- error (la API lo ve como un 404). Por eso, en los roles sembrados, todo
+-- LÍMITE DE ESE FILTRO. Es una barrera del DELETE directo, no una máquina de
+-- estados: la política de UPDATE no mira el estado, así que un rol con
+-- `:write` y `:read` puede devolver una orden a `draft` con un UPDATE y
+-- borrarla en una segunda transacción. Hoy lo frenan, de forma incidental,
+-- `purchase_order_transitions` (append-only: una orden con su transición
+-- registrada no se borra) y la FK RESTRICT de `goods_receipts`. Que una
+-- orden no vuelva a borrador lo imponen la capa 2 y el dominio. Si hace falta
+-- que lo imponga la base, es un guarda aparte (criterio de inmutabilidad de
+-- ADR-017), no esta política.
+--
+-- LA TRAMPA DE LA LECTURA. Con RLS, `INSERT ... RETURNING` y los UPDATE o
+-- DELETE que LEEN columnas (con WHERE o RETURNING) también evalúan la
+-- política de LECTURA de la tabla. Un rol con el permiso de escribir y sin
+-- el de leer no falla con un error claro: su INSERT ... RETURNING (el que
+-- emite Prisma) es rechazado con 42501, y su UPDATE ... WHERE o DELETE ...
+-- WHERE afecta cero filas, sin error (la API lo ve como un 404). Un UPDATE
+-- sin WHERE ni RETURNING no lee nada y solo necesita el permiso de
+-- escritura. Por eso, en los roles sembrados, todo
 -- permiso de escritura de estas tablas viene con el de lectura de la misma
 -- tabla, salvo una excepción registrada: depósito, que recibe
 -- (`market.purchase_order:receive`) sin poder leer órdenes de compra. Se
