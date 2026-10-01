@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, configure, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TRPCClientError } from "@trpc/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -19,6 +19,10 @@ vi.mock("./api", () => ({
     listProducts: vi.fn(),
   },
 }));
+
+// CI carga los módulos lazy mientras corren las demás suites del monorepo.
+// El segundo por defecto de Testing Library no alcanza bajo esa contención.
+configure({ asyncUtilTimeout: 8_000 });
 
 function renderApp(path: string) {
   window.history.pushState({}, "", path);
