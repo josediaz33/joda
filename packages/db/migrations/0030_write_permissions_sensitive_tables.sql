@@ -47,15 +47,13 @@
 -- una orden enviada no se borra aunque quien lo intenta tenga el permiso.
 -- Pasado el borrador, la orden se cancela por la máquina de estados.
 --
--- LÍMITE DE ESE FILTRO. Es una barrera del DELETE directo, no una máquina de
--- estados: la política de UPDATE no mira el estado, así que un rol con
--- `:write` y `:read` puede devolver una orden a `draft` con un UPDATE y
--- borrarla en una segunda transacción. Hoy lo frenan, de forma incidental,
--- `purchase_order_transitions` (append-only: una orden con su transición
--- registrada no se borra) y la FK RESTRICT de `goods_receipts`. Que una
--- orden no vuelva a borrador lo imponen la capa 2 y el dominio. Si hace falta
--- que lo imponga la base, es un guarda aparte (criterio de inmutabilidad de
--- ADR-017), no esta política.
+-- QUÉ SOSTIENE ESE FILTRO. `draft` es una premisa ("nunca enviada") que esta
+-- política lee pero no puede imponer: la de UPDATE no mira el estado, y sin
+-- más un rol con `:write` y `:read` devolvía una orden enviada a `draft` con
+-- un UPDATE y la borraba en una segunda transacción. Lo impone
+-- `trg_po_no_return_to_draft` (0031, ADR-026): se entra a `draft` solo desde
+-- `draft` o `pending_approval`. Con él, una orden que pasó de
+-- `pending_approval` no vuelve a borrador y, por lo tanto, no se borra.
 --
 -- LA TRAMPA DE LA LECTURA. Con RLS, `INSERT ... RETURNING` y los UPDATE o
 -- DELETE que LEEN columnas (con WHERE o RETURNING) también evalúan la

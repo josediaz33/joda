@@ -175,7 +175,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 90: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 100: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -231,7 +231,7 @@ No es hipotético. WP-B10 hizo que `journal_entries` exija `accounting.journal:r
 
 Además, una función que impone un invariante verifica integridad, no expone datos: va `SECURITY DEFINER` con `SET search_path = app, pg_temp` (`pg_temp` al final, nombres calificados con `app.`). Si una tabla referenciada tiene `tenant_id`, la función verifica que coincida con el de la fila que dispara el trigger: como `SECURITY DEFINER` ve todos los tenants y una FK no evalúa RLS, nadie más lo haría.
 
-Desde WP-B09 (`0018_invariant_triggers_security_definer.sql`) toda función de disparador de `app.*` sigue este patrón. Los invariantes 28–30 lo verifican de forma estructural: toda función de disparador tiene `search_path = app, pg_temp`; toda es `SECURITY DEFINER` salvo `set_updated_at` y `guard_append_only`, que no leen ninguna tabla; y el dueño de toda función `SECURITY DEFINER` elude RLS. Ese último es una dependencia operativa. `SECURITY DEFINER` corre como el rol que ejecutó la migración, y si ese rol no es superusuario ni `BYPASSRLS`, `FORCE ROW LEVEL SECURITY` lo filtra igual que a `joda_api`.
+Desde WP-B09 (`0018_invariant_triggers_security_definer.sql`) toda función de disparador de `app.*` sigue este patrón. Los invariantes 28–30 lo verifican de forma estructural: toda función de disparador tiene `search_path = app, pg_temp`; toda es `SECURITY DEFINER` salvo `set_updated_at`, `guard_append_only` y `guard_po_no_return_to_draft` (§4.5), que no leen ninguna tabla; y el dueño de toda función `SECURITY DEFINER` elude RLS. Ese último es una dependencia operativa. `SECURITY DEFINER` corre como el rol que ejecutó la migración, y si ese rol no es superusuario ni `BYPASSRLS`, `FORCE ROW LEVEL SECURITY` lo filtra igual que a `joda_api`.
 
 **Ningún trigger depende de que otro haya corrido antes.** Los `BEFORE INSERT` de una tabla se ejecutan en orden alfabético, y un trigger que rechaza primero puede ocultar que el siguiente falla abierto. Pasó con `assert_sealed_lot_not_open`: desde WP-B01 dejaba vender como sellado un frasco abierto cuando no veía el lote, y no se notaba porque `trg_movement_uom` corría antes y rechazaba. Por eso cada función hace su propia búsqueda con su propio `IF NOT FOUND`. Los invariantes 33 y 34 deshabilitan los demás triggers y prueban cada función por separado.
 
@@ -255,6 +255,14 @@ Dos invariantes que hacen que la apertura no se pueda hacer mal aunque alguien s
 - **Un producto tiene a lo sumo una variante de granel.** Índice único parcial `product_variants_one_bulk_per_product ON product_variants (product_id) WHERE variant_type = 'bulk'`. Un producto es un solo líquido aunque se venda en varios tamaños; la apertura necesita saber a qué granel va el frasco, y lo impone la base, no la búsqueda.
 
 **El ETL tiene que respetar los dos** (WP-D03 y WP-D05, con criterio de aceptación). Un lote de varias unidades con alguna abierta en el v2 no se puede cargar tal cual: la migración falla si el dato es incoherente, en vez de aceptarlo.
+
+### 4.5 Una orden de compra no vuelve a borrador (WP-B11, `0031_purchase_order_no_return_to_draft.sql`)
+
+`trg_po_no_return_to_draft`, `BEFORE UPDATE OF status` sobre `purchase_orders`: `NEW.status = 'draft'` es válido solo si `OLD.status` es `draft` o `pending_approval`. De `approved` en adelante rechaza con `check_violation`.
+
+- **Por qué lo impone la base (ADR-026).** La política de DELETE de `purchase_orders` (0030) permite borrar solo en `draft` y lee ese estado como "nunca enviada". Volver atrás desde `approved` en adelante desarmaría esa premisa: un `UPDATE` a `draft` y un `DELETE` borrarían una orden enviada. No es la matriz de transiciones de la orden, que sigue en `packages/domain/src/procurement/purchaseOrder.ts` (WP-A08) con sus terminales: guarda solo la entrada a `draft`.
+- **Mecanismo.** Lee solo `OLD` y `NEW`, ninguna otra tabla, así que no es `SECURITY DEFINER` y no puede decidir sobre algo que RLS le oculte. Falla cerrado: compara con `IS DISTINCT FROM`. Fija `search_path = app, pg_temp`. El invariante 29 lo admite junto a `set_updated_at` y `guard_append_only`.
+- **Verificación.** Invariantes 95–99 (`approved`, `sent`, `partially_received`, `received` y `cancelled` no vuelven a `draft`) y 100, el control: `pending_approval → draft` pasa. Se prueban por comportamiento, no por el texto de una política. `write_permissions.test.ts` prueba el rodeo de dos pasos como `joda_api`.
 
 ---
 

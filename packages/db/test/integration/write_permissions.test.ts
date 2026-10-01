@@ -30,6 +30,9 @@ const CUSTOMER_ID = "aaaaaaaa-0000-0000-0000-000000000001";
 // los modifican dentro de una transacción que se revierte).
 const DRAFT_PO_ID = "b1100000-0000-0000-0000-0000000000d1";
 const SENT_PO_ID = "b1100000-0000-0000-0000-0000000000d2";
+const PENDING_PO_ID = "b1100000-0000-0000-0000-0000000000d3";
+const APPROVED_PO_ID = "b1100000-0000-0000-0000-0000000000d4";
+const PARTIAL_PO_ID = "b1100000-0000-0000-0000-0000000000d5";
 const LOT_ID = "b1100000-0000-0000-0000-0000000000c1";
 const NEW_LOT_ID = "b1100000-0000-0000-0000-0000000000c2";
 const DEPOSIT_ID = "b1100000-0000-0000-0000-0000000000e1";
@@ -95,6 +98,12 @@ const INSERT_PO = `INSERT INTO app.purchase_orders (tenant_id, supplier_id, code
 const UPDATE_PO = `UPDATE app.purchase_orders SET notes = 'editada' WHERE id = '${DRAFT_PO_ID}'`;
 const DELETE_DRAFT_PO = `DELETE FROM app.purchase_orders WHERE id = '${DRAFT_PO_ID}'`;
 const DELETE_SENT_PO = `DELETE FROM app.purchase_orders WHERE id = '${SENT_PO_ID}'`;
+const DELETE_PENDING_PO = `DELETE FROM app.purchase_orders WHERE id = '${PENDING_PO_ID}'`;
+// Devolver una orden a borrador: el primer paso del rodeo que la revisión de
+// B11 encontró para borrar una orden enviada.
+const RETURN_TO_DRAFT = (id: string) =>
+  `UPDATE app.purchase_orders SET status = 'draft' WHERE id = '${id}'`;
+const RETURN_ALL_TO_DRAFT = `UPDATE app.purchase_orders SET status = 'draft'`;
 
 const INSERT_LOT = `INSERT INTO app.inventory_lots
   (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
@@ -224,13 +233,20 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       );
     }
 
-    // Una fila por tabla para los UPDATE y DELETE. Las órdenes: una en
-    // borrador y una enviada (exige constancia de quién aprobó).
+    // Una fila por tabla para los UPDATE y DELETE. Las órdenes, una por
+    // estado que importa a la guarda de 0031: las posteriores a la aprobación
+    // exigen constancia de quién aprobó.
     await db.client.query(`
       INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency, created_by,
                                        approved_by, approved_at)
       VALUES ('${DRAFT_PO_ID}', '${REAL_TENANT_ID}', '${SUPPLIER_ID}', 'OC-B11-BORRADOR', 'draft',
               'USD', '${REAL_OWNER_ID}', NULL, NULL),
+             ('${PENDING_PO_ID}', '${REAL_TENANT_ID}', '${SUPPLIER_ID}', 'OC-B11-PENDIENTE',
+              'pending_approval', 'USD', '${REAL_OWNER_ID}', NULL, NULL),
+             ('${APPROVED_PO_ID}', '${REAL_TENANT_ID}', '${SUPPLIER_ID}', 'OC-B11-APROBADA', 'approved',
+              'USD', '${REAL_OWNER_ID}', '${REAL_OWNER_ID}', now()),
+             ('${PARTIAL_PO_ID}', '${REAL_TENANT_ID}', '${SUPPLIER_ID}', 'OC-B11-PARCIAL',
+              'partially_received', 'USD', '${REAL_OWNER_ID}', '${REAL_OWNER_ID}', now()),
              ('${SENT_PO_ID}', '${REAL_TENANT_ID}', '${SUPPLIER_ID}', 'OC-B11-ENVIADA', 'sent',
               'USD', '${REAL_OWNER_ID}', '${REAL_OWNER_ID}', now());
       INSERT INTO app.inventory_lots
@@ -417,6 +433,63 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       const { rowCount } = await as(custom.approver, DELETE_DRAFT_PO);
 
       expect(rowCount).toBe(0);
+    });
+  });
+
+  // ADR-026: la política de DELETE lee `status = 'draft'` como "nunca
+  // enviada", y `trg_po_no_return_to_draft` (0031) la sostiene: se entra a
+  // borrador solo desde `draft` o `pending_approval`. Sin él, estas pruebas
+  // eran el rodeo de dos pasos que encontró la revisión de B11.
+  describe("una orden no vuelve a borrador desde approved en adelante (WP-B11, ADR-026)", () => {
+    it.each([
+      ["approved", APPROVED_PO_ID],
+      ["sent", SENT_PO_ID],
+      ["partially_received", PARTIAL_PO_ID],
+    ])("el owner, con :write y :read, no devuelve una orden %s a borrador", async (_status, id) => {
+      await expect(as(owner, RETURN_TO_DRAFT(id))).rejects.toMatchObject({
+        code: "23514",
+        message: expect.stringContaining("no puede volver a borrador"),
+      });
+    });
+
+    it("el rodeo de dos pasos falla en el primero: la orden enviada sigue ahí después del DELETE", async () => {
+      await expect(as(owner, RETURN_TO_DRAFT(SENT_PO_ID))).rejects.toMatchObject({
+        code: "23514",
+      });
+      await api.query("ROLLBACK");
+      const { rowCount } = await as(owner, DELETE_SENT_PO);
+      const remaining = await visibleCount("purchase_orders", SENT_PO_ID);
+
+      expect({ deleted: rowCount, remaining }).toEqual({ deleted: 0, remaining: 1 });
+    });
+
+    // La variante del depósito de la revisión: `:receive`, sin `:read`, con un
+    // UPDATE sin WHERE que toca todas las órdenes del tenant. La política lo
+    // deja pasar fila por fila; el trigger lo frena en la primera que no es
+    // un borrador.
+    it("el depósito, con un UPDATE sin WHERE, no devuelve a borrador las órdenes del tenant", async () => {
+      await expect(as(warehouse, RETURN_ALL_TO_DRAFT)).rejects.toMatchObject({
+        code: "23514",
+      });
+    });
+
+    it("una orden en pending_approval vuelve a borrador (la arista que permite la máquina de A08)", async () => {
+      const { rowCount } = await as(owner, RETURN_TO_DRAFT(PENDING_PO_ID));
+
+      expect(rowCount).toBe(1);
+    });
+
+    it("la orden devuelta a corregir, ya en borrador, se borra", async () => {
+      await as(owner, RETURN_TO_DRAFT(PENDING_PO_ID));
+      const { rowCount } = await api.query(DELETE_PENDING_PO);
+
+      expect(rowCount).toBe(1);
+    });
+
+    it("un borrador se edita y sigue siendo borrador", async () => {
+      const { rowCount } = await as(owner, RETURN_TO_DRAFT(DRAFT_PO_ID));
+
+      expect(rowCount).toBe(1);
     });
   });
 

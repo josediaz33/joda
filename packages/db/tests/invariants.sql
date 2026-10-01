@@ -407,12 +407,13 @@ SELECT pg_temp.expect_true(28,
   ));
 
 -- 29 ─ Toda función de disparador de app.* es SECURITY DEFINER, salvo las
--- dos que no leen ninguna tabla. Una función de invariante SECURITY
--- INVOKER lee con los permisos de quien dispara el trigger: si RLS le
--- oculta la fila, decide sobre un NULL (el defecto de B10 y de B09). Una
--- función nueva que lea tablas y no esté en esta lista hace fallar esto.
+-- tres que no leen ninguna tabla (`guard_po_no_return_to_draft`, WP-B11,
+-- lee solo OLD y NEW). Una función de invariante SECURITY INVOKER lee con
+-- los permisos de quien dispara el trigger: si RLS le oculta la fila, decide
+-- sobre un NULL (el defecto de B10 y de B09). Una función nueva que lea
+-- tablas y no esté en esta lista hace fallar esto.
 SELECT pg_temp.expect_true(29,
-  'Toda función de disparador de app.* es SECURITY DEFINER, salvo set_updated_at/guard_append_only',
+  'Toda función de disparador de app.* es SECURITY DEFINER, salvo set_updated_at/guard_append_only/guard_po_no_return_to_draft',
   NOT EXISTS (
     SELECT 1
       FROM pg_proc p
@@ -420,7 +421,8 @@ SELECT pg_temp.expect_true(29,
      WHERE n.nspname = 'app'
        AND p.prorettype = 'trigger'::regtype
        AND NOT p.prosecdef
-       AND p.proname NOT IN ('set_updated_at', 'guard_append_only')
+       AND p.proname NOT IN ('set_updated_at', 'guard_append_only',
+                             'guard_po_no_return_to_draft')
   ));
 
 -- 30 ─ El dueño de toda función SECURITY DEFINER de app.* elude RLS. Una
@@ -1841,9 +1843,9 @@ SELECT pg_temp.expect_true(92,
 -- permisiva de DELETE. En purchase_orders hay una sola, con
 -- `market.purchase_order:write` Y el estado `draft` dentro de la política:
 -- el DELETE directo de una orden enviada no pasa aunque quien lo intenta
--- tenga el permiso. (No impide devolver la orden a `draft` con un UPDATE: ver
--- el encabezado de 0030.) El nombre lista las políticas de DELETE que sobran,
--- o avisa que la de órdenes no es la esperada.
+-- tenga el permiso. Que `draft` signifique "nunca enviada" lo sostiene el
+-- trigger de 0031 (invariantes 95-100), no esta política. El nombre lista las
+-- políticas de DELETE que sobran, o avisa que la de órdenes no es la esperada.
 WITH borrado AS (
   SELECT c.relname AS tabla, p.polname,
          COALESCE(pg_get_expr(p.polqual, p.polrelid), '') AS expresion
@@ -1917,6 +1919,109 @@ SELECT pg_temp.expect_true(94,
     || COALESCE(' — escriben sin leer: '
                 || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM escribe_sin_leer), ''),
   (SELECT count(*) FROM roles_sembrados) >= 4 AND NOT EXISTS (SELECT 1 FROM escribe_sin_leer));
+
+
+-- WP-B11 (0031_purchase_order_no_return_to_draft.sql, ADR-026): una orden de
+-- compra no vuelve a `draft` desde `approved` en adelante. La política de
+-- DELETE de 0030 lee `status = 'draft'` como "nunca enviada"; sin este
+-- guarda, un UPDATE a `draft` y un DELETE la eludían en dos pasos. Estos seis
+-- prueban el COMPORTAMIENTO del trigger, no el texto de ninguna política.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 95 ─ Una orden `approved` no vuelve a borrador.
+SELECT pg_temp.expect_fail_like(95, 'Orden de compra approved vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('95959595-0000-0000-0000-000000000095', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-95', 'approved', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      UPDATE app.purchase_orders SET status = 'draft'
+       WHERE id = '95959595-0000-0000-0000-000000000095';
+    END $x$
+  $$,
+  'La orden de compra 95959595-0000-0000-0000-000000000095 está en approved y no puede volver a borrador%');
+
+-- 96 ─ Una orden `sent` no vuelve a borrador (el rodeo de la revisión de B11).
+SELECT pg_temp.expect_fail_like(96, 'Orden de compra sent vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('96969696-0000-0000-0000-000000000096', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-96', 'sent', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      UPDATE app.purchase_orders SET status = 'draft'
+       WHERE id = '96969696-0000-0000-0000-000000000096';
+    END $x$
+  $$,
+  'La orden de compra 96969696-0000-0000-0000-000000000096 está en sent y no puede volver a borrador%');
+
+-- 97 ─ Una orden `partially_received` no vuelve a borrador.
+SELECT pg_temp.expect_fail_like(97, 'Orden de compra partially_received vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('97979797-0000-0000-0000-000000000097', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-97', 'partially_received', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      UPDATE app.purchase_orders SET status = 'draft'
+       WHERE id = '97979797-0000-0000-0000-000000000097';
+    END $x$
+  $$,
+  'La orden de compra 97979797-0000-0000-0000-000000000097 está en partially_received y no puede volver a borrador%');
+
+-- 98 ─ Una orden `received` no vuelve a borrador. El terminal sigue siendo
+-- del dominio (ADR-026): esto guarda solo la ENTRADA a `draft`.
+SELECT pg_temp.expect_fail_like(98, 'Orden de compra received vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('98989898-0000-0000-0000-000000000098', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-98', 'received', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      UPDATE app.purchase_orders SET status = 'draft'
+       WHERE id = '98989898-0000-0000-0000-000000000098';
+    END $x$
+  $$,
+  'La orden de compra 98989898-0000-0000-0000-000000000098 está en received y no puede volver a borrador%');
+
+-- 99 ─ Una orden `cancelled` no vuelve a borrador.
+SELECT pg_temp.expect_fail_like(99, 'Orden de compra cancelled vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency, created_by)
+      VALUES ('99999999-0000-0000-0000-000000000199', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-99', 'cancelled', 'USD',
+              '22222222-2222-2222-2222-222222222222');
+      UPDATE app.purchase_orders SET status = 'draft'
+       WHERE id = '99999999-0000-0000-0000-000000000199';
+    END $x$
+  $$,
+  'La orden de compra 99999999-0000-0000-0000-000000000199 está en cancelled y no puede volver a borrador%');
+
+-- 100 ─ Control positivo de 95-99: una orden en `pending_approval` SÍ vuelve
+-- a borrador (la arista de la máquina de A08: el aprobador la devuelve a
+-- corregir), y un borrador se edita sin salir de `draft`. Sin esto, un
+-- trigger que rechazara todo `draft` pasaría los cinco anteriores.
+SELECT pg_temp.expect_fail_like(100, 'Orden de compra pending_approval vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency, created_by)
+      VALUES ('10001000-0000-0000-0000-000000000100', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-100', 'pending_approval', 'USD',
+              '22222222-2222-2222-2222-222222222222');
+      UPDATE app.purchase_orders SET status = 'draft'
+       WHERE id = '10001000-0000-0000-0000-000000000100';
+      UPDATE app.purchase_orders SET status = 'draft', notes = 'corregida'
+       WHERE id = '10001000-0000-0000-0000-000000000100';
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
 
 \echo ''
 \echo '=============================================================='
