@@ -175,7 +175,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 100: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 103: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -256,13 +256,13 @@ Dos invariantes que hacen que la apertura no se pueda hacer mal aunque alguien s
 
 **El ETL tiene que respetar los dos** (WP-D03 y WP-D05, con criterio de aceptación). Un lote de varias unidades con alguna abierta en el v2 no se puede cargar tal cual: la migración falla si el dato es incoherente, en vez de aceptarlo.
 
-### 4.5 Una orden de compra no vuelve a borrador (WP-B11, `0031_purchase_order_no_return_to_draft.sql`)
+### 4.5 Una orden de compra no vuelve a los estados previos a la aprobación (WP-B11, `0031_purchase_order_no_return_to_draft.sql`)
 
-`trg_po_no_return_to_draft`, `BEFORE UPDATE OF status` sobre `purchase_orders`: `NEW.status = 'draft'` es válido solo si `OLD.status` es `draft` o `pending_approval`. De `approved` en adelante rechaza con `check_violation`.
+`trg_po_no_return_to_draft`, `BEFORE UPDATE OF status` sobre `purchase_orders`: `NEW.status` en (`draft`, `pending_approval`) es válido solo si `OLD.status` es uno de esos dos. De `approved` en adelante rechaza con `check_violation`.
 
-- **Por qué lo impone la base (ADR-026).** La política de DELETE de `purchase_orders` (0030) permite borrar solo en `draft` y lee ese estado como "nunca enviada". Volver atrás desde `approved` en adelante desarmaría esa premisa: un `UPDATE` a `draft` y un `DELETE` borrarían una orden enviada. No es la matriz de transiciones de la orden, que sigue en `packages/domain/src/procurement/purchaseOrder.ts` (WP-A08) con sus terminales: guarda solo la entrada a `draft`.
+- **Por qué lo impone la base (ADR-026).** La política de DELETE de `purchase_orders` (0030) permite borrar solo en `draft` y lee ese estado como "nunca enviada". Volver atrás desde `approved` en adelante desarmaría esa premisa: un `UPDATE` a `draft` y un `DELETE` borrarían una orden enviada. **Cubre también `pending_approval`**: guardar solo la entrada a `draft` dejaba el rodeo `sent → pending_approval → draft → DELETE`. Es lo que ya permite la máquina de A08, así que no agrega ninguna arista. No es la matriz de transiciones de la orden, que sigue en `packages/domain/src/procurement/purchaseOrder.ts` (WP-A08) con sus terminales: solo impide volver a los dos estados previos a la aprobación.
 - **Mecanismo.** Lee solo `OLD` y `NEW`, ninguna otra tabla, así que no es `SECURITY DEFINER` y no puede decidir sobre algo que RLS le oculte. Falla cerrado: compara con `IS DISTINCT FROM`. Fija `search_path = app, pg_temp`. El invariante 29 lo admite junto a `set_updated_at` y `guard_append_only`.
-- **Verificación.** Invariantes 95–99 (`approved`, `sent`, `partially_received`, `received` y `cancelled` no vuelven a `draft`) y 100, el control: `pending_approval → draft` pasa. Se prueban por comportamiento, no por el texto de una política. `write_permissions.test.ts` prueba el rodeo de dos pasos como `joda_api`.
+- **Verificación.** Invariantes 95–99 (`approved`, `sent`, `partially_received`, `received` y `cancelled` no vuelven a `draft`), 101 y 102 (`approved` y `sent` no vuelven a `pending_approval`) y los controles 100 (`pending_approval → draft` pasa) y 103 (`draft → pending_approval → approved` pasa). Se prueban por comportamiento, no por el texto de una política. `write_permissions.test.ts` prueba los rodeos de dos y de tres pasos como `joda_api`.
 
 ---
 

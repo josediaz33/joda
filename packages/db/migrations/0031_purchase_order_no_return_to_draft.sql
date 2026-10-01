@@ -19,13 +19,22 @@
 -- "nunca enviada". Volver a `draft` desde `approved` en adelante la desarma.
 -- B11 creó la barrera, y la necesidad de protegerla.
 --
+-- LOS DOS ESTADOS PREVIOS A LA APROBACIÓN. Guardar solo la entrada a `draft`
+-- dejaba un rodeo de tres pasos: `sent → pending_approval → draft → DELETE`.
+-- `pending_approval` es el otro estado en el que la orden todavía no se
+-- aprobó, y desde él se llega a `draft`. Por eso la guarda cubre la entrada a
+-- los dos: se entra a `draft` o a `pending_approval` solo desde `draft` o
+-- `pending_approval`. Es exactamente lo que permite la máquina de A08 (a
+-- `pending_approval` solo se llega desde `draft`; a `draft`, desde
+-- `pending_approval`: una orden devuelta a corregir antes de aprobarse), así
+-- que la base no agrega ninguna arista, solo impide las que la máquina nunca
+-- tuvo. De `approved` en adelante, rechaza.
+--
 -- QUÉ NO ES. No es la matriz de transiciones de la orden de compra, que
 -- sigue en el dominio (`packages/domain/src/procurement/purchaseOrder.ts`,
 -- WP-A08), ni toca los terminales `received` y `cancelled`, que ADR-026
--- deja allí. Solo guarda la ENTRADA a `draft`: `NEW.status = 'draft'` es
--- válido solo si `OLD.status` es `draft` o `pending_approval`. La segunda
--- arista es la que la máquina de A08 permite: una orden devuelta a corregir
--- antes de aprobarse. De `approved` en adelante, rechaza.
+-- deja allí. Tampoco decide qué sigue a qué después de aprobarse. Solo
+-- impide volver a los estados previos a la aprobación.
 --
 -- FALLA CERRADO. Un `OLD.status` que no sea ninguno de los dos valores
 -- permitidos (incluido NULL) rechaza: la comparación es `IS DISTINCT FROM`,
@@ -40,19 +49,19 @@
 -- RETURNING, y para toda fila que la política de UPDATE deje pasar: el
 -- depósito (`:receive`, sin `:read`) con un `UPDATE purchase_orders SET
 -- status = 'draft'` sin WHERE queda frenado en la primera fila que no sea un
--- borrador. Los invariantes 95-100 lo prueban por comportamiento.
+-- borrador. Los invariantes 95-103 lo prueban por comportamiento.
 -- =====================================================================
 SET search_path = app, public;
 
 CREATE FUNCTION app.guard_po_no_return_to_draft() RETURNS trigger
 LANGUAGE plpgsql SET search_path = app, pg_temp AS $$
 BEGIN
-  IF NEW.status = 'draft'
+  IF NEW.status IN ('draft', 'pending_approval')
      AND OLD.status IS DISTINCT FROM 'draft'
      AND OLD.status IS DISTINCT FROM 'pending_approval' THEN
     RAISE EXCEPTION
-      'La orden de compra % está en % y no puede volver a borrador: solo se vuelve a borrador desde pending_approval',
-      OLD.id, OLD.status
+      'La orden de compra % está en % y no puede volver a % (un estado previo a la aprobación): antes de aprobarse solo se alterna entre draft y pending_approval',
+      OLD.id, OLD.status, NEW.status
       USING ERRCODE = 'check_violation';
   END IF;
   RETURN NEW;

@@ -93,7 +93,7 @@ igual en Windows sin cliente de Postgres y en CI (`.github/workflows/ci.yml`,
 job `db`, con un servicio `postgres:16`). `db:test` no se conforma con que no
 haya un error de SQL: `invariants.sql` atrapa sus propias excepciones y las
 registra en una tabla en vez de relanzarlas, así que el runner falla si el
-conteo de invariantes en verde no es exactamente `EXPECTED_INVARIANT_COUNT` (hoy 100), y en
+conteo de invariantes en verde no es exactamente `EXPECTED_INVARIANT_COUNT` (hoy 103), y en
 `smoke_business_flow.sql` verifica en código que `v_balance_drift` da cero
 filas y que el asiento de la venta cuadra.
 

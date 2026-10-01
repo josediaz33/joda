@@ -104,6 +104,11 @@ const DELETE_PENDING_PO = `DELETE FROM app.purchase_orders WHERE id = '${PENDING
 const RETURN_TO_DRAFT = (id: string) =>
   `UPDATE app.purchase_orders SET status = 'draft' WHERE id = '${id}'`;
 const RETURN_ALL_TO_DRAFT = `UPDATE app.purchase_orders SET status = 'draft'`;
+// El rodeo de tres pasos: pending_approval es el otro estado previo a la
+// aprobación, y desde él se llega a borrador. Si una orden aprobada vuelve a
+// pending_approval, la guarda de borrador no sostiene nada.
+const RETURN_TO_PENDING = (id: string) =>
+  `UPDATE app.purchase_orders SET status = 'pending_approval' WHERE id = '${id}'`;
 
 const INSERT_LOT = `INSERT INTO app.inventory_lots
   (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
@@ -448,8 +453,28 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
     ])("el owner, con :write y :read, no devuelve una orden %s a borrador", async (_status, id) => {
       await expect(as(owner, RETURN_TO_DRAFT(id))).rejects.toMatchObject({
         code: "23514",
-        message: expect.stringContaining("no puede volver a borrador"),
+        message: expect.stringContaining("no puede volver a"),
       });
+    });
+
+    it.each([
+      ["approved", APPROVED_PO_ID],
+      ["sent", SENT_PO_ID],
+      ["partially_received", PARTIAL_PO_ID],
+    ])(
+      "el owner no devuelve una orden %s a pending_approval: sería el primer paso de un rodeo de tres",
+      async (_status, id) => {
+        await expect(as(owner, RETURN_TO_PENDING(id))).rejects.toMatchObject({
+          code: "23514",
+          message: expect.stringContaining("no puede volver a"),
+        });
+      },
+    );
+
+    it("una orden en borrador sigue pasando a pending_approval (el camino hacia adelante)", async () => {
+      const { rowCount } = await as(owner, RETURN_TO_PENDING(DRAFT_PO_ID));
+
+      expect(rowCount).toBe(1);
     });
 
     it("el rodeo de dos pasos falla en el primero: la orden enviada sigue ahí después del DELETE", async () => {

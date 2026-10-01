@@ -1844,7 +1844,7 @@ SELECT pg_temp.expect_true(92,
 -- `market.purchase_order:write` Y el estado `draft` dentro de la política:
 -- el DELETE directo de una orden enviada no pasa aunque quien lo intenta
 -- tenga el permiso. Que `draft` signifique "nunca enviada" lo sostiene el
--- trigger de 0031 (invariantes 95-100), no esta política. El nombre lista las
+-- trigger de 0031 (invariantes 95-103), no esta política. El nombre lista las
 -- políticas de DELETE que sobran, o avisa que la de órdenes no es la esperada.
 WITH borrado AS (
   SELECT c.relname AS tabla, p.polname,
@@ -1922,9 +1922,10 @@ SELECT pg_temp.expect_true(94,
 
 
 -- WP-B11 (0031_purchase_order_no_return_to_draft.sql, ADR-026): una orden de
--- compra no vuelve a `draft` desde `approved` en adelante. La política de
--- DELETE de 0030 lee `status = 'draft'` como "nunca enviada"; sin este
--- guarda, un UPDATE a `draft` y un DELETE la eludían en dos pasos. Estos seis
+-- compra no vuelve a `draft` ni a `pending_approval` desde `approved` en
+-- adelante. La política de DELETE de 0030 lee `status = 'draft'` como "nunca
+-- enviada"; sin este guarda, un UPDATE a `draft` y un DELETE la eludían en
+-- dos pasos, y pasando antes por `pending_approval`, en tres. Estos nueve
 -- prueban el COMPORTAMIENTO del trigger, no el texto de ninguna política.
 -- ─────────────────────────────────────────────────────────────────────
 
@@ -1941,7 +1942,7 @@ SELECT pg_temp.expect_fail_like(95, 'Orden de compra approved vuelve a draft',
        WHERE id = '95959595-0000-0000-0000-000000000095';
     END $x$
   $$,
-  'La orden de compra 95959595-0000-0000-0000-000000000095 está en approved y no puede volver a borrador%');
+  'La orden de compra 95959595-0000-0000-0000-000000000095 está en approved y no puede volver a draft%');
 
 -- 96 ─ Una orden `sent` no vuelve a borrador (el rodeo de la revisión de B11).
 SELECT pg_temp.expect_fail_like(96, 'Orden de compra sent vuelve a draft',
@@ -1956,7 +1957,7 @@ SELECT pg_temp.expect_fail_like(96, 'Orden de compra sent vuelve a draft',
        WHERE id = '96969696-0000-0000-0000-000000000096';
     END $x$
   $$,
-  'La orden de compra 96969696-0000-0000-0000-000000000096 está en sent y no puede volver a borrador%');
+  'La orden de compra 96969696-0000-0000-0000-000000000096 está en sent y no puede volver a draft%');
 
 -- 97 ─ Una orden `partially_received` no vuelve a borrador.
 SELECT pg_temp.expect_fail_like(97, 'Orden de compra partially_received vuelve a draft',
@@ -1971,7 +1972,7 @@ SELECT pg_temp.expect_fail_like(97, 'Orden de compra partially_received vuelve a
        WHERE id = '97979797-0000-0000-0000-000000000097';
     END $x$
   $$,
-  'La orden de compra 97979797-0000-0000-0000-000000000097 está en partially_received y no puede volver a borrador%');
+  'La orden de compra 97979797-0000-0000-0000-000000000097 está en partially_received y no puede volver a draft%');
 
 -- 98 ─ Una orden `received` no vuelve a borrador. El terminal sigue siendo
 -- del dominio (ADR-026): esto guarda solo la ENTRADA a `draft`.
@@ -1987,7 +1988,7 @@ SELECT pg_temp.expect_fail_like(98, 'Orden de compra received vuelve a draft',
        WHERE id = '98989898-0000-0000-0000-000000000098';
     END $x$
   $$,
-  'La orden de compra 98989898-0000-0000-0000-000000000098 está en received y no puede volver a borrador%');
+  'La orden de compra 98989898-0000-0000-0000-000000000098 está en received y no puede volver a draft%');
 
 -- 99 ─ Una orden `cancelled` no vuelve a borrador.
 SELECT pg_temp.expect_fail_like(99, 'Orden de compra cancelled vuelve a draft',
@@ -2001,7 +2002,7 @@ SELECT pg_temp.expect_fail_like(99, 'Orden de compra cancelled vuelve a draft',
        WHERE id = '99999999-0000-0000-0000-000000000199';
     END $x$
   $$,
-  'La orden de compra 99999999-0000-0000-0000-000000000199 está en cancelled y no puede volver a borrador%');
+  'La orden de compra 99999999-0000-0000-0000-000000000199 está en cancelled y no puede volver a draft%');
 
 -- 100 ─ Control positivo de 95-99: una orden en `pending_approval` SÍ vuelve
 -- a borrador (la arista de la máquina de A08: el aprobador la devuelve a
@@ -2018,6 +2019,62 @@ SELECT pg_temp.expect_fail_like(100, 'Orden de compra pending_approval vuelve a 
        WHERE id = '10001000-0000-0000-0000-000000000100';
       UPDATE app.purchase_orders SET status = 'draft', notes = 'corregida'
        WHERE id = '10001000-0000-0000-0000-000000000100';
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+
+-- 101 ─ Una orden `approved` no vuelve a `pending_approval`. Es el primer
+-- paso del rodeo de tres: `approved → pending_approval → draft → DELETE`.
+-- Guardar solo la entrada a `draft` lo dejaba abierto: `pending_approval` es
+-- el otro estado previo a la aprobación, y desde él se llega a `draft`.
+SELECT pg_temp.expect_fail_like(101, 'Orden de compra approved vuelve a pending_approval',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('10110110-0000-0000-0000-000000000101', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-101', 'approved', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      UPDATE app.purchase_orders SET status = 'pending_approval'
+       WHERE id = '10110110-0000-0000-0000-000000000101';
+    END $x$
+  $$,
+  'La orden de compra 10110110-0000-0000-0000-000000000101 está en approved y no puede volver a pending_approval%');
+
+-- 102 ─ Una orden `sent` no vuelve a `pending_approval`.
+SELECT pg_temp.expect_fail_like(102, 'Orden de compra sent vuelve a pending_approval',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('10210210-0000-0000-0000-000000000102', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-102', 'sent', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      UPDATE app.purchase_orders SET status = 'pending_approval'
+       WHERE id = '10210210-0000-0000-0000-000000000102';
+    END $x$
+  $$,
+  'La orden de compra 10210210-0000-0000-0000-000000000102 está en sent y no puede volver a pending_approval%');
+
+-- 103 ─ Control positivo de 101 y 102: el camino hacia adelante sigue andando.
+-- Un borrador pasa a `pending_approval` y de ahí a `approved` (con la
+-- constancia de quién aprobó, que exige `po_approved_has_approver`). Sin
+-- esto, un trigger que rechazara todo cambio de estado pasaría 95-102.
+SELECT pg_temp.expect_fail_like(103, 'Orden de compra draft avanza a pending_approval y a approved',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency, created_by)
+      VALUES ('10310310-0000-0000-0000-000000000103', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-103', 'draft', 'USD',
+              '22222222-2222-2222-2222-222222222222');
+      UPDATE app.purchase_orders SET status = 'pending_approval'
+       WHERE id = '10310310-0000-0000-0000-000000000103';
+      UPDATE app.purchase_orders
+         SET status = 'approved',
+             approved_by = '22222222-2222-2222-2222-222222222222', approved_at = now()
+       WHERE id = '10310310-0000-0000-0000-000000000103';
       RAISE EXCEPTION 'aceptado';
     END $x$
   $$,
