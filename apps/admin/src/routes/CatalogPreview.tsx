@@ -45,7 +45,6 @@ export default function CatalogPreview() {
     variant?: AdminVariant;
   } | null>(null);
   const [imageProduct, setImageProduct] = useState<AdminProduct | null>(null);
-  const [actionError, setActionError] = useState("");
   const queryClient = useQueryClient();
   const products = useQuery({
     queryKey: ["catalog-preview", kind, status, cursor],
@@ -55,16 +54,6 @@ export default function CatalogPreview() {
 
   async function refresh() {
     await queryClient.invalidateQueries({ queryKey: ["catalog-preview"] });
-  }
-
-  async function changeStatus(product: AdminProduct, next: "draft" | "active") {
-    setActionError("");
-    try {
-      await api.updateProduct({ id: product.id, status: next });
-      await refresh();
-    } catch (cause) {
-      setActionError(cause instanceof Error ? cause.message : "No se pudo cambiar el estado.");
-    }
   }
 
   return (
@@ -145,12 +134,6 @@ export default function CatalogPreview() {
         </Popover>
       </div>
 
-      {actionError && (
-        <p role="alert" className="mt-4 text-sm text-error">
-          {actionError}
-        </p>
-      )}
-
       {products.isPending && <p className="mt-8 text-text-secondary">Cargando productos…</p>}
       {products.isError && (
         <p role="alert" className="mt-8 text-error">
@@ -212,19 +195,6 @@ export default function CatalogPreview() {
                     <Button variant="outline" size="sm" onClick={() => setImageProduct(product)}>
                       Subir imagen
                     </Button>
-                    {product.status !== "archived" && (
-                      <select
-                        aria-label={`Estado de ${product.name}`}
-                        value={product.status}
-                        onChange={(event) =>
-                          void changeStatus(product, event.target.value as "draft" | "active")
-                        }
-                        className="min-h-11 rounded-control border border-border-strong bg-surface px-2 text-sm focus-visible:outline-2 focus-visible:outline-focus"
-                      >
-                        <option value="draft">Borrador</option>
-                        <option value="active">Activo</option>
-                      </select>
-                    )}
                   </Can>
                 </div>
               </div>

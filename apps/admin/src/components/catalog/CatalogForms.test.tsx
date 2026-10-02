@@ -5,13 +5,16 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api";
 import { ImageUpload, ProductEditor } from "./CatalogActions";
-import { CreateVariantForm } from "./VariantForms";
+import { CreateVariantForm, EditVariantForm } from "./VariantForms";
 
 vi.mock("../../api", () => ({
   api: {
     listCategories: vi.fn(),
+    createCategory: vi.fn(),
     createProduct: vi.fn(),
+    updateProduct: vi.fn(),
     createVariant: vi.fn(),
+    updateVariant: vi.fn(),
     uploadProductMedia: vi.fn(),
   },
 }));
@@ -82,6 +85,52 @@ const categoryA = "33333333-3333-4333-a333-333333333331";
 const categoryB = "33333333-3333-4333-a333-333333333332";
 
 describe("RF-CAT-01/02 · alta por vertical y categoría primaria (WP-E05)", () => {
+  it("permite crear la primera categoría y luego dar de alta un producto", async () => {
+    let categories: Awaited<ReturnType<typeof api.listCategories>> = {
+      items: [],
+      nextCursor: null,
+    };
+    vi.mocked(api.listCategories).mockImplementation(async () => categories);
+    vi.mocked(api.createCategory).mockImplementation(async (input) => {
+      const created = {
+        id: categoryA,
+        path: input.slug,
+        name: input.name,
+      } as Awaited<ReturnType<typeof api.createCategory>>;
+      categories = { items: [created], nextCursor: null };
+      return created;
+    });
+    vi.mocked(api.createProduct).mockResolvedValue({ id: "saved" } as Awaited<
+      ReturnType<typeof api.createProduct>
+    >);
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ProductEditor kind="accessory" onSaved={vi.fn()} onClose={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    expect(
+      await screen.findByText("Para cargar el primer producto, creá una categoría raíz."),
+    ).toBeTruthy();
+    await user.type(screen.getByLabelText("Nombre de la categoría *"), "Accesorios");
+    await user.type(screen.getByLabelText("Slug de la categoría *"), "accesorios");
+    await user.click(screen.getByRole("button", { name: "Crear primera categoría" }));
+    await waitFor(() =>
+      expect(api.createCategory).toHaveBeenCalledWith({ name: "Accesorios", slug: "accesorios" }),
+    );
+
+    await user.type(await screen.findByLabelText("Nombre *"), "Estuche");
+    await user.type(screen.getByLabelText("Slug *"), "estuche");
+    await user.click(screen.getByRole("checkbox", { name: "accesorios" }));
+    await user.click(screen.getByRole("button", { name: "Crear producto" }));
+    await waitFor(() =>
+      expect(api.createProduct).toHaveBeenCalledWith(
+        expect.objectContaining({ categoryIds: [categoryA], primaryCategoryId: categoryA }),
+      ),
+    );
+  });
+
   it("crea un accesorio en dos categorías con exactamente una primaria", async () => {
     vi.mocked(api.listCategories).mockResolvedValue({
       items: [
@@ -119,6 +168,61 @@ describe("RF-CAT-01/02 · alta por vertical y categoría primaria (WP-E05)", () 
     );
     expect(saved).toHaveBeenCalled();
   });
+
+  it("edita la vertical y categorías sin modificar el estado de publicación", async () => {
+    vi.mocked(api.listCategories).mockResolvedValue({
+      items: [{ id: categoryA, path: "accesorios", name: "Accesorios" }],
+      nextCursor: null,
+    } as Awaited<ReturnType<typeof api.listCategories>>);
+    vi.mocked(api.updateProduct).mockResolvedValue({ id: "saved" } as Awaited<
+      ReturnType<typeof api.updateProduct>
+    >);
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ProductEditor
+          kind="accessory"
+          product={{
+            id: "22222222-2222-4222-a222-222222222222",
+            kind: "accessory",
+            slug: "estuche",
+            name: "Estuche",
+            description: null,
+            brandId: null,
+            brandName: null,
+            categoryIds: [categoryA],
+            primaryCategoryId: categoryA,
+            tagIds: [],
+            status: "active",
+            publishedAt: "2026-01-01T00:00:00.000Z",
+            seo: {},
+            facets: {},
+            variants: [],
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            accessoryDetails: { material: null, color: null, sizeLabel: null },
+          }}
+          onSaved={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    await user.clear(await screen.findByLabelText("Nombre *"));
+    await user.type(screen.getByLabelText("Nombre *"), "Estuche de viaje");
+    await user.type(screen.getByLabelText("Material"), "Cuero");
+    await user.click(screen.getByRole("button", { name: "Guardar cambios" }));
+    await waitFor(() => expect(api.updateProduct).toHaveBeenCalled());
+    expect(api.updateProduct).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "Estuche de viaje",
+        categoryIds: [categoryA],
+        primaryCategoryId: categoryA,
+        accessoryDetails: expect.objectContaining({ material: "Cuero" }),
+      }),
+    );
+    expect(vi.mocked(api.updateProduct).mock.calls[0]?.[0]).not.toHaveProperty("status");
+  });
 });
 
 describe("docs/frontend-spec.md §9 · importes de variantes (WP-E05)", () => {
@@ -141,6 +245,63 @@ describe("docs/frontend-spec.md §9 · importes de variantes (WP-E05)", () => {
         expect.objectContaining({
           pricePyg: "245000",
         }),
+      ),
+    );
+  });
+});
+
+describe("GLOSARIO.md · el granel no se vende directo (WP-E05)", () => {
+  it("oculta la opción de venta en línea y envía false al crear granel", async () => {
+    vi.mocked(api.createVariant).mockResolvedValue({ id: "saved" } as Awaited<
+      ReturnType<typeof api.createVariant>
+    >);
+    const user = userEvent.setup();
+    render(
+      <CreateVariantForm productId="22222222-2222-4222-a222-222222222222" onSaved={vi.fn()} />,
+    );
+
+    await user.click(screen.getByRole("checkbox", { name: "Visible en línea" }));
+    await user.selectOptions(screen.getByLabelText("Presentación"), "bulk");
+    expect(screen.queryByRole("checkbox", { name: "Visible en línea" })).toBeNull();
+    await user.type(screen.getByLabelText("SKU *"), "GRANEL-01");
+    await user.type(screen.getByLabelText("Precio (Gs.) *"), "245000");
+    await user.click(screen.getByRole("button", { name: "Crear variante" }));
+
+    await waitFor(() =>
+      expect(api.createVariant).toHaveBeenCalledWith(
+        expect.objectContaining({ variantType: "bulk", onlineVisible: false }),
+      ),
+    );
+  });
+
+  it("corrige un granel que ya tenía visibilidad al editarlo", async () => {
+    vi.mocked(api.updateVariant).mockResolvedValue({ id: "saved" } as Awaited<
+      ReturnType<typeof api.updateVariant>
+    >);
+    const user = userEvent.setup();
+    render(
+      <EditVariantForm
+        variant={
+          {
+            id: "44444444-4444-4444-a444-444444444444",
+            sku: "GRANEL-01",
+            variantType: "bulk",
+            pricePyg: "245000",
+            compareAtPyg: null,
+            vatRate: "iva_10",
+            onlineVisible: true,
+            position: 0,
+          } as Parameters<typeof EditVariantForm>[0]["variant"]
+        }
+        onSaved={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("checkbox", { name: "Visible en línea" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Guardar variante" }));
+    await waitFor(() =>
+      expect(api.updateVariant).toHaveBeenCalledWith(
+        expect.objectContaining({ onlineVisible: false }),
       ),
     );
   });

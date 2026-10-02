@@ -96,7 +96,15 @@ export function CreateVariantForm({
       onSubmit={form.handleSubmit(async (values) => {
         setError("");
         try {
-          onSaved(await api.createVariant(createVariantInput.parse(values)));
+          onSaved(
+            await api.createVariant(
+              createVariantInput.parse({
+                ...values,
+                // El granel es inventario para fraccionar, no una variante vendible.
+                onlineVisible: values.variantType === "bulk" ? false : values.onlineVisible,
+              }),
+            ),
+          );
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : "No se pudo crear la variante.");
         }
@@ -131,6 +139,9 @@ export function CreateVariantForm({
             onChange={(event) => {
               const value = event.target.value as CreateVariantInput["variantType"];
               form.setValue("variantType", value, { shouldValidate: true });
+              if (value === "bulk") {
+                form.setValue("onlineVisible", false, { shouldValidate: true });
+              }
               form.setValue("uom", value === "decant" || value === "bulk" ? "ml" : "unit", {
                 shouldValidate: true,
               });
@@ -240,9 +251,11 @@ export function CreateVariantForm({
           </div>
         )}
       </div>
-      <label className="flex min-h-11 items-center gap-2 text-sm">
-        <input type="checkbox" {...form.register("onlineVisible")} /> Visible en línea
-      </label>
+      {type !== "bulk" && (
+        <label className="flex min-h-11 items-center gap-2 text-sm">
+          <input type="checkbox" {...form.register("onlineVisible")} /> Visible en línea
+        </label>
+      )}
       <label className="flex min-h-11 items-center gap-2 text-sm">
         <input type="checkbox" {...form.register("isSerialized")} /> Requiere serie
       </label>
@@ -289,7 +302,14 @@ export function EditVariantForm({
       onSubmit={form.handleSubmit(async (values) => {
         setError("");
         try {
-          onSaved(await api.updateVariant(updateVariantInput.parse(values)));
+          onSaved(
+            await api.updateVariant(
+              updateVariantInput.parse({
+                ...values,
+                onlineVisible: variant.variantType === "bulk" ? false : values.onlineVisible,
+              }),
+            ),
+          );
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : "No se pudo guardar la variante.");
         }
@@ -349,9 +369,11 @@ export function EditVariantForm({
           <option value="exenta">Exenta</option>
         </select>
       </div>
-      <label className="flex min-h-11 items-center gap-2 text-sm">
-        <input type="checkbox" {...form.register("onlineVisible")} /> Visible en línea
-      </label>
+      {variant.variantType !== "bulk" && (
+        <label className="flex min-h-11 items-center gap-2 text-sm">
+          <input type="checkbox" {...form.register("onlineVisible")} /> Visible en línea
+        </label>
+      )}
       {error && (
         <p role="alert" className="text-sm text-error">
           {error}

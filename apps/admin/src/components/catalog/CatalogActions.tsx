@@ -1,6 +1,16 @@
 import { useState, type FormEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
-import type { AdminCategory, AdminProduct, AdminVariant, ProductKind } from "@joda/contracts";
+import { useQueryClient } from "@tanstack/react-query";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
+import {
+  createCategoryInput,
+  type AdminCategory,
+  type AdminProduct,
+  type AdminVariant,
+  type CreateCategoryInput,
+  type ProductKind,
+} from "@joda/contracts";
 import { Button } from "@joda/ui/primitives/button";
 import {
   Dialog,
@@ -28,6 +38,78 @@ async function loadCategories(): Promise<AdminCategory[]> {
     cursor = page.nextCursor ?? undefined;
   } while (cursor);
   return categories;
+}
+
+function InitialCategoryForm() {
+  const queryClient = useQueryClient();
+  const [error, setError] = useState("");
+  const form = useForm<CreateCategoryInput>({
+    resolver: zodResolver(createCategoryInput),
+    mode: "onBlur",
+    reValidateMode: "onChange",
+    defaultValues: { name: "", slug: "" },
+  });
+  return (
+    <form
+      className="space-y-4"
+      noValidate
+      onSubmit={form.handleSubmit(async (values) => {
+        setError("");
+        try {
+          await api.createCategory(createCategoryInput.parse(values));
+          await queryClient.invalidateQueries({ queryKey: ["catalog-categories"] });
+        } catch (cause) {
+          setError(cause instanceof Error ? cause.message : "No se pudo crear la categoría.");
+        }
+      })}
+    >
+      <p className="text-sm text-text-secondary">
+        Para cargar el primer producto, creá una categoría raíz.
+      </p>
+      <div>
+        <label htmlFor="initial-category-name" className="mb-1 block text-sm font-semibold">
+          Nombre de la categoría *
+        </label>
+        <input
+          id="initial-category-name"
+          className="w-full rounded-control border border-border-strong bg-surface px-3 py-2 focus-visible:outline-2 focus-visible:outline-focus"
+          aria-invalid={!!form.formState.errors.name}
+          aria-describedby={form.formState.errors.name ? "initial-category-name-error" : undefined}
+          {...form.register("name")}
+        />
+        {form.formState.errors.name && (
+          <p id="initial-category-name-error" role="alert" className="text-sm text-error">
+            {form.formState.errors.name.message}
+          </p>
+        )}
+      </div>
+      <div>
+        <label htmlFor="initial-category-slug" className="mb-1 block text-sm font-semibold">
+          Slug de la categoría *
+        </label>
+        <input
+          id="initial-category-slug"
+          className="w-full rounded-control border border-border-strong bg-surface px-3 py-2 focus-visible:outline-2 focus-visible:outline-focus"
+          aria-invalid={!!form.formState.errors.slug}
+          aria-describedby={form.formState.errors.slug ? "initial-category-slug-error" : undefined}
+          {...form.register("slug")}
+        />
+        {form.formState.errors.slug && (
+          <p id="initial-category-slug-error" role="alert" className="text-sm text-error">
+            {form.formState.errors.slug.message}
+          </p>
+        )}
+      </div>
+      {error && (
+        <p role="alert" className="text-sm text-error">
+          {error}
+        </p>
+      )}
+      <Button type="submit" disabled={form.formState.isSubmitting}>
+        {form.formState.isSubmitting ? "Creando…" : "Crear primera categoría"}
+      </Button>
+    </form>
+  );
 }
 
 export function ProductEditor({
@@ -72,13 +154,14 @@ export function ProductEditor({
             </Button>
           </p>
         )}
-        {categories.data && kind === "perfume" && (
+        {categories.data?.length === 0 && <InitialCategoryForm />}
+        {categories.data && categories.data.length > 0 && kind === "perfume" && (
           <PerfumeForm key={product?.id ?? "new-perfume"} {...props} />
         )}
-        {categories.data && kind === "watch" && (
+        {categories.data && categories.data.length > 0 && kind === "watch" && (
           <WatchForm key={product?.id ?? "new-watch"} {...props} />
         )}
-        {categories.data && kind === "accessory" && (
+        {categories.data && categories.data.length > 0 && kind === "accessory" && (
           <AccessoryForm key={product?.id ?? "new-accessory"} {...props} />
         )}
       </DialogContent>
