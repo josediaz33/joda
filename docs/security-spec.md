@@ -175,6 +175,38 @@ Quien escribe estas tablas se da permisos: si bastara con el tenant, B11 entero 
 
 **Lo que el WP no cierra.** Quien tiene `settings.user:write` edita las `role_permissions` y las asignaciones de un rol de sistema (por ejemplo, quitarle todo al dueño): se congela la fila del rol, no sus permisos. `permissions`, el catálogo global, no tiene RLS y `joda_api` puede escribirlo. Ambos están anotados en `docs/backlog.md` (WP-B11c).
 
+#### El ledger, las líneas de órdenes, las recepciones y el borrado de pedidos (WP-B11d, `0034_write_permissions_children_ledger.sql`)
+
+B11 puso permiso en las cabeceras y dejó sin él a lo que cuelga de ellas y al ledger: como vendedor funcionaban un `UPDATE purchase_order_lines SET unit_price_minor = 1`, un `INSERT` de tipo `adjustment` de +5 sobre un lote y borrar una venta (que desengancha la seña). Desde 0034, una política por comando (nunca `FOR ALL`); el SELECT sigue por tenant en todas.
+
+| Tabla                  | INSERT                                     | UPDATE                                                 | DELETE                                        |
+| ---------------------- | ------------------------------------------ | ------------------------------------------------------ | --------------------------------------------- |
+| `inventory_movements`  | según `movement_type`, ver abajo           | nadie (ledger append-only)                             | nadie (ledger append-only)                    |
+| `purchase_order_lines` | `market.purchase_order:write`              | `market.purchase_order:write`, `:approve` o `:receive` | `market.purchase_order:write`                 |
+| `goods_receipts`       | `market.purchase_order:receive`            | `market.purchase_order:receive`                        | nadie (se cancela con su estado)              |
+| `goods_receipt_lines`  | `market.purchase_order:receive`            | `market.purchase_order:receive`                        | nadie                                         |
+| `sale_orders`          | solo tenant (ver «Lo que el WP no cierra») | solo tenant                                            | `sales.order:write`, y **solo en `borrador`** |
+
+**El permiso del movimiento depende de su `movement_type`**, que es lo único que distingue qué operación hace quien escribe:
+
+| `movement_type`                                                          | Permiso                         |
+| ------------------------------------------------------------------------ | ------------------------------- |
+| `sale`                                                                   | `sales.order:write`             |
+| `adjustment`                                                             | `inventory.stock:adjust`        |
+| `decant_consumption`, `decant_yield`, `bom_consumption`, `waste`         | `inventory.decant:execute`      |
+| `transfer_in`, `transfer_out`                                            | `inventory.decant:execute`      |
+| `purchase_receipt`                                                       | `market.purchase_order:receive` |
+| `return_in` (devolución de un cliente)                                   | `sales.order:refund`            |
+| `return_out` (devolución a un proveedor: es compras y genera un crédito) | `market.purchase_order:write`   |
+
+Decisiones de José (2026-10-01): `return_out` va con compras, no con ventas; y los `transfer_*` con `inventory.decant:execute`. Como no se distinguen por `movement_type` sino por `reference_type` (texto libre), un `CHECK` impone que en un `transfer_*` valga solo `lot_separation` o `lot_opening` y que no sea NULL. El día que exista otro tipo de transferencia, se agrega a propósito. Un `movement_type` nuevo que no figure en la política se rechaza hasta mapearlo, y el invariante 111 falla para obligar a decidirlo.
+
+**Un pedido en `draft` se borra; uno confirmado, no.** La política de DELETE lee `draft` como «nunca confirmada», y la sostiene `trg_so_no_return_to_draft` (se entra a `draft` solo desde `draft`; ADR-026, `docs/data-model.md` §4.6, guarda 4): sin ella, un `UPDATE` a `draft` y un `DELETE` borraban una venta cobrada.
+
+**La trampa de la lectura no aplica** a estas tablas: el SELECT es por tenant, así que ni `INSERT ... RETURNING` ni `UPDATE ... WHERE` dependen de otro permiso.
+
+**Lo que el WP no cierra.** (1) INSERT y UPDATE de `sale_orders`, y las demás tablas de la venta (`sale_order_lines`, `payments`, ...) y `movement_cost_allocations`, siguen solo por tenant. (2) Un contexto `system` (el webhook que confirma un pago) no inserta los movimientos `sale` que genera esa confirmación, porque `has_permission` exige staff: necesita el camino definido de WP-G13. (3) La lectura de `purchase_order_lines` y `goods_receipt_lines` sigue por tenant, así que el vendedor ve los precios de compra. Los tres están anotados en `docs/backlog.md` (WP-B11d).
+
 **La condición que hace que esta capa exista de verdad:**
 
 | Rol             | Uso                              | `BYPASSRLS`           |
