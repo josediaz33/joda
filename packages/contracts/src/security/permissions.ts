@@ -10,7 +10,9 @@
 //
 // No inventar un código nuevo acá sin actualizar primero
 // docs/security-spec.md §2 y packages/db/seed/0001_seed_base.sql — los tres
-// tienen que decir exactamente lo mismo.
+// tienen que decir exactamente lo mismo. Contrato y seed los compara
+// apps/api/src/modules/auth/permissionsParity.integration.test.ts (WP-M11);
+// el documento, nadie.
 import { z } from "zod";
 
 export const permissionCode = z.enum([
