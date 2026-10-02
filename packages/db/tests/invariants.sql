@@ -407,13 +407,14 @@ SELECT pg_temp.expect_true(28,
   ));
 
 -- 29 ─ Toda función de disparador de app.* es SECURITY DEFINER, salvo las
--- tres que no leen ninguna tabla (`guard_po_no_return_to_draft`, WP-B11,
--- lee solo OLD y NEW). Una función de invariante SECURITY INVOKER lee con
+-- que no leen ninguna tabla (`guard_po_no_return_to_draft`, WP-B11, y
+-- `guard_system_roles`, WP-B11c: leen solo OLD y NEW). Una función de
+-- invariante SECURITY INVOKER lee con
 -- los permisos de quien dispara el trigger: si RLS le oculta la fila, decide
 -- sobre un NULL (el defecto de B10 y de B09). Una función nueva que lea
 -- tablas y no esté en esta lista hace fallar esto.
 SELECT pg_temp.expect_true(29,
-  'Toda función de disparador de app.* es SECURITY DEFINER, salvo set_updated_at/guard_append_only/guard_po_no_return_to_draft',
+  'Toda función de disparador de app.* es SECURITY DEFINER, salvo set_updated_at/guard_append_only/guard_po_no_return_to_draft/guard_system_roles',
   NOT EXISTS (
     SELECT 1
       FROM pg_proc p
@@ -422,7 +423,7 @@ SELECT pg_temp.expect_true(29,
        AND p.prorettype = 'trigger'::regtype
        AND NOT p.prosecdef
        AND p.proname NOT IN ('set_updated_at', 'guard_append_only',
-                             'guard_po_no_return_to_draft')
+                             'guard_po_no_return_to_draft', 'guard_system_roles')
   ));
 
 -- 30 ─ El dueño de toda función SECURITY DEFINER de app.* elude RLS. Una
@@ -1909,6 +1910,10 @@ SELECT pg_temp.expect_true(93,
 -- órdenes de compra; carga la recepción en borrador y la contabiliza quien
 -- las lee. Si C15 la resuelve, se quita de acá. Los roles que crea un
 -- administrador no entran: validar el par al crearlos es de WP-C24.
+-- Las tres últimas filas (WP-B11c) no responden a la trampa: el SELECT de
+-- `roles`, `role_permissions` y `staff_user_roles` es por tenant, porque la
+-- API lo lee para resolver los permisos de cada sesión. El par existe porque
+-- quien administra usuarios y roles tiene que ver la pantalla que los lista.
 WITH par(tabla, escribe, lee) AS (
   VALUES
     ('suppliers',         'market.supplier:write',         'market.supplier:read'),
@@ -1921,7 +1926,10 @@ WITH par(tabla, escribe, lee) AS (
     ('inventory_lots',    'inventory.stock:adjust',        'inventory.stock:read'),
     ('chart_of_accounts', 'accounting.journal:write',      'accounting.journal:read'),
     ('customer_deposits', 'accounting.deposit:write',      'accounting.deposit:read'),
-    ('sourcing_scenarios', 'market.sourcing:write',         'market.sourcing:read')
+    ('sourcing_scenarios', 'market.sourcing:write',         'market.sourcing:read'),
+    ('roles',              'settings.user:write',           'settings.user:read'),
+    ('role_permissions',   'settings.user:write',           'settings.user:read'),
+    ('staff_user_roles',   'settings.user:write',           'settings.user:read')
 ), roles_sembrados AS (
   SELECT id, code, tenant_id FROM app.roles WHERE is_system
 ), escribe_sin_leer AS (
@@ -2096,6 +2104,129 @@ SELECT pg_temp.expect_fail_like(103, 'Orden de compra draft avanza a pending_app
          SET status = 'approved',
              approved_by = '22222222-2222-2222-2222-222222222222', approved_at = now()
        WHERE id = '10310310-0000-0000-0000-000000000103';
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+
+-- WP-B11c (0033_write_permissions_roles.sql): escribir en `roles`,
+-- `role_permissions` y `staff_user_roles` exige `settings.user:write`, y los
+-- roles de sistema no se borran ni se renombran, por nadie. El 104 lee el
+-- TEXTO de las políticas, con el límite de siempre: no prueba que hagan lo
+-- que dicen (eso lo prueba, con cada rol como joda_api,
+-- write_permissions.test.ts). Del 105 al 110, el trigger se prueba como
+-- superusuario, que elude RLS: ese es el "por nadie".
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 104 ─ En esas tres tablas, toda política permisiva de escritura (INSERT,
+-- UPDATE, DELETE o ALL) exige `settings.user:write`, hay una por cada uno de
+-- los tres comandos, y ninguna es FOR ALL. La lectura, en cambio, NO exige
+-- permiso: la API lee `role_permissions` y `staff_user_roles` para resolver
+-- los permisos de cada sesión, y el vendedor no tiene `settings.user:read`.
+-- Una política de SELECT con `has_permission` rompería el login de todos, y
+-- sin ninguna permisiva de lectura las tres tablas quedan vacías para
+-- `joda_api`. El nombre lista las culpables.
+WITH tablas(tabla) AS (
+  VALUES ('roles'), ('role_permissions'), ('staff_user_roles')
+), politicas AS (
+  SELECT c.relname AS tabla, p.polname, p.polcmd,
+         COALESCE(pg_get_expr(p.polqual, p.polrelid), '')
+           || ' ' || COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN tablas t ON t.tabla = c.relname
+   WHERE n.nspname = 'app' AND p.polpermissive
+), sin_permiso AS (
+  SELECT tabla || '.' || polname AS descripcion
+    FROM politicas
+   WHERE polcmd IN ('a', 'w', 'd', '*')
+     AND (expresion NOT LIKE '%has_permission(''settings.user:write''%' OR expresion ~ '\mtrue\M')
+), for_all AS (
+  SELECT tabla || '.' || polname AS descripcion FROM politicas WHERE polcmd = '*'
+), falta AS (
+  SELECT t.tabla || CASE c.cmd WHEN 'a' THEN ' (INSERT)' WHEN 'w' THEN ' (UPDATE)'
+                               ELSE ' (DELETE)' END AS descripcion
+    FROM tablas t
+   CROSS JOIN (VALUES ('a'::"char"), ('w'::"char"), ('d'::"char")) AS c(cmd)
+   WHERE NOT EXISTS (SELECT 1 FROM politicas p WHERE p.tabla = t.tabla AND p.polcmd = c.cmd)
+), lectura_cerrada AS (
+  SELECT tabla || '.' || polname || ' (SELECT con permiso)' AS descripcion
+    FROM politicas
+   WHERE polcmd = 'r' AND expresion LIKE '%has_permission(%'
+  UNION ALL
+  SELECT t.tabla || ' (sin política de SELECT)'
+    FROM tablas t
+   WHERE NOT EXISTS (SELECT 1 FROM politicas p WHERE p.tabla = t.tabla AND p.polcmd = 'r')
+)
+SELECT pg_temp.expect_true(104,
+  'Escribir roles, role_permissions y staff_user_roles exige settings.user:write; leerlos, solo tenant'
+    || COALESCE(' — sin permiso: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sin_permiso), '')
+    || COALESCE(' — FOR ALL: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM for_all), '')
+    || COALESCE(' — sin política: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM falta), '')
+    || COALESCE(' — lectura: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM lectura_cerrada), ''),
+  NOT EXISTS (SELECT 1 FROM sin_permiso) AND NOT EXISTS (SELECT 1 FROM for_all)
+  AND NOT EXISTS (SELECT 1 FROM falta) AND NOT EXISTS (SELECT 1 FROM lectura_cerrada));
+
+-- 105 ─ El rol de sistema del dueño no se borra, ni siquiera como
+-- superusuario: sin esto, quien pueda borrar roles puede borrar el de dueño.
+SELECT pg_temp.expect_fail_like(105, 'Borrar el rol de sistema owner',
+  $$DELETE FROM app.roles
+     WHERE tenant_id = '11111111-1111-1111-1111-111111111111' AND code = 'owner'$$,
+  'El rol de sistema "%" (owner) no se puede borrar%');
+
+-- 106 ─ Un rol de sistema no cambia de nombre.
+SELECT pg_temp.expect_fail_like(106, 'Renombrar (name) el rol de sistema owner',
+  $$UPDATE app.roles SET name = 'Otro nombre'
+     WHERE tenant_id = '11111111-1111-1111-1111-111111111111' AND code = 'owner'$$,
+  'El rol de sistema "%" (owner) no se puede renombrar%');
+
+-- 107 ─ Ni de código: el código es lo que el sistema usa para reconocerlo.
+SELECT pg_temp.expect_fail_like(107, 'Renombrar (code) el rol de sistema owner',
+  $$UPDATE app.roles SET code = 'otro-codigo'
+     WHERE tenant_id = '11111111-1111-1111-1111-111111111111' AND code = 'owner'$$,
+  'El rol de sistema "%" (owner) no se puede renombrar%');
+
+-- 108 ─ La marca `is_system` no se baja. Sin esto, bajarla y borrar el rol
+-- son dos pasos: el mismo rodeo que la revisión de B11 encontró con `draft`.
+SELECT pg_temp.expect_fail_like(108, 'Bajar is_system del rol de sistema owner',
+  $$UPDATE app.roles SET is_system = false
+     WHERE tenant_id = '11111111-1111-1111-1111-111111111111' AND code = 'owner'$$,
+  'La marca is_system del rol "%" (owner) no se puede cambiar%');
+
+-- 109 ─ Ni se sube: un rol creado después no pasa a ser de sistema.
+SELECT pg_temp.expect_fail_like(109, 'Subir is_system de un rol personalizado',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.roles (id, tenant_id, code, name)
+      VALUES ('10910910-0000-0000-0000-000000000109',
+              '11111111-1111-1111-1111-111111111111', 'inv-109', 'Rol 109');
+      UPDATE app.roles SET is_system = true
+       WHERE id = '10910910-0000-0000-0000-000000000109';
+    END $x$
+  $$,
+  'La marca is_system del rol "Rol 109" (inv-109) no se puede cambiar%');
+
+-- 110 ─ Control positivo de 105 a 109: un rol que no es de sistema SÍ cambia
+-- de nombre y de código y SÍ se borra, y un rol de sistema SÍ admite un
+-- UPDATE que no toca su nombre, su código ni su marca. Sin esto, un trigger
+-- que rechazara todo cambio de `roles` pasaría los cinco anteriores.
+SELECT pg_temp.expect_fail_like(110, 'Rol personalizado se renombra y se borra',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.roles (id, tenant_id, code, name)
+      VALUES ('11011011-0000-0000-0000-000000000110',
+              '11111111-1111-1111-1111-111111111111', 'inv-110', 'Rol 110');
+      UPDATE app.roles SET name = 'Rol 110 renombrado', code = 'inv-110b'
+       WHERE id = '11011011-0000-0000-0000-000000000110';
+      UPDATE app.roles SET created_at = created_at
+       WHERE tenant_id = '11111111-1111-1111-1111-111111111111' AND code = 'owner';
+      DELETE FROM app.roles WHERE id = '11011011-0000-0000-0000-000000000110';
       RAISE EXCEPTION 'aceptado';
     END $x$
   $$,

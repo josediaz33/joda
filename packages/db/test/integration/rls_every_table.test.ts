@@ -121,6 +121,7 @@ const TRIGGER_COVERAGE: Record<string, string> = {
   "purchase_order_transitions.trg_po_transitions_immutable": "este archivo: guard_append_only",
   "purchase_orders.trg_po_no_return_to_draft": "write_permissions.test.ts (WP-B11)",
   "purchase_orders.trg_po_updated": "este archivo: set_updated_at",
+  "roles.trg_system_roles_guard": "write_permissions.test.ts (WP-B11c)",
   "sale_order_transitions.trg_so_transitions_immutable": "este archivo: guard_append_only",
   "sale_orders.trg_so_updated": "este archivo: set_updated_at",
   "serialized_units.trg_serials_updated": "este archivo: set_updated_at",
