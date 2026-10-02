@@ -407,14 +407,15 @@ SELECT pg_temp.expect_true(28,
   ));
 
 -- 29 ─ Toda función de disparador de app.* es SECURITY DEFINER, salvo las
--- que no leen ninguna tabla (`guard_po_no_return_to_draft`, WP-B11, y
--- `guard_system_roles`, WP-B11c: leen solo OLD y NEW). Una función de
+-- que no leen ninguna tabla (`guard_po_no_return_to_draft`, WP-B11,
+-- `guard_system_roles`, WP-B11c, y `guard_so_no_return_to_draft`, WP-B11d:
+-- leen solo OLD y NEW). Una función de
 -- invariante SECURITY INVOKER lee con
 -- los permisos de quien dispara el trigger: si RLS le oculta la fila, decide
 -- sobre un NULL (el defecto de B10 y de B09). Una función nueva que lea
 -- tablas y no esté en esta lista hace fallar esto.
 SELECT pg_temp.expect_true(29,
-  'Toda función de disparador de app.* es SECURITY DEFINER, salvo set_updated_at/guard_append_only/guard_po_no_return_to_draft/guard_system_roles',
+  'Toda función de disparador de app.* es SECURITY DEFINER, salvo set_updated_at/guard_append_only/guard_po_no_return_to_draft/guard_system_roles/guard_so_no_return_to_draft',
   NOT EXISTS (
     SELECT 1
       FROM pg_proc p
@@ -423,7 +424,8 @@ SELECT pg_temp.expect_true(29,
        AND p.prorettype = 'trigger'::regtype
        AND NOT p.prosecdef
        AND p.proname NOT IN ('set_updated_at', 'guard_append_only',
-                             'guard_po_no_return_to_draft', 'guard_system_roles')
+                             'guard_po_no_return_to_draft', 'guard_system_roles',
+                             'guard_so_no_return_to_draft')
   ));
 
 -- 30 ─ El dueño de toda función SECURITY DEFINER de app.* elude RLS. Una
@@ -1935,10 +1937,12 @@ SELECT pg_temp.expect_true(93,
 -- órdenes de compra; carga la recepción en borrador y la contabiliza quien
 -- las lee. Si C15 la resuelve, se quita de acá. Los roles que crea un
 -- administrador no entran: validar el par al crearlos es de WP-C24.
--- Las tres últimas filas (WP-B11c) no responden a la trampa: el SELECT de
--- `roles`, `role_permissions` y `staff_user_roles` es por tenant, porque la
--- API lo lee para resolver los permisos de cada sesión. El par existe porque
--- quien administra usuarios y roles tiene que ver la pantalla que los lista.
+-- Las filas de `roles`, `role_permissions` y `staff_user_roles` (WP-B11c) no
+-- responden a la trampa: su SELECT es por tenant, porque la API lo lee para
+-- resolver los permisos de cada sesión. El par existe porque quien administra
+-- usuarios y roles tiene que ver la pantalla que los lista. Las de
+-- `purchase_order_lines` (WP-B11d) sí: su lectura exige
+-- `market.purchase_order:read`, con la misma excepción del depósito.
 WITH par(tabla, escribe, lee) AS (
   VALUES
     ('suppliers',         'market.supplier:write',         'market.supplier:read'),
@@ -1955,7 +1959,10 @@ WITH par(tabla, escribe, lee) AS (
     ('sourcing_scenario_lines', 'market.sourcing:write',    'market.sourcing:read'),
     ('roles',              'settings.user:write',           'settings.user:read'),
     ('role_permissions',   'settings.user:write',           'settings.user:read'),
-    ('staff_user_roles',   'settings.user:write',           'settings.user:read')
+    ('staff_user_roles',   'settings.user:write',           'settings.user:read'),
+    ('purchase_order_lines', 'market.purchase_order:write',   'market.purchase_order:read'),
+    ('purchase_order_lines', 'market.purchase_order:approve', 'market.purchase_order:read'),
+    ('purchase_order_lines', 'market.purchase_order:receive', 'market.purchase_order:read')
 ), roles_sembrados AS (
   SELECT id, code, tenant_id FROM app.roles WHERE is_system
 ), escribe_sin_leer AS (
@@ -1966,11 +1973,12 @@ WITH par(tabla, escribe, lee) AS (
     JOIN par p ON p.escribe = w.permission_code
    WHERE NOT EXISTS (SELECT 1 FROM app.role_permissions l
                       WHERE l.role_id = r.id AND l.permission_code = p.lee)
-     AND NOT (r.code = 'deposito' AND p.tabla = 'purchase_orders'
+     AND NOT (r.code = 'deposito'
+              AND p.tabla IN ('purchase_orders', 'purchase_order_lines')
               AND p.escribe = 'market.purchase_order:receive')
 )
 SELECT pg_temp.expect_true(94,
-  'Ningún rol sembrado escribe en una tabla sensible sin poder leerla (salvo depósito en órdenes, WP-C15)'
+  'Ningún rol sembrado escribe en una tabla sensible sin poder leerla (salvo depósito en órdenes y sus líneas, WP-C15)'
     || COALESCE(' — escriben sin leer: '
                 || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM escribe_sin_leer), ''),
   (SELECT count(*) FROM roles_sembrados) >= 4 AND NOT EXISTS (SELECT 1 FROM escribe_sin_leer));
@@ -2315,6 +2323,317 @@ SELECT pg_temp.expect_true(113,
                  AND usando LIKE '%is_system%' AND chequea LIKE '%is_system%')
   AND EXISTS (SELECT 1 FROM pol WHERE polcmd = 'd' AND usando LIKE '%is_system%')
   AND NOT EXISTS (SELECT 1 FROM pol WHERE polcmd = '*'));
+
+
+-- WP-B11d (0034_write_permissions_children_ledger.sql): escribir en el
+-- ledger, en las líneas de órdenes de compra, en las recepciones y borrar un
+-- pedido de venta exige permiso. Los invariantes 114, 118 y 119 leen el TEXTO
+-- de las políticas (pg_get_expr), con el límite de siempre: no prueban que
+-- hagan lo que dicen, y el 114 no puede probar qué permiso va con qué tipo de
+-- movimiento. Eso lo prueba, con cada rol como joda_api,
+-- write_permissions.test.ts. El CHECK y la guarda se prueban acá por
+-- comportamiento, como superusuario.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 114 ─ inventory_movements tiene UNA política de escritura, la de INSERT, con
+-- permiso y sin `true`; ninguna de UPDATE, DELETE ni FOR ALL (el ledger es
+-- append-only); y nombra todos los valores de `movement_type` y los seis
+-- permisos del mapeo. Un valor de enum agregado después y no mapeado se
+-- rechaza por RLS, pero este invariante falla para obligar a decidirlo a
+-- propósito. El nombre lista las culpables.
+WITH politicas AS (
+  SELECT p.polname, p.polcmd,
+         COALESCE(pg_get_expr(p.polqual, p.polrelid), '')
+           || ' ' || COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND c.relname = 'inventory_movements'
+     AND p.polpermissive AND p.polcmd IN ('a', 'w', 'd', '*')
+), de_insert AS (
+  SELECT * FROM politicas WHERE polcmd = 'a'
+), sobran AS (
+  SELECT polname AS descripcion FROM politicas WHERE polcmd <> 'a'
+), sin_permiso AS (
+  SELECT polname AS descripcion FROM de_insert
+   WHERE expresion NOT LIKE '%has_permission(%' OR expresion ~ '\mtrue\M'
+), tipos_sin_cubrir AS (
+  SELECT t::text AS descripcion
+    FROM unnest(enum_range(NULL::app.movement_type)) AS t
+   WHERE NOT EXISTS (SELECT 1 FROM de_insert i WHERE i.expresion LIKE '%''' || t::text || '''%')
+), permisos_sin_usar AS (
+  SELECT v.permiso AS descripcion
+    FROM (VALUES ('sales.order:write'), ('inventory.stock:adjust'),
+                 ('inventory.decant:execute'), ('market.purchase_order:receive'),
+                 ('sales.order:refund'), ('market.purchase_order:write')) AS v(permiso)
+   WHERE NOT EXISTS (SELECT 1 FROM de_insert i WHERE i.expresion LIKE '%''' || v.permiso || '''%')
+)
+SELECT pg_temp.expect_true(114,
+  'Ledger: una sola política de escritura (INSERT), con permiso, que cubre todo movement_type'
+    || COALESCE(' — sobran: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sobran), '')
+    || COALESCE(' — sin permiso: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sin_permiso), '')
+    || COALESCE(' — tipos sin cubrir: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM tipos_sin_cubrir), '')
+    || COALESCE(' — permisos sin usar: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM permisos_sin_usar), ''),
+  (SELECT count(*) FROM de_insert) = 1 AND NOT EXISTS (SELECT 1 FROM sobran)
+  AND NOT EXISTS (SELECT 1 FROM sin_permiso) AND NOT EXISTS (SELECT 1 FROM tipos_sin_cubrir)
+  AND NOT EXISTS (SELECT 1 FROM permisos_sin_usar));
+
+-- 115 ─ Un transfer con un `reference_type` que no sea de la apertura o la
+-- separación se rechaza: la política de `transfer_*` no puede depender de un
+-- texto libre. Hay que rechazarlo por el CHECK y no por otra cosa.
+SELECT pg_temp.expect_fail_like(115, 'Transfer con reference_type libre',
+  $$INSERT INTO app.inventory_movements
+      (tenant_id, lot_id, variant_id, qty, uom, movement_type, reference_type)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '99999999-0000-0000-0000-000000000002',
+            '55555555-0000-0000-0000-000000000002', 1, 'ml', 'transfer_in', 'otro_texto')$$,
+  '%movement_transfer_reference_type%');
+
+-- 116 ─ Ni sin `reference_type`: un `IN` con NULL da NULL y un CHECK lo dejaría
+-- pasar, así que el CHECK exige que no sea NULL.
+SELECT pg_temp.expect_fail_like(116, 'Transfer sin reference_type',
+  $$INSERT INTO app.inventory_movements
+      (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '99999999-0000-0000-0000-000000000002',
+            '55555555-0000-0000-0000-000000000002', 1, 'ml', 'transfer_in')$$,
+  '%movement_transfer_reference_type%');
+
+-- 117 ─ Control positivo de 115 y 116: un transfer de la separación y uno de
+-- la apertura SÍ entran, y un movimiento que no es transfer sigue aceptando
+-- un `reference_type` libre (`sale_order`, `goods_receipt`...). Sin esto, un
+-- CHECK que rechazara todo movimiento pasaría los dos anteriores.
+SELECT pg_temp.expect_fail_like(117, 'Transfer de separación y apertura entran; otros tipos, texto libre',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type, reference_type)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000002', 1, 'ml', 'transfer_in', 'lot_separation'),
+             ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000002', 1, 'ml', 'transfer_in', 'lot_opening'),
+             ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000002', 1, 'ml', 'adjustment', 'texto libre');
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+-- 118 ─ purchase_order_lines, goods_receipts y goods_receipt_lines: cada
+-- política de escritura es la esperada (tabla, comando y permiso), no hay
+-- ninguna otra (en particular, ningún DELETE en recepciones: se cancelan con
+-- su estado) y ninguna es `true` ni FOR ALL. Además, el INSERT y el DELETE de
+-- las líneas de órdenes exigen que la orden padre esté en `draft` (sin eso,
+-- `:write` vaciaba una orden enviada), y su SELECT exige
+-- `market.purchase_order:read` (sin eso, el vendedor veía los precios de
+-- compra). El nombre lista las que faltan y las que sobran.
+WITH esperadas(tabla, cmd, permiso) AS (
+  VALUES
+    ('purchase_order_lines', 'a'::"char", 'market.purchase_order:write'),
+    ('purchase_order_lines', 'w',         'market.purchase_order:write'),
+    ('purchase_order_lines', 'w',         'market.purchase_order:approve'),
+    ('purchase_order_lines', 'w',         'market.purchase_order:receive'),
+    ('purchase_order_lines', 'd',         'market.purchase_order:write'),
+    ('goods_receipts',       'a',         'market.purchase_order:receive'),
+    ('goods_receipts',       'w',         'market.purchase_order:receive'),
+    ('goods_receipt_lines',  'a',         'market.purchase_order:receive'),
+    ('goods_receipt_lines',  'w',         'market.purchase_order:receive')
+), politicas AS (
+  SELECT c.relname AS tabla, p.polname, p.polcmd,
+         COALESCE(pg_get_expr(p.polqual, p.polrelid), '')
+           || ' ' || COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND p.polpermissive AND p.polcmd IN ('a', 'w', 'd', '*')
+     AND c.relname IN ('purchase_order_lines', 'goods_receipts', 'goods_receipt_lines')
+), faltan AS (
+  SELECT e.tabla || ' (' || e.cmd::text || ') ' || e.permiso AS descripcion
+    FROM esperadas e
+   WHERE NOT EXISTS (SELECT 1 FROM politicas p
+                      WHERE p.tabla = e.tabla AND p.polcmd = e.cmd
+                        AND p.expresion LIKE '%''' || e.permiso || '''%')
+), sobran AS (
+  SELECT p.tabla || '.' || p.polname AS descripcion
+    FROM politicas p
+   WHERE p.polcmd = '*' OR p.expresion ~ '\mtrue\M'
+      OR NOT EXISTS (SELECT 1 FROM esperadas e WHERE e.tabla = p.tabla AND e.cmd = p.polcmd)
+), sin_borrador AS (
+  SELECT p.tabla || '.' || p.polname AS descripcion
+    FROM politicas p
+   WHERE p.tabla = 'purchase_order_lines' AND p.polcmd IN ('a', 'd')
+     AND (p.expresion NOT LIKE '%purchase_orders%' OR p.expresion NOT LIKE '%''draft''%')
+), lectura_lineas AS (
+  SELECT p.polname, COALESCE(pg_get_expr(p.polqual, p.polrelid), '') AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND c.relname = 'purchase_order_lines'
+     AND p.polpermissive AND p.polcmd = 'r'
+), lectura_sin_permiso AS (
+  SELECT 'purchase_order_lines.' || polname AS descripcion
+    FROM lectura_lineas
+   WHERE expresion NOT LIKE '%has_permission(''market.purchase_order:read''%'
+  UNION ALL
+  SELECT 'purchase_order_lines (sin política de SELECT)'
+   WHERE NOT EXISTS (SELECT 1 FROM lectura_lineas)
+)
+SELECT pg_temp.expect_true(118,
+  'Líneas de órdenes de compra y recepciones: escribir exige su permiso, las líneas solo en borrador y leerlas, :read; las recepciones no se borran'
+    || COALESCE(' — faltan: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM faltan), '')
+    || COALESCE(' — sobran: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sobran), '')
+    || COALESCE(' — sin exigir la orden en borrador: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sin_borrador), '')
+    || COALESCE(' — lectura sin permiso: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM lectura_sin_permiso), ''),
+  NOT EXISTS (SELECT 1 FROM faltan) AND NOT EXISTS (SELECT 1 FROM sobran)
+  AND NOT EXISTS (SELECT 1 FROM sin_borrador) AND NOT EXISTS (SELECT 1 FROM lectura_sin_permiso));
+
+-- 119 ─ sale_orders se borra solo con `sales.order:write` Y en borrador, con
+-- el estado dentro de la política y ninguna otra condición (ningún `OR`), y
+-- hay una sola política de DELETE. INSERT y UPDATE siguen solo por tenant
+-- (ver 0034, "qué queda fuera"), así que no se exige permiso en ellos.
+WITH borrado AS (
+  SELECT COALESCE(pg_get_expr(p.polqual, p.polrelid), '') AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND c.relname = 'sale_orders'
+     AND p.polpermissive AND p.polcmd IN ('d', '*')
+)
+SELECT pg_temp.expect_true(119,
+  'sale_orders: DELETE solo con sales.order:write y solo en borrador',
+  (SELECT count(*) FROM borrado) = 1
+  AND (SELECT count(*) FROM borrado
+        WHERE expresion LIKE '%sales.order:write%'
+          AND expresion LIKE '%(status = ''draft''%'
+          AND expresion NOT LIKE '% OR %') = 1);
+
+-- 120 ─ Un pedido `paid` no vuelve a borrador: sin esto, un UPDATE a `draft`
+-- y un DELETE borraban una venta cobrada y desenganchaban su seña.
+SELECT pg_temp.expect_fail_like(120, 'Pedido paid vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.sale_orders (id, tenant_id, channel_id, code, status)
+      VALUES ('11711711-0000-0000-0000-000000000117', '11111111-1111-1111-1111-111111111111',
+              'bbbbbbbb-0000-0000-0000-000000000001', 'VTA-INV-117', 'paid');
+      UPDATE app.sale_orders SET status = 'draft'
+       WHERE id = '11711711-0000-0000-0000-000000000117';
+    END $x$
+  $$,
+  'El pedido 11711711-0000-0000-0000-000000000117 está en paid y no puede volver a draft%');
+
+-- 121 ─ Ni uno `cancelled`.
+SELECT pg_temp.expect_fail_like(121, 'Pedido cancelled vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.sale_orders (id, tenant_id, channel_id, code, status)
+      VALUES ('11811811-0000-0000-0000-000000000118', '11111111-1111-1111-1111-111111111111',
+              'bbbbbbbb-0000-0000-0000-000000000001', 'VTA-INV-118', 'cancelled');
+      UPDATE app.sale_orders SET status = 'draft'
+       WHERE id = '11811811-0000-0000-0000-000000000118';
+    END $x$
+  $$,
+  'El pedido 11811811-0000-0000-0000-000000000118 está en cancelled y no puede volver a draft%');
+
+-- 122 ─ Ni uno `awaiting_payment`, el único estado al que se llega desde
+-- `draft`: no hay un análogo de `pending_approval` de la orden de compra, y
+-- este es el control de que tampoco se vuelve de ahí.
+SELECT pg_temp.expect_fail_like(122, 'Pedido awaiting_payment vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.sale_orders (id, tenant_id, channel_id, code, status)
+      VALUES ('11911911-0000-0000-0000-000000000119', '11111111-1111-1111-1111-111111111111',
+              'bbbbbbbb-0000-0000-0000-000000000001', 'VTA-INV-119', 'awaiting_payment');
+      UPDATE app.sale_orders SET status = 'draft'
+       WHERE id = '11911911-0000-0000-0000-000000000119';
+    END $x$
+  $$,
+  'El pedido 11911911-0000-0000-0000-000000000119 está en awaiting_payment y no puede volver a draft%');
+
+-- 123 ─ Control positivo de 120 a 122: un borrador se edita sin salir de
+-- `draft`, y recorre el camino feliz de la máquina de A09 hasta `delivered`
+-- y `refunded`. Sin esto, un trigger que rechazara todo cambio de estado
+-- pasaría los tres anteriores.
+SELECT pg_temp.expect_fail_like(123, 'Pedido draft se edita y avanza por la máquina',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.sale_orders (id, tenant_id, channel_id, code, status)
+      VALUES ('12012012-0000-0000-0000-000000000120', '11111111-1111-1111-1111-111111111111',
+              'bbbbbbbb-0000-0000-0000-000000000001', 'VTA-INV-120', 'draft');
+      UPDATE app.sale_orders SET status = 'draft', notes = 'editado'
+       WHERE id = '12012012-0000-0000-0000-000000000120';
+      UPDATE app.sale_orders SET status = 'awaiting_payment'
+       WHERE id = '12012012-0000-0000-0000-000000000120';
+      UPDATE app.sale_orders SET status = 'paid'
+       WHERE id = '12012012-0000-0000-0000-000000000120';
+      UPDATE app.sale_orders SET status = 'preparing'
+       WHERE id = '12012012-0000-0000-0000-000000000120';
+      UPDATE app.sale_orders SET status = 'ready'
+       WHERE id = '12012012-0000-0000-0000-000000000120';
+      UPDATE app.sale_orders SET status = 'shipped'
+       WHERE id = '12012012-0000-0000-0000-000000000120';
+      UPDATE app.sale_orders SET status = 'delivered'
+       WHERE id = '12012012-0000-0000-0000-000000000120';
+      UPDATE app.sale_orders SET status = 'refunded'
+       WHERE id = '12012012-0000-0000-0000-000000000120';
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+-- 124 ─ Un pedido con una seña enganchada no se borra: la FK
+-- `customer_deposits.sale_order_id` es RESTRICT y no SET NULL. Una seña existe
+-- antes del cobro, así que un borrador puede tener una; con SET NULL, borrarlo
+-- la desenganchaba en silencio (revisión cruzada de B11d). Para borrarlo hay
+-- que desvincularla a propósito. Rechaza como superusuario: es la FK, no RLS.
+SELECT pg_temp.expect_fail_like(124, 'Borrar un borrador con una seña enganchada',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.sale_orders (id, tenant_id, channel_id, code, status)
+      VALUES ('12412412-0000-0000-0000-000000000124', '11111111-1111-1111-1111-111111111111',
+              'bbbbbbbb-0000-0000-0000-000000000001', 'VTA-INV-124', 'draft');
+      INSERT INTO app.customer_deposits (tenant_id, customer_id, amount_pyg, sale_order_id)
+      VALUES ('11111111-1111-1111-1111-111111111111', 'aaaaaaaa-0000-0000-0000-000000000001',
+              100000, '12412412-0000-0000-0000-000000000124');
+      DELETE FROM app.sale_orders WHERE id = '12412412-0000-0000-0000-000000000124';
+    END $x$
+  $$,
+  '%customer_deposits_sale_order_id_fkey%');
+
+-- 125 ─ Control positivo de 124: un borrador SIN seña se borra, y uno con la
+-- seña ya desvinculada también. Sin esto, una FK que rechazara todo borrado
+-- de pedidos pasaría el anterior.
+SELECT pg_temp.expect_fail_like(125, 'Borrar un borrador sin seña, o con la seña desvinculada',
+  $$DO $x$
+    DECLARE
+      v_deposit uuid;
+    BEGIN
+      INSERT INTO app.sale_orders (id, tenant_id, channel_id, code, status)
+      VALUES ('12512512-0000-0000-0000-000000000125', '11111111-1111-1111-1111-111111111111',
+              'bbbbbbbb-0000-0000-0000-000000000001', 'VTA-INV-125', 'draft'),
+             ('12512512-0000-0000-0000-000000000126', '11111111-1111-1111-1111-111111111111',
+              'bbbbbbbb-0000-0000-0000-000000000001', 'VTA-INV-126', 'draft');
+      DELETE FROM app.sale_orders WHERE id = '12512512-0000-0000-0000-000000000125';
+      INSERT INTO app.customer_deposits (tenant_id, customer_id, amount_pyg, sale_order_id)
+      VALUES ('11111111-1111-1111-1111-111111111111', 'aaaaaaaa-0000-0000-0000-000000000001',
+              100000, '12512512-0000-0000-0000-000000000126')
+      RETURNING id INTO v_deposit;
+      UPDATE app.customer_deposits SET sale_order_id = NULL WHERE id = v_deposit;
+      DELETE FROM app.sale_orders WHERE id = '12512512-0000-0000-0000-000000000126';
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
 
 \echo ''
 \echo '=============================================================='

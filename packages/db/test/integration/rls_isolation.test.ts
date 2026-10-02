@@ -594,12 +594,15 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
         expect(rowCount).toBe(0);
       });
 
+      // WP-B11d: antes era una merma (`waste`), que ahora exige
+      // `inventory.decant:execute` y el vendedor no tiene. La venta de granel
+      // conserva lo que probaba: un lote abierto que no es sellado se mueve.
       it("el granel abierto, que no es sellado, se sigue moviendo (control positivo)", async () => {
         await api.query("BEGIN");
         await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
         const { rowCount } = await api.query(
           `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
-           VALUES ($1, $2, $3, -0.5, 'ml', 'waste')`,
+           VALUES ($1, $2, $3, -0.5, 'ml', 'sale')`,
           [REAL_TENANT_ID, BULK_LOT_ID, BULK_VARIANT_ID],
         );
         await api.query("ROLLBACK");
@@ -771,14 +774,16 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
 
     // WP-B08c (0023): la variante de un movimiento es la de su lote. Sobre
     // el granel, que no es sellado, con su uom: lo único que lo frena es la
-    // FK compuesta lote+variante.
+    // FK compuesta lote+variante. WP-B11d: antes era un ajuste (`adjustment`),
+    // que ahora exige `inventory.stock:adjust`; con una venta, que el vendedor
+    // sí escribe, lo único que lo frena sigue siendo la FK.
     it("el vendedor no puede declarar en un movimiento otra variante que la de su lote", async () => {
       await api.query("BEGIN");
       await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
       await expect(
         api.query(
           `INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
-           VALUES ($1, $2, '55555555-0000-0000-0000-00000000a001', 1, 'ml', 'adjustment')`,
+           VALUES ($1, $2, '55555555-0000-0000-0000-00000000a001', -1, 'ml', 'sale')`,
           [REAL_TENANT_ID, BULK_LOT_ID],
         ),
       ).rejects.toMatchObject({ code: "23503", constraint: "inventory_movements_lot_id_fkey" });

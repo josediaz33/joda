@@ -43,6 +43,31 @@ const SCENARIO_ID = "b1100000-0000-0000-0000-0000000000f1";
 // WP-B11c: un rol personalizado con un permiso y asignado a un usuario, para
 // que las pruebas lo editen, lo revoquen y lo borren sin tocar roles de sistema.
 const TARGET_ROLE_ID = "b1100000-0000-0000-0000-0000000000b1";
+// WP-B11d: una línea de orden para las pruebas de líneas (se edita y se borra),
+// otra que referencia la recepción (la FK impide borrarla), la recepción con su
+// línea, y un pedido por cada estado de la máquina de A08. Sembrados por el
+// smoke: el canal de ventas.
+const SALES_CHANNEL_ID = "bbbbbbbb-0000-0000-0000-000000000001";
+const PO_LINE_ID = "b1100000-0000-0000-0000-0000000000a2";
+const RECEIPT_PO_LINE_ID = "b1100000-0000-0000-0000-0000000000a3";
+const SENT_PO_LINE_ID = "b1100000-0000-0000-0000-0000000000a7";
+const RECEIPT_ID = "b1100000-0000-0000-0000-0000000000a4";
+const RECEIPT_LINE_ID = "b1100000-0000-0000-0000-0000000000a5";
+const NEW_RECEIPT_ID = "b1100000-0000-0000-0000-0000000000a6";
+// Un borrador con una seña enganchada: la seña existe antes del cobro.
+const DRAFT_ORDER_WITH_DEPOSIT_ID = "b1100000-0000-0000-0000-000000000509";
+const DEPOSIT_ON_DRAFT_ID = "b1100000-0000-0000-0000-0000000000e2";
+const SALE_ORDER_IDS = {
+  draft: "b1100000-0000-0000-0000-000000000500",
+  awaiting_payment: "b1100000-0000-0000-0000-000000000501",
+  paid: "b1100000-0000-0000-0000-000000000502",
+  preparing: "b1100000-0000-0000-0000-000000000503",
+  ready: "b1100000-0000-0000-0000-000000000504",
+  shipped: "b1100000-0000-0000-0000-000000000505",
+  delivered: "b1100000-0000-0000-0000-000000000506",
+  cancelled: "b1100000-0000-0000-0000-000000000507",
+  refunded: "b1100000-0000-0000-0000-000000000508",
+} as const;
 const SCENARIO_LINE_ID = "b1100000-0000-0000-0000-0000000000f2";
 
 interface Actor {
@@ -95,6 +120,12 @@ const CUSTOM_ROLES = {
   // trampa de la lectura no existe: los dos escriben igual.
   userAdmin: { n: 15, permissions: ["settings.user:read", "settings.user:write"] },
   userAdminNoRead: { n: 16, permissions: ["settings.user:write"] },
+  // WP-B11d: escribe compras (crea órdenes y devuelve a proveedores, `return_out`)
+  // y las lee; no recibe, no vende ni ajusta.
+  poWriter: { n: 17, permissions: ["market.purchase_order:read", "market.purchase_order:write"] },
+  // Escribe compras SIN leerlas: el EXISTS de la política de las líneas lee la
+  // orden padre, así que la trampa de la lectura le alcanza también.
+  poWriterNoRead: { n: 18, permissions: ["market.purchase_order:write"] },
 } as const;
 
 // Las denegaciones de un rol que tampoco LEE usan las formas que no
@@ -189,6 +220,56 @@ const COUNT_DEPOSITO_PERMISSIONS = `SELECT count(*)::int AS n FROM app.role_perm
   WHERE r.tenant_id = '${REAL_TENANT_ID}' AND r.code = 'deposito'`;
 const COUNT_ROLE = (where: string) => `SELECT count(*)::int AS n FROM app.roles WHERE ${where}`;
 
+// WP-B11d. Un movimiento del ledger sobre `LOT_ID`, un lote sellado de
+// unidades con saldo (lo siembra el beforeAll con un ajuste). El INSERT lleva
+// RETURNING, como el de Prisma: el SELECT del ledger es por tenant, así que no
+// hay trampa de la lectura. `reference` es SQL literal: `NULL` o `'lot_opening'`.
+const INSERT_MOVEMENT = (type: string, qty: number, reference = "NULL") =>
+  `INSERT INTO app.inventory_movements
+     (tenant_id, lot_id, variant_id, qty, uom, movement_type, reference_type)
+   VALUES ('${REAL_TENANT_ID}', '${LOT_ID}', '${SEALED_VARIANT_ID}', ${qty}, 'unit', '${type}',
+           ${reference})
+   RETURNING id`;
+
+// Las líneas se agregan y se borran solo con la orden padre en borrador.
+const INSERT_PO_LINE_INTO = (orderId: string) => `INSERT INTO app.purchase_order_lines
+  (tenant_id, purchase_order_id, variant_id, qty_ordered, uom, unit_price_minor)
+  VALUES ('${REAL_TENANT_ID}', '${orderId}', '${SEALED_VARIANT_ID}', 2, 'unit', 5000)`;
+const INSERT_PO_LINE = INSERT_PO_LINE_INTO(DRAFT_PO_ID);
+const UPDATE_PO_LINE = `UPDATE app.purchase_order_lines SET unit_price_minor = 1
+  WHERE id = '${PO_LINE_ID}'`;
+const UPDATE_ALL_PO_LINES = `UPDATE app.purchase_order_lines SET unit_price_minor = 1`;
+const DELETE_PO_LINE = `DELETE FROM app.purchase_order_lines WHERE id = '${PO_LINE_ID}'`;
+const SELECT_PO_LINES = `SELECT unit_price_minor FROM app.purchase_order_lines`;
+const UPDATE_SENT_PO_LINE = `UPDATE app.purchase_order_lines SET unit_price_minor = 1
+  WHERE id = '${SENT_PO_LINE_ID}'`;
+const DELETE_SENT_PO_LINE = `DELETE FROM app.purchase_order_lines WHERE id = '${SENT_PO_LINE_ID}'`;
+const COUNT_SENT_PO_LINES = `SELECT count(*)::int AS n FROM app.purchase_order_lines
+  WHERE purchase_order_id = '${SENT_PO_ID}'`;
+
+const INSERT_RECEIPT = `INSERT INTO app.goods_receipts
+  (id, tenant_id, purchase_order_id, code, fx_rate_to_pyg, received_by)
+  VALUES ('${NEW_RECEIPT_ID}', '${REAL_TENANT_ID}', '${APPROVED_PO_ID}', 'REC-B11D-NUEVA', 7400,
+          '${REAL_OWNER_ID}')`;
+const UPDATE_RECEIPT = `UPDATE app.goods_receipts SET notes = 'editada' WHERE id = '${RECEIPT_ID}'`;
+const UPDATE_ALL_RECEIPTS = `UPDATE app.goods_receipts SET notes = 'editada'`;
+const DELETE_RECEIPT = `DELETE FROM app.goods_receipts WHERE id = '${RECEIPT_ID}'`;
+const INSERT_RECEIPT_LINE = `INSERT INTO app.goods_receipt_lines
+  (tenant_id, goods_receipt_id, purchase_order_line_id, variant_id, qty_received, uom,
+   unit_price_minor)
+  VALUES ('${REAL_TENANT_ID}', '${RECEIPT_ID}', '${RECEIPT_PO_LINE_ID}', '${SEALED_VARIANT_ID}', 1,
+          'unit', 5000)`;
+const UPDATE_RECEIPT_LINE = `UPDATE app.goods_receipt_lines SET batch_code = 'L-B11D'
+  WHERE id = '${RECEIPT_LINE_ID}'`;
+const UPDATE_ALL_RECEIPT_LINES = `UPDATE app.goods_receipt_lines SET batch_code = 'L-B11D'`;
+const DELETE_RECEIPT_LINE = `DELETE FROM app.goods_receipt_lines WHERE id = '${RECEIPT_LINE_ID}'`;
+
+const SET_SALE_STATUS = (status: string, id: string) =>
+  `UPDATE app.sale_orders SET status = '${status}' WHERE id = '${id}'`;
+const DELETE_SALE_ORDER = (id: string) => `DELETE FROM app.sale_orders WHERE id = '${id}'`;
+const UPDATE_ALL_SALE_ORDERS = `UPDATE app.sale_orders SET notes = 'editado'`;
+const COUNT_SALE_ORDER = (id: string) =>
+  `SELECT count(*)::int AS n FROM app.sale_orders WHERE id = '${id}'`;
 // Los permisos de los roles de sistema son la matriz de security-spec §2.1: los
 // cambia el seed, no la API. Del tenant real: dueño 28, encargado 27, vendedor 6,
 // depósito 5.
@@ -241,6 +322,9 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
   let manager: Actor;
   let peerOwner: Actor;
   const custom = {} as Record<keyof typeof CUSTOM_ROLES, Actor>;
+  // Todos los actores por nombre, para las pruebas parametrizadas (it.each) que
+  // se escriben antes de que el beforeAll los cree. Lo llena el beforeAll.
+  const actorsByKey = {} as Record<string, Actor>;
 
   // Mismo contexto que withTenantTx: tercer parámetro de set_config en true.
   async function actAs(actor: Actor, tenantId: string): Promise<void> {
@@ -267,6 +351,15 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
     const { rows } = await api.query(`SELECT count(*)::int AS n FROM app.${table} WHERE id = $1`, [
       id,
     ]);
+    return rows[0].n;
+  }
+
+  // Lo que quedó, mirado como el owner dentro de la MISMA transacción del actor
+  // denegado (que puede no ver la fila): una consulta por otra conexión no ve
+  // lo que esta transacción no confirmó, y la prueba pasaría en falso.
+  async function countAsOwnerHere(sql: string): Promise<number> {
+    await actAs(owner, REAL_TENANT_ID);
+    const { rows } = await api.query(sql);
     return rows[0].n;
   }
 
@@ -389,6 +482,52 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       INSERT INTO app.staff_user_roles (staff_user_id, role_id, tenant_id)
       VALUES ('${custom.stockReader.userId}', '${TARGET_ROLE_ID}', '${REAL_TENANT_ID}');
     `);
+
+    // WP-B11d: saldo para los movimientos de salida sobre `LOT_ID`; las líneas
+    // de orden y la recepción; y un pedido por estado, con la seña de uno
+    // cobrado enganchada (el borrado de una venta la desengancha).
+    await db.client.query(`
+      INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+      VALUES ('${REAL_TENANT_ID}', '${LOT_ID}', '${SEALED_VARIANT_ID}', 100, 'unit', 'adjustment');
+      INSERT INTO app.purchase_order_lines
+        (id, tenant_id, purchase_order_id, variant_id, qty_ordered, uom, unit_price_minor)
+      VALUES ('${PO_LINE_ID}', '${REAL_TENANT_ID}', '${DRAFT_PO_ID}', '${SEALED_VARIANT_ID}', 2,
+              'unit', 5000),
+             ('${RECEIPT_PO_LINE_ID}', '${REAL_TENANT_ID}', '${APPROVED_PO_ID}',
+              '${SEALED_VARIANT_ID}', 2, 'unit', 5000),
+             ('${SENT_PO_LINE_ID}', '${REAL_TENANT_ID}', '${SENT_PO_ID}',
+              '${SEALED_VARIANT_ID}', 2, 'unit', 5000);
+      INSERT INTO app.goods_receipts
+        (id, tenant_id, purchase_order_id, code, fx_rate_to_pyg, received_by)
+      VALUES ('${RECEIPT_ID}', '${REAL_TENANT_ID}', '${APPROVED_PO_ID}', 'REC-B11D', 7400,
+              '${REAL_OWNER_ID}');
+      INSERT INTO app.goods_receipt_lines
+        (id, tenant_id, goods_receipt_id, purchase_order_line_id, variant_id, qty_received, uom,
+         unit_price_minor)
+      VALUES ('${RECEIPT_LINE_ID}', '${REAL_TENANT_ID}', '${RECEIPT_ID}', '${RECEIPT_PO_LINE_ID}',
+              '${SEALED_VARIANT_ID}', 1, 'unit', 5000);
+    `);
+    for (const [status, id] of Object.entries(SALE_ORDER_IDS)) {
+      await db.client.query(
+        `INSERT INTO app.sale_orders (id, tenant_id, channel_id, code, status)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id, REAL_TENANT_ID, SALES_CHANNEL_ID, `VTA-B11D-${status}`, status],
+      );
+    }
+    await db.client.query(`UPDATE app.customer_deposits SET sale_order_id = $1 WHERE id = $2`, [
+      SALE_ORDER_IDS.paid,
+      DEPOSIT_ID,
+    ]);
+    await db.client.query(`
+      INSERT INTO app.sale_orders (id, tenant_id, channel_id, code, status)
+      VALUES ('${DRAFT_ORDER_WITH_DEPOSIT_ID}', '${REAL_TENANT_ID}', '${SALES_CHANNEL_ID}',
+              'VTA-B11D-borrador-con-sena', 'draft');
+      INSERT INTO app.customer_deposits (id, tenant_id, customer_id, amount_pyg, sale_order_id)
+      VALUES ('${DEPOSIT_ON_DRAFT_ID}', '${REAL_TENANT_ID}', '${CUSTOMER_ID}', 50000,
+              '${DRAFT_ORDER_WITH_DEPOSIT_ID}');
+    `);
+
+    Object.assign(actorsByKey, { owner, seller, warehouse, manager, peerOwner, ...custom });
 
     await db.client.query(`ALTER ROLE joda_api PASSWORD '${JODA_API_TEST_PASSWORD}'`);
     api = new Client({
@@ -1005,6 +1144,606 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
         withoutWhere: withoutWhere.rowCount,
         remaining,
       }).toEqual({ withWhere: 0, withoutWhere: 1, remaining: 0 });
+    });
+  });
+
+  // WP-B11d. El SELECT de todas estas tablas es por tenant: ni `INSERT ...
+  // RETURNING` ni `UPDATE ... WHERE` dependen de otro permiso, así que no hay
+  // trampa de la lectura y los rechazos se prueban con la forma natural de
+  // cada operación.
+  describe("el ledger, las líneas de órdenes, las recepciones y el borrado de pedidos exigen permiso (WP-B11d)", () => {
+    // Un actor del beforeAll por nombre (las tablas de abajo se escriben antes
+    // de que exista).
+    function actorFor(key: string): Actor {
+      const actor = actorsByKey[key];
+      if (!actor) throw new Error(`no hay un actor "${key}" en el beforeAll`);
+      return actor;
+    }
+
+    // La operación de cada tipo de movimiento: quién la hace (el permiso
+    // mínimo del mapeo) y quién no. El denegado es, a propósito, el vecino más
+    // plausible: el permiso con el que se la confundiría.
+    describe("inventory_movements: el permiso depende del movement_type", () => {
+      it.each([
+        ["sale", -1, "NULL", "seller"],
+        ["adjustment", 5, "NULL", "adjusts"],
+        ["decant_consumption", -1, "NULL", "decants"],
+        ["decant_yield", 1, "NULL", "decants"],
+        ["bom_consumption", -1, "NULL", "decants"],
+        ["waste", -1, "NULL", "decants"],
+        ["transfer_out", -1, "'lot_separation'", "decants"],
+        ["transfer_in", 1, "'lot_opening'", "decants"],
+        ["purchase_receipt", 1, "NULL", "receives"],
+        ["return_in", 1, "NULL", "refunds"],
+        // Devolución a proveedor: es compras y genera un crédito, no ventas.
+        ["return_out", -1, "NULL", "poWriter"],
+      ])("%s: lo inserta el rol que tiene su permiso", async (type, qty, reference, allowed) => {
+        const { rowCount } = await as(actorFor(allowed), INSERT_MOVEMENT(type, qty, reference));
+
+        expect(rowCount).toBe(1);
+      });
+
+      it.each([
+        ["sale", -1, "NULL", "warehouse"],
+        // El defecto: como vendedor, un ajuste de +5 sobre un lote funcionaba.
+        ["adjustment", 5, "NULL", "seller"],
+        ["decant_consumption", -1, "NULL", "adjusts"],
+        ["decant_yield", 1, "NULL", "adjusts"],
+        ["bom_consumption", -1, "NULL", "adjusts"],
+        ["waste", -1, "NULL", "adjusts"],
+        ["transfer_out", -1, "'lot_separation'", "adjusts"],
+        ["transfer_in", 1, "'lot_opening'", "adjusts"],
+        ["purchase_receipt", 1, "NULL", "decants"],
+        ["return_in", 1, "NULL", "poWriter"],
+        // El mapeo anterior mandaba `return_out` a `sales.order:refund`.
+        ["return_out", -1, "NULL", "refunds"],
+      ])(
+        "%s: no lo inserta el rol que tiene el permiso de otra operación",
+        async (type, qty, reference, denied) => {
+          await expect(
+            as(actorFor(denied), INSERT_MOVEMENT(type, qty, reference)),
+          ).rejects.toMatchObject({ code: "42501" });
+        },
+      );
+
+      it("el owner, que tiene todos los permisos, inserta una venta, una devolución a proveedor y un transfer", async () => {
+        const sale = await as(owner, INSERT_MOVEMENT("sale", -1));
+        const returnOut = await api.query(INSERT_MOVEMENT("return_out", -1));
+        const transfer = await api.query(INSERT_MOVEMENT("transfer_in", 1, "'lot_opening'"));
+
+        expect({
+          sale: sale.rowCount,
+          returnOut: returnOut.rowCount,
+          transfer: transfer.rowCount,
+        }).toEqual({ sale: 1, returnOut: 1, transfer: 1 });
+      });
+
+      it("un rol que solo lee no inserta ningún movimiento", async () => {
+        await expect(as(custom.readOnly, INSERT_MOVEMENT("adjustment", 1))).rejects.toMatchObject({
+          code: "42501",
+        });
+      });
+
+      it("el owner de otro tenant no inserta un movimiento del tenant real (42501)", async () => {
+        await expect(
+          as(peerOwner, INSERT_MOVEMENT("adjustment", 1), PEER_TENANT_ID),
+        ).rejects.toMatchObject({ code: "42501" });
+      });
+
+      // La política de `transfer_*` no puede depender de un texto libre: sin
+      // este CHECK, alcanzaría con escribir otro `reference_type`.
+      it("un transfer con un reference_type que no es de la apertura ni de la separación se rechaza (CHECK)", async () => {
+        await expect(
+          as(owner, INSERT_MOVEMENT("transfer_in", 1, "'otro_texto'")),
+        ).rejects.toMatchObject({
+          code: "23514",
+          constraint: "movement_transfer_reference_type",
+        });
+      });
+
+      it("un transfer sin reference_type se rechaza (CHECK): un NULL no pasa", async () => {
+        await expect(as(owner, INSERT_MOVEMENT("transfer_out", -1))).rejects.toMatchObject({
+          code: "23514",
+          constraint: "movement_transfer_reference_type",
+        });
+      });
+
+      it("un movimiento que no es transfer sigue aceptando un reference_type libre", async () => {
+        const { rowCount } = await as(seller, INSERT_MOVEMENT("sale", -1, "'sale_order'"));
+
+        expect(rowCount).toBe(1);
+      });
+    });
+
+    // Leer exige `market.purchase_order:read` (el vendedor veía los precios de
+    // compra); agregar y borrar, `:write` con la orden padre en borrador; editar,
+    // la unión de los tres permisos de la orden (la recepción actualiza
+    // `qty_received`).
+    describe("purchase_order_lines: leer con :read; escribir con los permisos de purchase_orders; agregar y borrar solo con la orden en borrador", () => {
+      it("el owner agrega una línea, con RETURNING, cambia su precio y la borra", async () => {
+        const created = await as(owner, `${INSERT_PO_LINE} RETURNING id`);
+        const edited = await api.query(UPDATE_PO_LINE);
+        const deleted = await api.query(DELETE_PO_LINE);
+
+        expect({
+          created: created.rowCount,
+          edited: edited.rowCount,
+          deleted: deleted.rowCount,
+        }).toEqual({ created: 1, edited: 1, deleted: 1 });
+      });
+
+      it("quien escribe y lee compras agrega, edita y borra líneas", async () => {
+        const created = await as(custom.poWriter, `${INSERT_PO_LINE} RETURNING id`);
+        const edited = await api.query(UPDATE_PO_LINE);
+        const deleted = await api.query(DELETE_PO_LINE);
+
+        expect({
+          created: created.rowCount,
+          edited: edited.rowCount,
+          deleted: deleted.rowCount,
+        }).toEqual({ created: 1, edited: 1, deleted: 1 });
+      });
+
+      it("quien aprueba y lee órdenes, sin :write, edita una línea pero no la agrega ni la borra", async () => {
+        const edited = await as(custom.approver, UPDATE_PO_LINE);
+        const deleted = await api.query(DELETE_PO_LINE);
+
+        expect({ edited: edited.rowCount, deleted: deleted.rowCount }).toEqual({
+          edited: 1,
+          deleted: 0,
+        });
+      });
+
+      it("quien aprueba, sin :write, no puede agregar una línea (42501)", async () => {
+        await expect(as(custom.approver, INSERT_PO_LINE)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      it("quien recibe y lee órdenes edita una línea (qty_received) pero no la agrega ni la borra", async () => {
+        const edited = await as(custom.orderReceiver, UPDATE_PO_LINE);
+        const deleted = await api.query(DELETE_PO_LINE);
+
+        expect({ edited: edited.rowCount, deleted: deleted.rowCount }).toEqual({
+          edited: 1,
+          deleted: 0,
+        });
+      });
+
+      // La trampa de la lectura, ahora en las líneas: el depósito recibe sin
+      // `market.purchase_order:read` (la excepción registrada de WP-C15) y ya no
+      // ve las líneas de la orden que recibe.
+      it("el depósito, con :receive y sin :read, no ve las líneas: su UPDATE ... WHERE afecta cero filas", async () => {
+        const { rowCount } = await as(warehouse, UPDATE_PO_LINE);
+
+        expect(rowCount).toBe(0);
+      });
+
+      // Fijado a propósito: un UPDATE sin WHERE no lee, y `:receive` habilita la
+      // fila entera (la capa 1 no ve qué campo toca). Como en `purchase_orders`.
+      it("el depósito, con un UPDATE sin WHERE, sí edita líneas: la capa 1 no ve qué campo toca", async () => {
+        const { rowCount } = await as(warehouse, UPDATE_ALL_PO_LINES);
+
+        expect(rowCount).toBeGreaterThan(0);
+      });
+
+      it("el depósito no puede agregar una línea (42501)", async () => {
+        await expect(as(warehouse, INSERT_PO_LINE)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      // El defecto de la lectura: como vendedor, esta consulta devolvía los
+      // precios de compra.
+      it("el vendedor no ve las líneas: no lee los precios de compra", async () => {
+        const { rowCount } = await as(seller, SELECT_PO_LINES);
+
+        expect(rowCount).toBe(0);
+      });
+
+      // El defecto de la escritura: como vendedor funcionó `UPDATE
+      // purchase_order_lines SET unit_price_minor = 1`.
+      it("el vendedor no cambia el precio de una línea: el UPDATE afecta cero filas", async () => {
+        const { rowCount } = await as(seller, UPDATE_PO_LINE);
+
+        expect(rowCount).toBe(0);
+      });
+
+      it("el vendedor no edita líneas: un UPDATE sin WHERE afecta cero filas", async () => {
+        const { rowCount } = await as(seller, UPDATE_ALL_PO_LINES);
+
+        expect(rowCount).toBe(0);
+      });
+
+      it("el vendedor no agrega una línea (42501) ni la borra (cero filas)", async () => {
+        const deleted = await as(seller, DELETE_PO_LINE);
+        await api.query("ROLLBACK");
+
+        expect(deleted.rowCount).toBe(0);
+        await expect(as(seller, INSERT_PO_LINE)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      it("un rol que solo lee órdenes ve las líneas pero no las agrega ni las edita ni las borra", async () => {
+        const seen = await as(custom.readOnly, SELECT_PO_LINES);
+        const edited = await api.query(UPDATE_PO_LINE);
+        const deleted = await api.query(DELETE_PO_LINE);
+        await api.query("ROLLBACK");
+
+        expect(seen.rowCount).toBeGreaterThan(0);
+        expect({ edited: edited.rowCount, deleted: deleted.rowCount }).toEqual({
+          edited: 0,
+          deleted: 0,
+        });
+        await expect(as(custom.readOnly, INSERT_PO_LINE)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      // El EXISTS de la política lee la orden padre bajo RLS: quien escribe
+      // compras sin poder leerlas tampoco agrega líneas, ni sin RETURNING.
+      it("quien escribe compras sin leerlas no agrega una línea: no ve la orden padre (42501)", async () => {
+        await expect(as(custom.poWriterNoRead, INSERT_PO_LINE)).rejects.toMatchObject({
+          code: "42501",
+        });
+      });
+
+      it("el owner de otro tenant no ve ni escribe líneas del tenant real", async () => {
+        const seen = await as(peerOwner, SELECT_PO_LINES, PEER_TENANT_ID);
+        const edited = await api.query(UPDATE_PO_LINE);
+        const deleted = await api.query(DELETE_PO_LINE);
+
+        expect({ seen: seen.rowCount, edited: edited.rowCount, deleted: deleted.rowCount }).toEqual(
+          { seen: 0, edited: 0, deleted: 0 },
+        );
+      });
+
+      // Revisión cruzada de B11d: quien tenía `:write` borraba las líneas de una
+      // orden ya enviada y la dejaba vacía, lo que el DELETE de la cabecera no
+      // permite.
+      it("una orden enviada no admite una línea nueva, ni con :write y :read (42501)", async () => {
+        await expect(as(owner, INSERT_PO_LINE_INTO(SENT_PO_ID))).rejects.toMatchObject({
+          code: "42501",
+        });
+      });
+
+      it("una orden aprobada no admite una línea nueva (42501)", async () => {
+        await expect(as(owner, INSERT_PO_LINE_INTO(APPROVED_PO_ID))).rejects.toMatchObject({
+          code: "42501",
+        });
+      });
+
+      it("una orden pendiente de aprobación no admite una línea nueva (42501)", async () => {
+        await expect(as(owner, INSERT_PO_LINE_INTO(PENDING_PO_ID))).rejects.toMatchObject({
+          code: "42501",
+        });
+      });
+
+      it("el owner no borra la línea de una orden enviada: cero filas, y la orden conserva sus líneas", async () => {
+        const deleted = await as(owner, DELETE_SENT_PO_LINE);
+        const remaining = await countAsOwnerHere(COUNT_SENT_PO_LINES);
+
+        expect({ deleted: deleted.rowCount, remaining }).toEqual({ deleted: 0, remaining: 1 });
+      });
+
+      // Fijado a propósito: el UPDATE queda abierto en cualquier estado porque la
+      // recepción actualiza `qty_received`. Si el precio o la cantidad pedida
+      // pueden cambiar después de enviar la orden, lo decide WP-C15.
+      it("el UPDATE de una línea de una orden enviada sigue abierto: la base pone el piso (decisión de WP-C15)", async () => {
+        const { rowCount } = await as(owner, UPDATE_SENT_PO_LINE);
+
+        expect(rowCount).toBe(1);
+      });
+
+      // La orden que vuelve a borrador (la arista de A08 que permite 0031) vuelve a
+      // admitir líneas: la premisa es "nunca enviada", no "nunca salió de draft".
+      it("una orden devuelta a borrador desde pending_approval vuelve a admitir líneas", async () => {
+        await as(
+          owner,
+          `UPDATE app.purchase_orders SET status = 'draft' WHERE id = '${PENDING_PO_ID}'`,
+        );
+        const { rowCount } = await api.query(INSERT_PO_LINE_INTO(PENDING_PO_ID));
+
+        expect(rowCount).toBe(1);
+      });
+    });
+
+    describe("goods_receipts y goods_receipt_lines: market.purchase_order:receive, sin DELETE", () => {
+      it("el depósito carga una recepción, con RETURNING, y la edita", async () => {
+        const created = await as(warehouse, `${INSERT_RECEIPT} RETURNING id`);
+        const edited = await api.query(UPDATE_RECEIPT);
+
+        expect({ created: created.rowCount, edited: edited.rowCount }).toEqual({
+          created: 1,
+          edited: 1,
+        });
+      });
+
+      it("el depósito agrega una línea a la recepción, con RETURNING, y la edita", async () => {
+        const created = await as(warehouse, `${INSERT_RECEIPT_LINE} RETURNING id`);
+        const edited = await api.query(UPDATE_RECEIPT_LINE);
+
+        expect({ created: created.rowCount, edited: edited.rowCount }).toEqual({
+          created: 1,
+          edited: 1,
+        });
+      });
+
+      it("quien aprueba órdenes, sin :receive, no carga una recepción (42501)", async () => {
+        await expect(as(custom.approver, INSERT_RECEIPT)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      it("el vendedor no carga una recepción (42501) ni una línea (42501)", async () => {
+        await expect(as(seller, INSERT_RECEIPT)).rejects.toMatchObject({ code: "42501" });
+        await api.query("ROLLBACK");
+        await expect(as(seller, INSERT_RECEIPT_LINE)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      it("el vendedor no edita recepciones ni líneas: sin WHERE afecta cero filas", async () => {
+        const receipts = await as(seller, UPDATE_ALL_RECEIPTS);
+        const lines = await api.query(UPDATE_ALL_RECEIPT_LINES);
+
+        expect({ receipts: receipts.rowCount, lines: lines.rowCount }).toEqual({
+          receipts: 0,
+          lines: 0,
+        });
+      });
+
+      it("un rol que solo lee no carga ni edita recepciones", async () => {
+        await expect(as(custom.readOnly, INSERT_RECEIPT)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      // Documentos con costos reales de los que cuelgan lotes y asientos: se
+      // cancelan con su estado (`cancelled`), no se borran.
+      it("nadie borra una recepción, ni el owner: se cancela con su estado", async () => {
+        const deleted = await as(owner, DELETE_RECEIPT);
+        const remaining = await countAsOwnerHere(
+          `SELECT count(*)::int AS n FROM app.goods_receipts WHERE id = '${RECEIPT_ID}'`,
+        );
+
+        expect({ deleted: deleted.rowCount, remaining }).toEqual({ deleted: 0, remaining: 1 });
+      });
+
+      it("nadie borra la línea de una recepción, ni el owner", async () => {
+        const deleted = await as(owner, DELETE_RECEIPT_LINE);
+        const remaining = await countAsOwnerHere(
+          `SELECT count(*)::int AS n FROM app.goods_receipt_lines WHERE id = '${RECEIPT_LINE_ID}'`,
+        );
+
+        expect({ deleted: deleted.rowCount, remaining }).toEqual({ deleted: 0, remaining: 1 });
+      });
+
+      it("el owner de otro tenant no escribe recepciones del tenant real", async () => {
+        const edited = await as(peerOwner, UPDATE_RECEIPT, PEER_TENANT_ID);
+
+        expect(edited.rowCount).toBe(0);
+      });
+    });
+
+    // El borrado de un pedido solo en borrador, y la guarda que sostiene que
+    // `draft` signifique "nunca confirmada" (ADR-026, igual que la orden de
+    // compra en 0031).
+    describe("sale_orders: se borra solo en borrador, con sales.order:write", () => {
+      it("el vendedor, con sales.order:write, borra un pedido en borrador", async () => {
+        const { rowCount } = await as(seller, DELETE_SALE_ORDER(SALE_ORDER_IDS.draft));
+
+        expect(rowCount).toBe(1);
+      });
+
+      it("el owner borra un pedido en borrador", async () => {
+        const { rowCount } = await as(owner, DELETE_SALE_ORDER(SALE_ORDER_IDS.draft));
+
+        expect(rowCount).toBe(1);
+      });
+
+      it("el depósito, sin sales.order:write, no borra ni un borrador", async () => {
+        const { rowCount } = await as(warehouse, DELETE_SALE_ORDER(SALE_ORDER_IDS.draft));
+        const remaining = await countAsOwnerHere(COUNT_SALE_ORDER(SALE_ORDER_IDS.draft));
+
+        expect({ deleted: rowCount, remaining }).toEqual({ deleted: 0, remaining: 1 });
+      });
+
+      it("un rol que solo lee no borra un pedido en borrador", async () => {
+        const { rowCount } = await as(custom.readOnly, DELETE_SALE_ORDER(SALE_ORDER_IDS.draft));
+
+        expect(rowCount).toBe(0);
+      });
+
+      it.each([
+        "awaiting_payment",
+        "paid",
+        "preparing",
+        "ready",
+        "shipped",
+        "delivered",
+        "cancelled",
+        "refunded",
+      ] as const)(
+        "el vendedor no borra un pedido en %s: afecta cero filas y el pedido sigue",
+        async (status) => {
+          const { rowCount } = await as(seller, DELETE_SALE_ORDER(SALE_ORDER_IDS[status]));
+          const remaining = await countAsOwnerHere(COUNT_SALE_ORDER(SALE_ORDER_IDS[status]));
+
+          expect({ deleted: rowCount, remaining }).toEqual({ deleted: 0, remaining: 1 });
+        },
+      );
+
+      // El defecto: el FK `ON DELETE SET NULL` desenganchaba la seña de una
+      // venta borrada.
+      it("la seña de una venta cobrada sigue enganchada: el borrado de la venta no pasa", async () => {
+        await as(seller, DELETE_SALE_ORDER(SALE_ORDER_IDS.paid));
+        const stillLinked = await countAsOwnerHere(
+          `SELECT count(*)::int AS n FROM app.customer_deposits
+            WHERE id = '${DEPOSIT_ID}' AND sale_order_id = '${SALE_ORDER_IDS.paid}'`,
+        );
+
+        expect(stillLinked).toBe(1);
+      });
+
+      // Revisión cruzada de B11d: una seña existe ANTES del cobro, así que un
+      // borrador puede tener una enganchada, y con `ON DELETE SET NULL` borrarlo
+      // la desenganchaba en silencio. Con RESTRICT hay que desvincularla a
+      // propósito.
+      it("un borrador con una seña enganchada no se borra: el DELETE falla (23503) y la seña sigue enganchada", async () => {
+        await expect(
+          as(seller, DELETE_SALE_ORDER(DRAFT_ORDER_WITH_DEPOSIT_ID)),
+        ).rejects.toMatchObject({
+          code: "23503",
+          constraint: "customer_deposits_sale_order_id_fkey",
+        });
+      });
+
+      it("el DELETE de un borrador con seña no deja la seña desenganchada ni borra el pedido", async () => {
+        await as(owner, `SAVEPOINT antes_del_borrado`);
+        await expect(
+          api.query(DELETE_SALE_ORDER(DRAFT_ORDER_WITH_DEPOSIT_ID)),
+        ).rejects.toMatchObject({ code: "23503" });
+        await api.query(`ROLLBACK TO SAVEPOINT antes_del_borrado`);
+        const linked = await countAsOwnerHere(
+          `SELECT count(*)::int AS n FROM app.customer_deposits
+            WHERE id = '${DEPOSIT_ON_DRAFT_ID}'
+              AND sale_order_id = '${DRAFT_ORDER_WITH_DEPOSIT_ID}'`,
+        );
+        const order = await countAsOwnerHere(COUNT_SALE_ORDER(DRAFT_ORDER_WITH_DEPOSIT_ID));
+
+        expect({ linked, order }).toEqual({ linked: 1, order: 1 });
+      });
+
+      it("con la seña desvinculada a propósito, el borrador se borra", async () => {
+        const unlinked = await as(
+          seller,
+          `UPDATE app.customer_deposits SET sale_order_id = NULL WHERE id = '${DEPOSIT_ON_DRAFT_ID}'`,
+        );
+        const deleted = await api.query(DELETE_SALE_ORDER(DRAFT_ORDER_WITH_DEPOSIT_ID));
+
+        expect({ unlinked: unlinked.rowCount, deleted: deleted.rowCount }).toEqual({
+          unlinked: 1,
+          deleted: 1,
+        });
+      });
+
+      it("el owner de otro tenant no borra un pedido del tenant real", async () => {
+        const { rowCount } = await as(
+          peerOwner,
+          DELETE_SALE_ORDER(SALE_ORDER_IDS.draft),
+          PEER_TENANT_ID,
+        );
+
+        expect(rowCount).toBe(0);
+      });
+
+      // Fijado a propósito: INSERT y UPDATE de `sale_orders` siguen solo por
+      // tenant. Un pago confirmado por un webhook (audiencia `system`) los
+      // escribe, y `has_permission` exige staff: hay que definir primero ese
+      // camino (WP-G13). Anotado en `docs/backlog.md` (WP-B11d).
+      it("INSERT y UPDATE de pedidos siguen por tenant: el depósito edita un pedido (hallazgo anotado)", async () => {
+        const { rowCount } = await as(warehouse, UPDATE_ALL_SALE_ORDERS);
+
+        expect(rowCount).toBeGreaterThan(0);
+      });
+
+      describe("no vuelve a borrador: se entra a `draft` solo desde `draft` (0034, ADR-026)", () => {
+        it.each([
+          "awaiting_payment",
+          "paid",
+          "preparing",
+          "ready",
+          "shipped",
+          "delivered",
+          "cancelled",
+          "refunded",
+        ] as const)(
+          "un pedido en %s no vuelve a draft, con el rol que lo borraría",
+          async (status) => {
+            await expect(
+              as(seller, SET_SALE_STATUS("draft", SALE_ORDER_IDS[status])),
+            ).rejects.toMatchObject({
+              code: "23514",
+              message: expect.stringContaining(`está en ${status} y no puede volver a draft`),
+            });
+          },
+        );
+
+        it("el depósito, con un UPDATE sin WHERE, no devuelve a borrador los pedidos del tenant", async () => {
+          await expect(
+            as(warehouse, `UPDATE app.sale_orders SET status = 'draft'`),
+          ).rejects.toMatchObject({ code: "23514" });
+        });
+
+        // El rodeo contra la matriz de A08 (`SALE_ORDER_TRANSITIONS`): ninguna
+        // arista lleva a `draft`, así que cada camino válido que sale de él
+        // termina en un estado del que no se vuelve. Cada UPDATE de ida pasa.
+        it("tras cancelar (draft → awaiting_payment → cancelled) no vuelve a draft", async () => {
+          const toAwaiting = await as(
+            seller,
+            SET_SALE_STATUS("awaiting_payment", SALE_ORDER_IDS.draft),
+          );
+          const toCancelled = await api.query(SET_SALE_STATUS("cancelled", SALE_ORDER_IDS.draft));
+
+          expect({ toAwaiting: toAwaiting.rowCount, toCancelled: toCancelled.rowCount }).toEqual({
+            toAwaiting: 1,
+            toCancelled: 1,
+          });
+          await expect(
+            api.query(SET_SALE_STATUS("draft", SALE_ORDER_IDS.draft)),
+          ).rejects.toMatchObject({ code: "23514" });
+        });
+
+        it("tras cobrar y reembolsar (awaiting_payment → paid → refunded) no vuelve a draft", async () => {
+          const toPaid = await as(seller, SET_SALE_STATUS("paid", SALE_ORDER_IDS.awaiting_payment));
+          const toRefunded = await api.query(
+            SET_SALE_STATUS("refunded", SALE_ORDER_IDS.awaiting_payment),
+          );
+
+          expect({ toPaid: toPaid.rowCount, toRefunded: toRefunded.rowCount }).toEqual({
+            toPaid: 1,
+            toRefunded: 1,
+          });
+          await expect(
+            api.query(SET_SALE_STATUS("draft", SALE_ORDER_IDS.awaiting_payment)),
+          ).rejects.toMatchObject({ code: "23514" });
+        });
+
+        // El rodeo de dos pasos de B11: volver a borrador y borrar. Falla en el
+        // primero, y el pedido cobrado sigue ahí.
+        it("el rodeo de dos pasos falla en el primero: el pedido cobrado sigue después del DELETE", async () => {
+          await expect(
+            as(seller, SET_SALE_STATUS("draft", SALE_ORDER_IDS.paid)),
+          ).rejects.toMatchObject({ code: "23514" });
+          await api.query("ROLLBACK");
+          const deleted = await as(seller, DELETE_SALE_ORDER(SALE_ORDER_IDS.paid));
+          const remaining = await countAsOwnerHere(COUNT_SALE_ORDER(SALE_ORDER_IDS.paid));
+
+          expect({ deleted: deleted.rowCount, remaining }).toEqual({ deleted: 0, remaining: 1 });
+        });
+
+        it("un borrador se edita y sigue siendo borrador", async () => {
+          const { rowCount } = await as(
+            seller,
+            `UPDATE app.sale_orders SET status = 'draft', notes = 'editado'
+              WHERE id = '${SALE_ORDER_IDS.draft}'`,
+          );
+
+          expect(rowCount).toBe(1);
+        });
+
+        // Control positivo: sin esto, un trigger que rechazara todo cambio de
+        // estado pasaría todo lo anterior. Recorre la máquina de A08 hacia
+        // adelante, una arista por UPDATE.
+        it("el camino hacia adelante sigue andando: draft → awaiting_payment → paid → … → refunded", async () => {
+          const id = SALE_ORDER_IDS.draft;
+          const first = await as(seller, SET_SALE_STATUS("awaiting_payment", id));
+          const paid = await api.query(SET_SALE_STATUS("paid", id));
+          const preparing = await api.query(SET_SALE_STATUS("preparing", id));
+          const ready = await api.query(SET_SALE_STATUS("ready", id));
+          const shipped = await api.query(SET_SALE_STATUS("shipped", id));
+          const delivered = await api.query(SET_SALE_STATUS("delivered", id));
+          const refunded = await api.query(SET_SALE_STATUS("refunded", id));
+
+          expect([
+            first.rowCount,
+            paid.rowCount,
+            preparing.rowCount,
+            ready.rowCount,
+            shipped.rowCount,
+            delivered.rowCount,
+            refunded.rowCount,
+          ]).toEqual([1, 1, 1, 1, 1, 1, 1]);
+        });
+      });
     });
   });
 

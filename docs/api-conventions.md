@@ -141,6 +141,8 @@ const PG_ERROR_MAP: Record<string, (e: PgError) => ApiError> = {
 
 **Nunca dejes que un mensaje de PostgreSQL llegue al usuario.** Ni siquiera "traducido a medias".
 
+Una FK `RESTRICT` que se rompe al borrar a propósito, para que borrar no pierda nada en silencio, tiene su mensaje propio, por el nombre de la restricción (`PgError.constraint`) y no el genérico de `mapForeignKeyViolation`: hoy, `customer_deposits_sale_order_id_fkey` → `CONFLICT_ORDER_HAS_DEPOSIT` (409, «el pedido tiene una seña asociada: desvinculala antes de borrarlo», WP-B11d).
+
 ---
 
 ## 5. Idempotencia

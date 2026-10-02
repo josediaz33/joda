@@ -175,7 +175,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 113: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 125: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -231,7 +231,7 @@ No es hipotético. WP-B10 hizo que `journal_entries` exija `accounting.journal:r
 
 Además, una función que impone un invariante verifica integridad, no expone datos: va `SECURITY DEFINER` con `SET search_path = app, pg_temp` (`pg_temp` al final, nombres calificados con `app.`). Si una tabla referenciada tiene `tenant_id`, la función verifica que coincida con el de la fila que dispara el trigger: como `SECURITY DEFINER` ve todos los tenants y una FK no evalúa RLS, nadie más lo haría.
 
-Desde WP-B09 (`0018_invariant_triggers_security_definer.sql`) toda función de disparador de `app.*` sigue este patrón. Los invariantes 28–30 lo verifican de forma estructural: toda función de disparador tiene `search_path = app, pg_temp`; toda es `SECURITY DEFINER` salvo `set_updated_at`, `guard_append_only`, `guard_po_no_return_to_draft` (§4.5) y `guard_system_roles` (§4.7), que no leen ninguna tabla; y el dueño de toda función `SECURITY DEFINER` elude RLS. Ese último es una dependencia operativa. `SECURITY DEFINER` corre como el rol que ejecutó la migración, y si ese rol no es superusuario ni `BYPASSRLS`, `FORCE ROW LEVEL SECURITY` lo filtra igual que a `joda_api`.
+Desde WP-B09 (`0018_invariant_triggers_security_definer.sql`) toda función de disparador de `app.*` sigue este patrón. Los invariantes 28–30 lo verifican de forma estructural: toda función de disparador tiene `search_path = app, pg_temp`; toda es `SECURITY DEFINER` salvo `set_updated_at`, `guard_append_only`, `guard_po_no_return_to_draft` (§4.5), `guard_system_roles` (§4.7) y `guard_so_no_return_to_draft` (§4.6), que no leen ninguna tabla; y el dueño de toda función `SECURITY DEFINER` elude RLS. Ese último es una dependencia operativa. `SECURITY DEFINER` corre como el rol que ejecutó la migración, y si ese rol no es superusuario ni `BYPASSRLS`, `FORCE ROW LEVEL SECURITY` lo filtra igual que a `joda_api`.
 
 **Ningún trigger depende de que otro haya corrido antes.** Los `BEFORE INSERT` de una tabla se ejecutan en orden alfabético, y un trigger que rechaza primero puede ocultar que el siguiente falla abierto. Pasó con `assert_sealed_lot_not_open`: desde WP-B01 dejaba vender como sellado un frasco abierto cuando no veía el lote, y no se notaba porque `trg_movement_uom` corría antes y rechazaba. Por eso cada función hace su propia búsqueda con su propio `IF NOT FOUND`. Los invariantes 33 y 34 deshabilitan los demás triggers y prueban cada función por separado.
 
@@ -288,10 +288,19 @@ Los estados de los que la base impone que no se vuelva (ADR-026). El ADR guarda 
 - **Sigue en el dominio** la matriz de la orden (`packages/domain/src/procurement/purchaseOrder.ts`, WP-A08), con sus terminales.
 - **Paridad entre los dos mapas.** Sin prueba que ate la guarda a `PURCHASE_ORDER_TRANSITIONS`: la segunda revisión de B11 comparó a mano los 49 pares de estados con la matriz de A08 y no encontró arista que la guarda rechace y el dominio permita. Ningún WP la convierte en prueba.
 
-**Terminales que siguen en el dominio.** Se evaluaron con la pregunta del criterio y la respuesta fue no, salvo lo que dice la guarda 3 para la orden de compra: si una de esas órdenes volviera atrás, ningún invariante de la base se desarmaría.
+**4. Pedido de venta que no vuelve a borrador.** WP-B11d, 2026-10-01. `trg_so_no_return_to_draft` (`0034_write_permissions_children_ledger.sql`), `BEFORE UPDATE OF status` sobre `sale_orders`: se entra a `draft` solo desde `draft`.
+
+- **Premisa de la que depende.** La política de DELETE de `sale_orders` (`0034`) borra solo con `sales.order:write` y en `draft`, y lee ese estado como «nunca confirmada». Volver atrás desde `paid` o desde `cancelled` desarma esa premisa: un `UPDATE` a `draft` y un `DELETE` borrarían una venta cobrada y desengancharían su seña (`customer_deposits.sale_order_id`, que era `ON DELETE SET NULL` y desde 0034 es `RESTRICT`: una seña enganchada a un borrador también impide borrarlo). Una venta se anula por reversión (RN-VTA-03), no se borra.
+- **Por qué es solo `draft`.** `SALE_ORDER_TRANSITIONS` (`packages/domain/src/sales/order.ts`) no tiene ninguna arista hacia `draft`, y `awaiting_payment` solo se alcanza desde `draft`. A diferencia de la orden de compra, no hay un análogo de `pending_approval` que cubrir, y la guarda no agrega ninguna arista entre estados distintos.
+- **Mecanismo.** Lee solo `OLD` y `NEW`, falla cerrado por lista blanca (cualquier estado de origen que no sea `draft` rechaza, también uno que se agregue al enum) y no es `SECURITY DEFINER` (el invariante 29 la admite por nombre). Rechaza con `23514`.
+- **Sigue en el dominio** la matriz del pedido (`packages/domain/src/sales/order.ts`, WP-A08) con sus terminales.
+- **Paridad entre los dos mapas.** Sin prueba que ate la guarda a `SALE_ORDER_TRANSITIONS`: `write_permissions.test.ts` recorre a mano los ocho estados que no son borrador, dos caminos de varios pasos y el camino feliz entero, y si la matriz ganara una arista hacia `draft` ningún test lo detecta. Ningún WP la convierte en prueba.
+- **Verificación.** Invariantes 120 a 122 y el control 123, como superusuario (y el 124 y el 125, la FK de la seña); y las pruebas de `write_permissions.test.ts` como `joda_api`, entre ellas los rodeos de dos y de varios pasos.
+
+**Terminales que siguen en el dominio.** Se evaluaron con la pregunta del criterio y la respuesta fue no, salvo lo que dicen las guardas 3 y 4 para la orden de compra y el pedido de venta: si una de esas órdenes volviera atrás, ningún invariante de la base se desarmaría.
 
 - **Orden de compra:** `received` y `cancelled`, salvo la entrada a `draft` y a `pending_approval`, que es la guarda 3. Esa guarda no los hace terminales: solo les impide volver a los dos estados previos a la aprobación.
-- **Pedido de venta:** `cancelled` y `refunded`.
+- **Pedido de venta:** `cancelled` y `refunded`, salvo la entrada a `draft`, que es la guarda 4. Esa guarda no los hace terminales: solo les impide volver a borrador.
 - **Orden de fraccionamiento:** `done` y `cancelled`. `decant_done_requires_actuals` lee el estado, porque exige los datos reales para `done`, pero se sigue cumpliendo si la orden retrocede: exigir datos para entrar a un estado no es apoyarse en que no se salga de él. Si eso cambiara, rige la misma pregunta.
 
 ### 4.7 Los roles de sistema no se borran ni se renombran (WP-B11c, `0033_write_permissions_roles.sql`)
@@ -375,7 +384,7 @@ Encima, políticas de permiso sobre lo sensible: `journal_entries`, `chart_of_ac
 Qué comandos cubre la política de permiso, en cada una:
 
 - **Lectura (SELECT):** las siete, desde 0010.
-- **Escritura:** `suppliers`, `purchase_orders`, `inventory_lots`, `chart_of_accounts` y `customer_deposits` desde 0030 (WP-B11): INSERT y UPDATE con su permiso de escritura, una política por comando, y DELETE denegado salvo en `purchase_orders` en borrador. `journal_entries` tiene su INSERT desde 0010 y su mapa de estados desde 0020. `sourcing_scenarios` tiene INSERT desde 0010 y UPDATE y DELETE desde 0032 (WP-B11b), los tres con `market.sourcing:write`, y su tabla hija `sourcing_scenario_lines` tiene los cuatro comandos con permiso desde 0032 (lectura con `market.sourcing:read`, escritura con `:write`); son las únicas de estas tablas donde el DELETE existe sin condición de estado.
+- **Escritura:** `suppliers`, `purchase_orders`, `inventory_lots`, `chart_of_accounts` y `customer_deposits` desde 0030 (WP-B11): INSERT y UPDATE con su permiso de escritura, una política por comando, y DELETE denegado salvo en `purchase_orders` en borrador. `journal_entries` tiene su INSERT desde 0010 y su mapa de estados desde 0020. `sourcing_scenarios` tiene INSERT desde 0010 y UPDATE y DELETE desde 0032 (WP-B11b), los tres con `market.sourcing:write`, y su tabla hija `sourcing_scenario_lines` tiene los cuatro comandos con permiso desde 0032 (lectura con `market.sourcing:read`, escritura con `:write`); son las únicas de estas tablas donde el DELETE existe sin condición de estado. Las tablas que cuelgan de ellas y el ledger, desde 0034 (WP-B11d): `inventory_movements` (INSERT según `movement_type`, sin UPDATE ni DELETE), `purchase_order_lines` (la lectura exige `market.purchase_order:read`; agregar y quitar líneas, la orden padre en borrador), `goods_receipts` y `goods_receipt_lines` (recepciones sin DELETE) y el DELETE de `sale_orders` (solo en borrador); el SELECT de las demás sigue por tenant. `customer_deposits.sale_order_id` pasa a `ON DELETE RESTRICT`.
 
 La tabla de permisos por comando y la trampa de la lectura (un rol que escribe sin poder leer) están en `docs/security-spec.md` §3.1.
 
