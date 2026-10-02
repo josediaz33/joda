@@ -159,6 +159,22 @@ Los cuatro permisos de los lotes son el mapeo que aprobó José el 2026-09-25: r
 
 **Solo audiencia `staff`.** `has_permission` exige una sesión de staff viva (WP-B13), así que un contexto `system` o `customer` no escribe en estas cinco tablas. Hoy ningún código lo necesita; el día que un webhook de pago tenga que registrar una seña, necesita una política propia o una función `SECURITY DEFINER` acotada, no un permiso prestado. Ese camino no está definido todavía: queda anotado en WP-C20 (señas) y WP-G13 (webhooks de pago).
 
+#### Roles, permisos de rol y asignaciones (WP-B11c, `0033_write_permissions_roles.sql`)
+
+Quien escribe estas tablas se da permisos: si bastara con el tenant, B11 entero se anularía con un `INSERT` en `role_permissions`. Desde 0033, en `roles`, `role_permissions` y `staff_user_roles`, INSERT, UPDATE y DELETE exigen `settings.user:write`, una política por comando.
+
+| Tabla              | INSERT                                            | UPDATE                | DELETE                |
+| ------------------ | ------------------------------------------------- | --------------------- | --------------------- |
+| `roles`            | `settings.user:write`, y la fila no es de sistema | `settings.user:write` | `settings.user:write` |
+| `role_permissions` | `settings.user:write`                             | `settings.user:write` | `settings.user:write` |
+| `staff_user_roles` | `settings.user:write`                             | `settings.user:write` | `settings.user:write` |
+
+**La lectura no cambia: sigue por tenant.** La API lee `role_permissions` y `staff_user_roles` como `joda_api`, bajo RLS, para resolver los permisos de cada sesión (`getGrantedPermissionCodes`), y el vendedor no tiene `settings.user:read`. Exigirlo para leer rompería el login de todos. Por eso la trampa de la lectura de arriba no aplica: quien escribe estas tablas siempre puede leerlas. El invariante 104 verifica las dos mitades: la escritura exige el permiso, la lectura no.
+
+**Los roles de sistema (`is_system`) no se borran ni se renombran, por nadie.** `trg_system_roles_guard` rechaza (`23514`) borrar un rol de sistema, cambiarle el `name` o el `code`, y cambiar la marca `is_system` en cualquier sentido; la política de INSERT exige `NOT is_system`. Es un trigger y no una política porque «por nadie» incluye al superusuario y a `service_role`, que eluden RLS. Sin él, quien pudiera borrar roles borraría el de dueño. Lee solo `OLD` y `NEW` y no es `SECURITY DEFINER` (invariante 29). Detalle en `docs/data-model.md` §4.7.
+
+**Lo que el WP no cierra.** Quien tiene `settings.user:write` edita las `role_permissions` y las asignaciones de un rol de sistema (por ejemplo, quitarle todo al dueño): se congela la fila del rol, no sus permisos. `permissions`, el catálogo global, no tiene RLS y `joda_api` puede escribirlo. Ambos están anotados en `docs/backlog.md` (WP-B11c).
+
 **La condición que hace que esta capa exista de verdad:**
 
 | Rol             | Uso                              | `BYPASSRLS`           |

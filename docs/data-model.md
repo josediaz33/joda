@@ -231,7 +231,7 @@ No es hipotético. WP-B10 hizo que `journal_entries` exija `accounting.journal:r
 
 Además, una función que impone un invariante verifica integridad, no expone datos: va `SECURITY DEFINER` con `SET search_path = app, pg_temp` (`pg_temp` al final, nombres calificados con `app.`). Si una tabla referenciada tiene `tenant_id`, la función verifica que coincida con el de la fila que dispara el trigger: como `SECURITY DEFINER` ve todos los tenants y una FK no evalúa RLS, nadie más lo haría.
 
-Desde WP-B09 (`0018_invariant_triggers_security_definer.sql`) toda función de disparador de `app.*` sigue este patrón. Los invariantes 28–30 lo verifican de forma estructural: toda función de disparador tiene `search_path = app, pg_temp`; toda es `SECURITY DEFINER` salvo `set_updated_at`, `guard_append_only` y `guard_po_no_return_to_draft` (§4.5), que no leen ninguna tabla; y el dueño de toda función `SECURITY DEFINER` elude RLS. Ese último es una dependencia operativa. `SECURITY DEFINER` corre como el rol que ejecutó la migración, y si ese rol no es superusuario ni `BYPASSRLS`, `FORCE ROW LEVEL SECURITY` lo filtra igual que a `joda_api`.
+Desde WP-B09 (`0018_invariant_triggers_security_definer.sql`) toda función de disparador de `app.*` sigue este patrón. Los invariantes 28–30 lo verifican de forma estructural: toda función de disparador tiene `search_path = app, pg_temp`; toda es `SECURITY DEFINER` salvo `set_updated_at`, `guard_append_only`, `guard_po_no_return_to_draft` (§4.5) y `guard_system_roles` (§4.7), que no leen ninguna tabla; y el dueño de toda función `SECURITY DEFINER` elude RLS. Ese último es una dependencia operativa. `SECURITY DEFINER` corre como el rol que ejecutó la migración, y si ese rol no es superusuario ni `BYPASSRLS`, `FORCE ROW LEVEL SECURITY` lo filtra igual que a `joda_api`.
 
 **Ningún trigger depende de que otro haya corrido antes.** Los `BEFORE INSERT` de una tabla se ejecutan en orden alfabético, y un trigger que rechaza primero puede ocultar que el siguiente falla abierto. Pasó con `assert_sealed_lot_not_open`: desde WP-B01 dejaba vender como sellado un frasco abierto cuando no veía el lote, y no se notaba porque `trg_movement_uom` corría antes y rechazaba. Por eso cada función hace su propia búsqueda con su propio `IF NOT FOUND`. Los invariantes 33 y 34 deshabilitan los demás triggers y prueban cada función por separado.
 
@@ -293,6 +293,16 @@ Los estados de los que la base impone que no se vuelva (ADR-026). El ADR guarda 
 - **Orden de compra:** `received` y `cancelled`, salvo la entrada a `draft` y a `pending_approval`, que es la guarda 3. Esa guarda no los hace terminales: solo les impide volver a los dos estados previos a la aprobación.
 - **Pedido de venta:** `cancelled` y `refunded`.
 - **Orden de fraccionamiento:** `done` y `cancelled`. `decant_done_requires_actuals` lee el estado, porque exige los datos reales para `done`, pero se sigue cumpliendo si la orden retrocede: exigir datos para entrar a un estado no es apoyarse en que no se salga de él. Si eso cambiara, rige la misma pregunta.
+
+### 4.7 Los roles de sistema no se borran ni se renombran (WP-B11c, `0033_write_permissions_roles.sql`)
+
+`trg_system_roles_guard`, `BEFORE UPDATE OR DELETE` sobre `roles`: un rol con `is_system` no se borra, no cambia de `name` ni de `code`, y la marca `is_system` no cambia en ningún sentido (`23514`). Decisión de José (2026-10-01): «por nadie», que incluye al superusuario y a `service_role`; por eso es un trigger y no una política de RLS.
+
+- **No es una guarda de irreversibilidad de §4.6.** No hay un estado ni una máquina: es inmutabilidad de las filas marcadas, el mismo tipo de invariante que el ledger y la auditoría (ADR-026, «Sí van a la base»).
+- **Por qué congela también `is_system`.** Sin eso, bajar la marca y borrar el rol eran dos pasos: el rodeo que la revisión de B11 encontró con `draft`. La política de INSERT exige `NOT is_system`, así que tampoco se fabrican roles imborrables. `seed_roles` corre como dueño de las tablas (elude RLS) y los crea.
+- **Mecanismo.** Lee solo `OLD` y `NEW`: no es `SECURITY DEFINER` y el invariante 29 la admite por nombre. Compara con `IS DISTINCT FROM`. Fija `search_path = app, pg_temp`.
+- **Borrar un tenant** borraría por cascada sus roles de sistema y el trigger lo rechaza: ningún camino de producto lo hace (`staff_users.tenant_id` es `RESTRICT`) y quien lo necesite lo deshabilita a propósito.
+- **Verificación.** Invariantes 105 a 109 (borrar, renombrar por `name` y por `code`, bajar y subir `is_system`) y el control positivo 110, como superusuario. `write_permissions.test.ts` lo prueba como `joda_api` con el dueño, que SÍ tiene `settings.user:write`.
 
 ---
 
