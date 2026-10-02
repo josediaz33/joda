@@ -1775,6 +1775,12 @@ SELECT pg_temp.expect_fail_like(90, 'El mismo número de serie en dos tenants di
 -- customer_deposits exige el permiso de escritura, no solo tenant.
 -- Propiedades del catálogo y de la matriz sembrada; el comportamiento, con
 -- cada rol conectado como joda_api, lo prueba write_permissions.test.ts.
+--
+-- WP-B11b (0032_write_permissions_sourcing_scenarios.sql) suma
+-- sourcing_scenarios y su tabla hija sourcing_scenario_lines a los
+-- invariantes 91 a 94, con una diferencia en el 93: esas dos tablas SÍ se
+-- borran, con `market.sourcing:write`. Y el 91 exige además que la LECTURA de
+-- las líneas pida `market.sourcing:read`: traen precios de proveedor.
 -- ─────────────────────────────────────────────────────────────────────
 
 -- Los invariantes 91 a 93 leen el TEXTO de las políticas (pg_get_expr): no
@@ -1783,14 +1789,17 @@ SELECT pg_temp.expect_fail_like(90, 'El mismo número de serie en dos tenants di
 -- como joda_api, write_permissions.test.ts.
 
 -- 91 ─ Toda política permisiva de escritura (INSERT, UPDATE, DELETE o ALL)
--- de esas cinco tablas exige un permiso, y cada una tiene las de INSERT y
+-- de esas siete tablas exige un permiso, y cada una tiene las de INSERT y
 -- UPDATE. Con la `tenant_access_*` con `true` de 0016 la escritura vuelve a
 -- pedir solo tenant; un `true OR has_permission(..)` tampoco cuenta como
--- exigir un permiso. El nombre lista las políticas culpables y las tablas a
--- las que les falta la de INSERT o la de UPDATE.
+-- exigir un permiso. Y la política de SELECT de las líneas de escenarios de
+-- sourcing exige `market.sourcing:read` (WP-B11b). El nombre lista las
+-- políticas culpables y las tablas a las que les falta la de INSERT o la de
+-- UPDATE.
 WITH sensibles(tabla) AS (
   VALUES ('suppliers'), ('purchase_orders'), ('inventory_lots'),
-         ('chart_of_accounts'), ('customer_deposits')
+         ('chart_of_accounts'), ('customer_deposits'), ('sourcing_scenarios'),
+         ('sourcing_scenario_lines')
 ), politicas AS (
   SELECT c.relname AS tabla, p.polname, p.polcmd,
          COALESCE(pg_get_expr(p.polqual, p.polrelid), '')
@@ -1809,14 +1818,31 @@ WITH sensibles(tabla) AS (
     FROM sensibles s
    CROSS JOIN (VALUES ('a'::"char"), ('w'::"char")) AS c(cmd)
    WHERE NOT EXISTS (SELECT 1 FROM politicas p WHERE p.tabla = s.tabla AND p.polcmd = c.cmd)
+), lectura_lineas AS (
+  SELECT p.polname, pg_get_expr(p.polqual, p.polrelid) AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND c.relname = 'sourcing_scenario_lines'
+     AND p.polpermissive AND p.polcmd = 'r'
+), lectura_sin_permiso AS (
+  SELECT 'sourcing_scenario_lines.' || polname AS descripcion
+    FROM lectura_lineas
+   WHERE expresion NOT LIKE '%has_permission(''market.sourcing:read''%'
+  UNION ALL
+  SELECT 'sourcing_scenario_lines (sin política de SELECT)'
+   WHERE NOT EXISTS (SELECT 1 FROM lectura_lineas)
 )
 SELECT pg_temp.expect_true(91,
-  'Escribir en las tablas sensibles exige un permiso, no solo tenant'
+  'Escribir en las tablas sensibles exige un permiso, no solo tenant; leer las líneas de sourcing, también'
     || COALESCE(' — sin permiso: '
                 || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sin_permiso), '')
     || COALESCE(' — sin política: '
-                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM falta), ''),
-  NOT EXISTS (SELECT 1 FROM sin_permiso) AND NOT EXISTS (SELECT 1 FROM falta));
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM falta), '')
+    || COALESCE(' — lectura sin permiso: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM lectura_sin_permiso), ''),
+  NOT EXISTS (SELECT 1 FROM sin_permiso) AND NOT EXISTS (SELECT 1 FROM falta)
+  AND NOT EXISTS (SELECT 1 FROM lectura_sin_permiso));
 
 -- 92 ─ Ninguna política permisiva de esas tablas es FOR ALL. Un FOR ALL
 -- también cubre SELECT: quien puede escribir leería la tabla entera aunque
@@ -1829,7 +1855,8 @@ WITH for_all AS (
     JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'app'
      AND c.relname IN ('suppliers', 'purchase_orders', 'inventory_lots',
-                       'chart_of_accounts', 'customer_deposits')
+                       'chart_of_accounts', 'customer_deposits', 'sourcing_scenarios',
+                       'sourcing_scenario_lines')
      AND p.polpermissive
      AND p.polcmd = '*'
 )
@@ -1844,8 +1871,11 @@ SELECT pg_temp.expect_true(92,
 -- `market.purchase_order:write` Y el estado `draft` dentro de la política:
 -- el DELETE directo de una orden enviada no pasa aunque quien lo intenta
 -- tenga el permiso. Que `draft` signifique "nunca enviada" lo sostiene el
--- trigger de 0031 (invariantes 95-103), no esta política. El nombre lista las
--- políticas de DELETE que sobran, o avisa que la de órdenes no es la esperada.
+-- trigger de 0031 (invariantes 95-103), no esta política. En
+-- sourcing_scenarios y sourcing_scenario_lines (WP-B11b) hay también una sola
+-- por tabla, con `market.sourcing:write` y sin más condición: un escenario
+-- es una simulación y se borra. El nombre lista las políticas de DELETE que
+-- sobran, o avisa que la de órdenes o la de sourcing no es la esperada.
 WITH borrado AS (
   SELECT c.relname AS tabla, p.polname,
          COALESCE(pg_get_expr(p.polqual, p.polrelid), '') AS expresion
@@ -1854,11 +1884,14 @@ WITH borrado AS (
     JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'app'
      AND c.relname IN ('suppliers', 'purchase_orders', 'inventory_lots',
-                       'chart_of_accounts', 'customer_deposits')
+                       'chart_of_accounts', 'customer_deposits', 'sourcing_scenarios',
+                       'sourcing_scenario_lines')
      AND p.polpermissive
      AND p.polcmd IN ('d', '*')
 ), sobran AS (
-  SELECT tabla || '.' || polname AS descripcion FROM borrado WHERE tabla <> 'purchase_orders'
+  SELECT tabla || '.' || polname AS descripcion
+    FROM borrado
+   WHERE tabla NOT IN ('purchase_orders', 'sourcing_scenarios', 'sourcing_scenario_lines')
 ), orden_ok AS (
   SELECT count(*) AS n
     FROM borrado
@@ -1866,17 +1899,29 @@ WITH borrado AS (
      AND expresion LIKE '%market.purchase_order:write%'
      AND expresion LIKE '%(status = ''draft''%'
      AND expresion NOT LIKE '% OR %'
+), sourcing_ok AS (
+  SELECT count(DISTINCT tabla) AS n
+    FROM borrado
+   WHERE tabla IN ('sourcing_scenarios', 'sourcing_scenario_lines')
+     AND expresion LIKE '%market.sourcing:write%'
+     AND expresion NOT LIKE '% OR %'
+     AND expresion NOT LIKE '% AND %'
 )
 SELECT pg_temp.expect_true(93,
-  'Sin DELETE en lotes, señas, cuentas y proveedores; en órdenes de compra, solo borradores'
+  'Sin DELETE en lotes, señas, cuentas y proveedores; en órdenes de compra, solo borradores; en escenarios de sourcing y sus líneas, con su permiso'
     || COALESCE(' — DELETE que sobra: '
                 || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sobran), '')
     || CASE WHEN (SELECT n FROM orden_ok) = 1
              AND (SELECT count(*) FROM borrado WHERE tabla = 'purchase_orders') = 1
-            THEN '' ELSE ' — la política de DELETE de purchase_orders no es la esperada' END,
+            THEN '' ELSE ' — la política de DELETE de purchase_orders no es la esperada' END
+    || CASE WHEN (SELECT n FROM sourcing_ok) = 2
+             AND (SELECT count(*) FROM borrado WHERE tabla LIKE 'sourcing_scenario%') = 2
+            THEN '' ELSE ' — la política de DELETE de sourcing_scenarios o de sus líneas no es la esperada' END,
   NOT EXISTS (SELECT 1 FROM sobran)
   AND (SELECT n FROM orden_ok) = 1
-  AND (SELECT count(*) FROM borrado WHERE tabla = 'purchase_orders') = 1);
+  AND (SELECT count(*) FROM borrado WHERE tabla = 'purchase_orders') = 1
+  AND (SELECT n FROM sourcing_ok) = 2
+  AND (SELECT count(*) FROM borrado WHERE tabla LIKE 'sourcing_scenario%') = 2);
 
 -- 94 ─ En los roles sembrados (`is_system`, de cualquier tenant), todo
 -- permiso de escritura de esas tablas viene con el de lectura de la MISMA
@@ -1900,7 +1945,9 @@ WITH par(tabla, escribe, lee) AS (
     ('inventory_lots',    'sales.order:refund',            'inventory.stock:read'),
     ('inventory_lots',    'inventory.stock:adjust',        'inventory.stock:read'),
     ('chart_of_accounts', 'accounting.journal:write',      'accounting.journal:read'),
-    ('customer_deposits', 'accounting.deposit:write',      'accounting.deposit:read')
+    ('customer_deposits', 'accounting.deposit:write',      'accounting.deposit:read'),
+    ('sourcing_scenarios', 'market.sourcing:write',         'market.sourcing:read'),
+    ('sourcing_scenario_lines', 'market.sourcing:write',    'market.sourcing:read')
 ), roles_sembrados AS (
   SELECT id, code, tenant_id FROM app.roles WHERE is_system
 ), escribe_sin_leer AS (

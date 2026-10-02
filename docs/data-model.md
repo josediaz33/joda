@@ -363,7 +363,7 @@ Encima, políticas de permiso sobre lo sensible: `journal_entries`, `chart_of_ac
 Qué comandos cubre la política de permiso, en cada una:
 
 - **Lectura (SELECT):** las siete, desde 0010.
-- **Escritura:** `suppliers`, `purchase_orders`, `inventory_lots`, `chart_of_accounts` y `customer_deposits` desde 0030 (WP-B11): INSERT y UPDATE con su permiso de escritura, una política por comando, y DELETE denegado salvo en `purchase_orders` en borrador. `journal_entries` tiene su INSERT desde 0010 y su mapa de estados desde 0020; `sourcing_scenarios` tiene INSERT y todavía solo tenant en UPDATE y DELETE.
+- **Escritura:** `suppliers`, `purchase_orders`, `inventory_lots`, `chart_of_accounts` y `customer_deposits` desde 0030 (WP-B11): INSERT y UPDATE con su permiso de escritura, una política por comando, y DELETE denegado salvo en `purchase_orders` en borrador. `journal_entries` tiene su INSERT desde 0010 y su mapa de estados desde 0020. `sourcing_scenarios` tiene INSERT desde 0010 y UPDATE y DELETE desde 0032 (WP-B11b), los tres con `market.sourcing:write`, y su tabla hija `sourcing_scenario_lines` tiene los cuatro comandos con permiso desde 0032 (lectura con `market.sourcing:read`, escritura con `:write`); son las únicas de estas tablas donde el DELETE existe sin condición de estado.
 
 La tabla de permisos por comando y la trampa de la lectura (un rol que escribe sin poder leer) están en `docs/security-spec.md` §3.1.
 
