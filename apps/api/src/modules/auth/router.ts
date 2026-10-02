@@ -1,11 +1,13 @@
 import {
   mfaActionOutput,
+  permissionCode,
   mfaConfirmEnrollInput,
   mfaEnrollOutput,
   mfaVerifyInput,
   staffLoginInput,
   staffLogoutOutput,
   staffSessionProfile,
+  staffSessionCurrentOutput,
   staffSessionRefreshOutput,
 } from "@joda/contracts";
 import { appError, toTRPCError } from "../../middleware/errorMapper.js";
@@ -21,6 +23,7 @@ import { confirmMfaEnrollment, enrollMfa, verifyMfaChallenge } from "./mfaServic
 import { MFA_LOCKOUT_WINDOW_SECONDS } from "./mfaBruteForceGuard.js";
 import {
   login,
+  getCurrentStaffProfile,
   logout,
   refresh,
   type ActiveStaffSession,
@@ -130,6 +133,24 @@ function requireDeps(deps: AuthServiceDeps | null): AuthServiceDeps {
 export function createAuthRouter(deps: AuthServiceDeps | null) {
   return router({
     session: router({
+      // El admin restaura el estado después de recargar sin leer la cookie
+      // httpOnly. Disponible también mientras MFA está pendiente, para que
+      // el cliente muestre exclusivamente la inscripción o el desafío.
+      current: staffProcedure
+        .meta({ mfaExempt: true, permissionExempt: true })
+        .output(staffSessionCurrentOutput)
+        .query(async ({ ctx }) => {
+          const session = requireActiveSession(ctx);
+          if (ctx.mfaStatus === null) throw toTRPCError(NO_SESSION_ERROR);
+          const profile = await getCurrentStaffProfile(requireDeps(deps), session);
+          return {
+            profile: toStaffSessionProfile(profile, ctx.mfaStatus),
+            permissions:
+              ctx.mfaStatus === "satisfied"
+                ? permissionCode.array().parse([...(ctx.grantedPermissions ?? [])])
+                : [],
+          };
+        }),
       login: staffProcedure
         .meta({ permissionExempt: true })
         .input(staffLoginInput)

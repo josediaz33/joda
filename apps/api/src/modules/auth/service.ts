@@ -54,6 +54,23 @@ export interface AuthServiceDeps {
   readonly mfaEncryptionKey: Buffer;
 }
 
+/** Perfil vigente bajo RLS para auth.session.current; los permisos ya vienen del contexto de la petición. */
+export async function getCurrentStaffProfile(
+  deps: AuthServiceDeps,
+  session: ActiveStaffSession,
+): Promise<StaffUserProfileRow> {
+  return withTenantTx(
+    deps.db,
+    {
+      userId: session.staffUserId,
+      tenantId: session.tenantId,
+      audience: "staff",
+      sessionId: session.sessionId,
+    },
+    (tx) => getStaffUserProfile(tx, session.staffUserId),
+  );
+}
+
 /** Ventana ABSOLUTA de 8 h (docs/security-spec.md §1): no se extiende al rotar. */
 const SESSION_WINDOW_MS = 8 * 60 * 60 * 1000;
 

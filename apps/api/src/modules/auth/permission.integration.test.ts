@@ -224,6 +224,40 @@ describe("WP-C05 · middleware de permisos (example.ping.requiresPermission, cat
     expect(response.json().result.data).toEqual({ ok: true });
   });
 
+  describe("docs/security-spec.md §3.4 · permisos para guardas de UX (WP-E04)", () => {
+    it("antes del desafío MFA no publica permisos aunque el vendedor tenga rol", async () => {
+      const loginResponse = await app.inject({
+        method: "POST",
+        url: "/trpc/auth.session.login",
+        payload: { email: STAFF_VENDEDOR_EMAIL, password: STAFF_PASSWORD },
+      });
+      const cookie = toRequestCookie(loginResponse.headers["set-cookie"]);
+      const response = await app.inject({
+        method: "GET",
+        url: "/trpc/auth.session.current",
+        headers: { cookie },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().result.data.profile.mfaStatus).toBe("pending_verification");
+      expect(response.json().result.data.permissions).toEqual([]);
+    });
+
+    it("la sesión de vendedor incluye catálogo y excluye contabilidad", async () => {
+      const cookie = await loginPastMfa(STAFF_VENDEDOR_EMAIL);
+      const response = await app.inject({
+        method: "GET",
+        url: "/trpc/auth.session.current",
+        headers: { cookie },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().result.data.profile.mfaStatus).toBe("satisfied");
+      expect(response.json().result.data.permissions).toContain("catalog.product:read");
+      expect(response.json().result.data.permissions).not.toContain("accounting.journal:read");
+    });
+  });
+
   it("docs/runbooks/prompts-playbook.md Sesión 25 · con otro permiso del mismo módulo pero no el exacto → 403, no 404", async () => {
     const cookie = await loginPastMfa(STAFF_SOLO_ESCRITURA_EMAIL);
 
