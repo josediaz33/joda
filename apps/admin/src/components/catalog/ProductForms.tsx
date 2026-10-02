@@ -25,11 +25,17 @@ type Props = {
   onSaved: (product: AdminProduct) => void;
 };
 
+// Los campos compartidos aceptan la unión; cada detalle se instancia con la
+// rama correspondiente para que TS rechace paths de otra vertical.
+type PerfumeInput = Extract<CreateProductInput, { kind: "perfume" }>;
+type WatchInput = Extract<CreateProductInput, { kind: "watch" }>;
+type AccessoryInput = Extract<CreateProductInput, { kind: "accessory" }>;
+
 const inputClass =
   "w-full rounded-control border border-border-strong bg-surface px-3 py-2 text-text focus-visible:outline-2 focus-visible:outline-focus aria-invalid:border-error";
 
-function FieldError({ name }: { name: FieldPath<CreateProductInput> }) {
-  const { getFieldState, formState } = useFormContext<CreateProductInput>();
+function FieldError<T extends CreateProductInput>({ name }: { name: FieldPath<T> }) {
+  const { getFieldState, formState } = useFormContext<T>();
   const error = getFieldState(name, formState).error;
   return error ? (
     <p id={`${name}-error`} role="alert" className="mt-1 text-sm text-error">
@@ -38,18 +44,18 @@ function FieldError({ name }: { name: FieldPath<CreateProductInput> }) {
   ) : null;
 }
 
-function TextField({
+function TextField<T extends CreateProductInput>({
   name,
   label,
   required = false,
   multiline = false,
 }: {
-  name: FieldPath<CreateProductInput>;
+  name: FieldPath<T>;
   label: string;
   required?: boolean;
   multiline?: boolean;
 }) {
-  const { register, getFieldState, formState } = useFormContext<CreateProductInput>();
+  const { register, getFieldState, formState } = useFormContext<T>();
   const invalid = !!getFieldState(name, formState).error;
   return (
     <div>
@@ -76,23 +82,23 @@ function TextField({
           {...register(name)}
         />
       )}
-      <FieldError name={name} />
+      <FieldError<T> name={name} />
     </div>
   );
 }
 
-function NumberField({
+function NumberField<T extends CreateProductInput>({
   name,
   label,
   nullable = false,
   step = "any",
 }: {
-  name: FieldPath<CreateProductInput>;
+  name: FieldPath<T>;
   label: string;
   nullable?: boolean;
   step?: string;
 }) {
-  const { register, getFieldState, formState } = useFormContext<CreateProductInput>();
+  const { register, getFieldState, formState } = useFormContext<T>();
   const invalid = !!getFieldState(name, formState).error;
   return (
     <div>
@@ -111,13 +117,53 @@ function NumberField({
           setValueAs: (value: string) => (value === "" && nullable ? null : Number(value)),
         })}
       />
-      <FieldError name={name} />
+      <FieldError<T> name={name} />
     </div>
   );
 }
 
-function BooleanField({ name, label }: { name: FieldPath<CreateProductInput>; label: string }) {
-  const { register } = useFormContext<CreateProductInput>();
+function SelectField<T extends CreateProductInput>({
+  name,
+  label,
+  options,
+}: {
+  name: FieldPath<T>;
+  label: string;
+  options: readonly { value: string; label: string }[];
+}) {
+  const { register, getFieldState, formState } = useFormContext<T>();
+  const invalid = !!getFieldState(name, formState).error;
+  return (
+    <div>
+      <label htmlFor={name} className="mb-1 block text-sm font-semibold">
+        {label}
+      </label>
+      <select
+        id={name}
+        className={inputClass}
+        aria-invalid={invalid}
+        aria-describedby={invalid ? `${name}-error` : undefined}
+        {...register(name)}
+      >
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+      <FieldError<T> name={name} />
+    </div>
+  );
+}
+
+function BooleanField<T extends CreateProductInput>({
+  name,
+  label,
+}: {
+  name: FieldPath<T>;
+  label: string;
+}) {
+  const { register } = useFormContext<T>();
   return (
     <label className="flex min-h-11 items-center gap-2 text-sm font-medium">
       <input type="checkbox" className="size-4 accent-accent" {...register(name)} />
@@ -126,8 +172,14 @@ function BooleanField({ name, label }: { name: FieldPath<CreateProductInput>; la
   );
 }
 
-function ListField({ name, label }: { name: FieldPath<CreateProductInput>; label: string }) {
-  const { field, fieldState } = useController<CreateProductInput>({ name });
+function ListField<T extends CreateProductInput>({
+  name,
+  label,
+}: {
+  name: FieldPath<T>;
+  label: string;
+}) {
+  const { field, fieldState } = useController<T>({ name });
   const [display, setDisplay] = useState(() =>
     Array.isArray(field.value) ? field.value.join(", ") : "",
   );
@@ -155,7 +207,7 @@ function ListField({ name, label }: { name: FieldPath<CreateProductInput>; label
         }}
         onBlur={field.onBlur}
       />
-      <FieldError name={name} />
+      <FieldError<T> name={name} />
     </div>
   );
 }
@@ -223,7 +275,9 @@ function Categories({ categories }: { categories: AdminCategory[] }) {
           Elegí al menos una categoría.
         </p>
       )}
-      {formState.errors.primaryCategoryId && <FieldError name="primaryCategoryId" />}
+      {formState.errors.primaryCategoryId && (
+        <FieldError<CreateProductInput> name="primaryCategoryId" />
+      )}
     </fieldset>
   );
 }
@@ -232,10 +286,10 @@ function CommonFields({ categories }: { categories: AdminCategory[] }) {
   return (
     <>
       <div className="grid gap-4 sm:grid-cols-2">
-        <TextField name="name" label="Nombre" required />
-        <TextField name="slug" label="Slug" required />
+        <TextField<CreateProductInput> name="name" label="Nombre" required />
+        <TextField<CreateProductInput> name="slug" label="Slug" required />
       </div>
-      <TextField name="description" label="Descripción" multiline />
+      <TextField<CreateProductInput> name="description" label="Descripción" multiline />
       <Categories categories={categories} />
     </>
   );
@@ -246,6 +300,9 @@ async function saveProduct(
   product?: AdminProduct,
 ): Promise<AdminProduct> {
   if (!product) return api.createProduct(createProductInput.parse(input));
+  // El editor carga un producto completo en ambas modalidades para que el
+  // resolver de create valide juntos detalles y categoría primaria. `kind` es
+  // inmutable: al editar proyectamos esos valores al contrato parcial de update.
   const common = {
     id: product.id,
     slug: input.slug,
@@ -356,40 +413,41 @@ export function PerfumeForm(props: Props) {
     <EditorShell {...props} form={form}>
       <h3 className="mb-4 font-semibold">Perfume</h3>
       <div className="grid gap-4 sm:grid-cols-2">
-        <div>
-          <label
-            htmlFor="perfumeDetails.concentration"
-            className="mb-1 block text-sm font-semibold"
-          >
-            Concentración
-          </label>
-          <select
-            id="perfumeDetails.concentration"
-            className={inputClass}
-            {...form.register("perfumeDetails.concentration")}
-          >
-            <option value="parfum">Parfum</option>
-            <option value="extrait">Extrait</option>
-            <option value="edp">EDP</option>
-            <option value="edt">EDT</option>
-            <option value="edc">EDC</option>
-            <option value="oil">Oil</option>
-            <option value="attar">Attar</option>
-          </select>
-        </div>
-        <NumberField name="perfumeDetails.nominalVolumeMl" label="Volumen nominal (ml)" />
-        <TextField name="perfumeDetails.olfactoryFamily" label="Familia olfativa" />
+        <SelectField<PerfumeInput>
+          name="perfumeDetails.concentration"
+          label="Concentración"
+          options={[
+            { value: "parfum", label: "Parfum" },
+            { value: "extrait", label: "Extrait" },
+            { value: "edp", label: "EDP" },
+            { value: "edt", label: "EDT" },
+            { value: "edc", label: "EDC" },
+            { value: "oil", label: "Oil" },
+            { value: "attar", label: "Attar" },
+          ]}
+        />
+        <NumberField<PerfumeInput>
+          name="perfumeDetails.nominalVolumeMl"
+          label="Volumen nominal (ml)"
+        />
+        <TextField<PerfumeInput> name="perfumeDetails.olfactoryFamily" label="Familia olfativa" />
       </div>
       <div className="mt-4 grid gap-4 sm:grid-cols-3">
-        <ListField name="perfumeDetails.notesTop" label="Notas de salida" />
-        <ListField name="perfumeDetails.notesHeart" label="Notas de corazón" />
-        <ListField name="perfumeDetails.notesBase" label="Notas de fondo" />
+        <ListField<PerfumeInput> name="perfumeDetails.notesTop" label="Notas de salida" />
+        <ListField<PerfumeInput> name="perfumeDetails.notesHeart" label="Notas de corazón" />
+        <ListField<PerfumeInput> name="perfumeDetails.notesBase" label="Notas de fondo" />
       </div>
-      <BooleanField name="perfumeDetails.isDecantable" label="Permite decants" />
+      <BooleanField<PerfumeInput> name="perfumeDetails.isDecantable" label="Permite decants" />
       <div className="mt-4 grid gap-4 sm:grid-cols-3">
-        <NumberField name="perfumeDetails.wasteFactor" label="Factor de merma" />
-        <NumberField name="perfumeDetails.unusableResidueMl" label="Residuo inutilizable (ml)" />
-        <NumberField name="perfumeDetails.evaporationMlYear" label="Evaporación (ml/año)" />
+        <NumberField<PerfumeInput> name="perfumeDetails.wasteFactor" label="Factor de merma" />
+        <NumberField<PerfumeInput>
+          name="perfumeDetails.unusableResidueMl"
+          label="Residuo inutilizable (ml)"
+        />
+        <NumberField<PerfumeInput>
+          name="perfumeDetails.evaporationMlYear"
+          label="Evaporación (ml/año)"
+        />
       </div>
     </EditorShell>
   );
@@ -420,36 +478,42 @@ export function WatchForm(props: Props) {
     <EditorShell {...props} form={form}>
       <h3 className="mb-4 font-semibold">Reloj</h3>
       <div className="grid gap-4 sm:grid-cols-2">
-        <div>
-          <label htmlFor="watchDetails.movement" className="mb-1 block text-sm font-semibold">
-            Movimiento
-          </label>
-          <select
-            id="watchDetails.movement"
-            className={inputClass}
-            {...form.register("watchDetails.movement")}
-          >
-            <option value="quartz">Cuarzo</option>
-            <option value="automatic">Automático</option>
-            <option value="manual">Manual</option>
-            <option value="solar">Solar</option>
-            <option value="kinetic">Cinético</option>
-            <option value="spring_drive">Spring Drive</option>
-          </select>
-        </div>
-        <TextField name="watchDetails.caseMaterial" label="Material de caja" />
-        <NumberField name="watchDetails.caseDiameterMm" label="Diámetro (mm)" nullable />
-        <NumberField
+        <SelectField<WatchInput>
+          name="watchDetails.movement"
+          label="Movimiento"
+          options={[
+            { value: "quartz", label: "Cuarzo" },
+            { value: "automatic", label: "Automático" },
+            { value: "manual", label: "Manual" },
+            { value: "solar", label: "Solar" },
+            { value: "kinetic", label: "Cinético" },
+            { value: "spring_drive", label: "Spring Drive" },
+          ]}
+        />
+        <TextField<WatchInput> name="watchDetails.caseMaterial" label="Material de caja" />
+        <NumberField<WatchInput>
+          name="watchDetails.caseDiameterMm"
+          label="Diámetro (mm)"
+          nullable
+        />
+        <NumberField<WatchInput>
           name="watchDetails.waterResistanceM"
           label="Resistencia al agua (m)"
           nullable
           step="1"
         />
-        <TextField name="watchDetails.strapMaterial" label="Material de correa" />
-        <TextField name="watchDetails.crystal" label="Cristal" />
-        <NumberField name="watchDetails.warrantyMonths" label="Garantía (meses)" step="1" />
+        <TextField<WatchInput> name="watchDetails.strapMaterial" label="Material de correa" />
+        <TextField<WatchInput> name="watchDetails.crystal" label="Cristal" />
+        <NumberField<WatchInput>
+          name="watchDetails.warrantyMonths"
+          label="Garantía (meses)"
+          step="1"
+        />
       </div>
-      <BooleanField name="watchDetails.requiresSerial" label="Requiere número de serie" />
+      <BooleanField<WatchInput>
+        name="watchDetails.requiresSerial"
+        label="Requiere número de serie"
+      />
     </EditorShell>
   );
 }
@@ -470,9 +534,9 @@ export function AccessoryForm(props: Props) {
     <EditorShell {...props} form={form}>
       <h3 className="mb-4 font-semibold">Accesorio</h3>
       <div className="grid gap-4 sm:grid-cols-3">
-        <TextField name="accessoryDetails.material" label="Material" />
-        <TextField name="accessoryDetails.color" label="Color" />
-        <TextField name="accessoryDetails.sizeLabel" label="Tamaño" />
+        <TextField<AccessoryInput> name="accessoryDetails.material" label="Material" />
+        <TextField<AccessoryInput> name="accessoryDetails.color" label="Color" />
+        <TextField<AccessoryInput> name="accessoryDetails.sizeLabel" label="Tamaño" />
       </div>
     </EditorShell>
   );

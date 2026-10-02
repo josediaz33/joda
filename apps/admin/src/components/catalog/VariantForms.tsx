@@ -79,14 +79,12 @@ export function CreateVariantForm({
       pricePyg: "",
       compareAtPyg: null,
       vatRate: "iva_10",
-      allocationPolicy: "fifo",
       productionMode: "stocked",
       sourceVariantId: null,
       isSerialized: false,
       onlineVisible: false,
-      minStockAlert: null,
-      weightG: null,
-      position: 0,
+      // allocationPolicy, minStockAlert, weightG y position no tienen control
+      // en WP-E05: se omiten y C08 aplica sus defaults, sin copiarlos acá.
     },
   });
   const type = form.watch("variantType");

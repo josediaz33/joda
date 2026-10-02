@@ -195,14 +195,19 @@ export function ImageUpload({ product, onClose }: { product: AdminProduct; onClo
         {uploaded && (
           <div role="status" className="border-t border-border-subtle pt-4">
             <p className="mb-2 text-sm">Imagen subida.</p>
-            {uploaded.derivatives[0] && (
+            {uploaded.derivatives[0] && uploaded.width !== null && uploaded.height !== null && (
               <img
                 src={uploaded.derivatives[0].url}
                 alt={uploaded.altText ?? ""}
-                width={uploaded.derivatives[0].width}
-                height={uploaded.height ?? uploaded.derivatives[0].width}
+                width={uploaded.width}
+                height={uploaded.height}
                 className="max-h-52 w-auto object-contain"
               />
+            )}
+            {(uploaded.width === null || uploaded.height === null) && (
+              <p className="text-sm text-text-secondary">
+                La vista previa no tiene dimensiones disponibles.
+              </p>
             )}
           </div>
         )}

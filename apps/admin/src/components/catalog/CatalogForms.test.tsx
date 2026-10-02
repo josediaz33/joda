@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { api } from "../../api";
-import { ProductEditor } from "./CatalogActions";
+import { ImageUpload, ProductEditor } from "./CatalogActions";
 import { CreateVariantForm } from "./VariantForms";
 
 vi.mock("../../api", () => ({
@@ -12,6 +12,7 @@ vi.mock("../../api", () => ({
     listCategories: vi.fn(),
     createProduct: vi.fn(),
     createVariant: vi.fn(),
+    uploadProductMedia: vi.fn(),
   },
 }));
 
@@ -23,6 +24,58 @@ Element.prototype.scrollIntoView = () => {};
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+describe("RF-CAT-08 · vista previa de imagen (WP-E05)", () => {
+  it("no reserva un alto inventado si el servicio no devuelve dimensiones", async () => {
+    vi.mocked(api.uploadProductMedia).mockResolvedValue({
+      id: "44444444-4444-4444-a444-444444444444",
+      productId: "22222222-2222-4222-a222-222222222222",
+      variantId: null,
+      altText: "Estuche negro",
+      position: 0,
+      width: 100,
+      height: null,
+      bytes: 400,
+      mimeType: "image/jpeg",
+      derivatives: [{ width: 320, format: "webp", url: "https://example.com/320.webp" }],
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    const user = userEvent.setup();
+    render(
+      <ImageUpload
+        product={
+          { id: "22222222-2222-4222-a222-222222222222", name: "Estuche" } as Parameters<
+            typeof ImageUpload
+          >[0]["product"]
+        }
+        onClose={vi.fn()}
+      />,
+    );
+
+    await user.upload(
+      screen.getByLabelText("Archivo de imagen *"),
+      new File(["jpeg"], "foto.jpg", { type: "image/jpeg" }),
+    );
+    await user.type(screen.getByLabelText("Descripción de la imagen *"), "Estuche negro");
+    expect((screen.getByLabelText("Archivo de imagen *") as HTMLInputElement).files?.length).toBe(
+      1,
+    );
+    expect(
+      (screen.getByRole("button", { name: "Subir imagen" }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+    // jsdom considera inválido un file input required aun con `files` cargado.
+    fireEvent.submit(
+      (screen.getByRole("button", { name: "Subir imagen" }) as HTMLButtonElement).form!,
+    );
+
+    await waitFor(() => expect(api.uploadProductMedia).toHaveBeenCalled());
+
+    expect(
+      await screen.findByText("La vista previa no tiene dimensiones disponibles."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("img")).toBeNull();
+  });
 });
 
 const categoryA = "33333333-3333-4333-a333-333333333331";
