@@ -12,6 +12,16 @@ import { startTestDb, type TestDb } from "../../db/testDb.js";
 // No es una regla de negocio sino una convención mecánica entre dos archivos:
 // cita el documento que la define (`.claude/rules/testing.md`, excepción de
 // convención mecánica).
+//
+// Vive en apps/api y no en packages/db porque acá ya conviven
+// `@joda/contracts` y `startTestDb`; `packages/db` no depende de contratos.
+// Por eso `pnpm db:test` y `pnpm --filter @joda/db test` no lo corren: lo
+// corre `pnpm test` y el CI.
+//
+// `@joda/contracts` se consume por su `dist/`: si se edita permissions.ts y
+// este archivo se corre suelto, hay que reconstruirlo antes
+// (`pnpm --filter @joda/contracts build`) o el test compara contra el build
+// viejo y pasa en falso. `pnpm test` ya lo reconstruye (turbo `^build`).
 describe("paridad entre los permisos de contratos y los del seed (docs/security-spec.md §2)", () => {
   let testDb: TestDb;
   let seededCodes: string[];
@@ -26,6 +36,12 @@ describe("paridad entre los permisos de contratos y los del seed (docs/security-
 
   afterAll(async () => {
     await testDb.stop();
+  });
+
+  // Control positivo: sin esto, la prueba de "sembrado ⊆ contrato" pasaría en
+  // vacío si la consulta devolviera una tabla vacía.
+  it("la base de pruebas trae permisos sembrados", () => {
+    expect(seededCodes.length).toBeGreaterThan(0);
   });
 
   it("todo código de packages/contracts está sembrado en permissions", () => {

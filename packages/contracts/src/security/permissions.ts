@@ -12,7 +12,9 @@
 // docs/security-spec.md §2 y packages/db/seed/0001_seed_base.sql — los tres
 // tienen que decir exactamente lo mismo. Contrato y seed los compara
 // apps/api/src/modules/auth/permissionsParity.integration.test.ts (WP-M11);
-// el documento, nadie.
+// el documento, nadie. Hay una cuarta copia, el literal de permissions.test.ts
+// (que se actualiza a mano), y los otorgamientos por rol (`seed_roles()` y
+// security-spec §2.1), que ese test no mira.
 import { z } from "zod";
 
 export const permissionCode = z.enum([
