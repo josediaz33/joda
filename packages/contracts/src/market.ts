@@ -2,8 +2,23 @@ import { z } from "zod";
 import { currencySchema, paginationInputSchema, paginatedOutputSchema } from "./shared/index.js";
 
 const uuid = z.uuid();
-const nonnegativeMinor = z.string().regex(/^\d+$/);
-const positiveQuantity = z.string().regex(/^(?:[1-9]\d*(?:\.\d{1,3})?|0\.(?!0{1,3}$)\d{1,3})$/);
+const MAX_MINOR = "9223372036854775807";
+function fitsUnsignedInteger(value: string, maximum: string): boolean {
+  const digits = value.replace(/^0+/, "") || "0";
+  return digits.length < maximum.length || (digits.length === maximum.length && digits <= maximum);
+}
+const nonnegativeMinor = z
+  .string()
+  .regex(/^\d+$/)
+  .refine((value) => fitsUnsignedInteger(value, MAX_MINOR));
+const positiveQuantity = z
+  .string()
+  .regex(/^(?:[1-9]\d*(?:\.\d{1,3})?|0\.(?!0{1,3}$)\d{1,3})$/)
+  .refine((value) => value.split(".")[0]!.length <= 11);
+const estimatedFxRate = z
+  .string()
+  .regex(/^(?!0+(?:\.0+)?$)\d+(?:\.\d{1,8})?$/)
+  .refine((value) => value.split(".")[0]!.replace(/^0+/, "").length <= 10);
 const poStatus = z.enum([
   "draft",
   "pending_approval",
@@ -103,11 +118,7 @@ export const createPurchaseOrderInput = z
     supplierId: uuid,
     code: z.string().trim().min(1),
     currency: currencySchema,
-    fxRateToPyg: z
-      .string()
-      .regex(/^(?!0+(?:\.0+)?$)\d+(?:\.\d{1,8})?$/)
-      .nullable()
-      .optional(),
+    fxRateToPyg: estimatedFxRate.nullable().optional(),
     freightMinor: nonnegativeMinor.optional(),
     customsMinor: nonnegativeMinor.optional(),
     otherCostsMinor: nonnegativeMinor.optional(),
@@ -130,6 +141,7 @@ export const createPurchaseOrderInput = z
   })
   .strict();
 export const purchaseOrderByIdInput = z.object({ id: uuid }).strict();
+export const removePurchaseOrderOutput = z.object({ ok: z.literal(true) }).strict();
 export const listPurchaseOrdersInput = paginationInputSchema
   .extend({ supplierId: uuid.optional(), status: poStatus.optional() })
   .strict();

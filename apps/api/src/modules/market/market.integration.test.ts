@@ -1,6 +1,7 @@
 import { PrismaClient } from "@joda/db";
 import { fastifyTRPCPlugin, type CreateFastifyContextOptions } from "@trpc/server/adapters/fastify";
 import Fastify from "fastify";
+import type { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { jodaApiConnectionUrl, startTestDb, type TestDb } from "../../db/testDb.js";
 import { router } from "../../trpc/trpc.js";
@@ -10,6 +11,7 @@ import * as market from "./service.js";
 const TENANT = "88888888-8888-4888-a888-888888888881";
 const OTHER_TENANT = "88888888-8888-4888-a888-888888888882";
 const STAFF = "99999999-9999-4999-a999-999999999981";
+const SESSION = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaa81";
 const OTHER_STAFF = "99999999-9999-4999-a999-999999999982";
 const VARIANT = "77777777-7777-4777-a777-777777777781";
 const OTHER_VARIANT = "77777777-7777-4777-a777-777777777782";
@@ -17,8 +19,20 @@ const ctx: market.MarketContext = {
   tenantId: TENANT,
   userId: STAFF,
   audience: "staff",
+  sessionId: SESSION,
   auditMeta: { ip: "127.0.0.1", userAgent: "market-test", requestId: "req-market-test" },
 };
+
+async function waitForApiRowLock(client: Client): Promise<void> {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const result = await client.query<{ waiting: number }>(
+      "SELECT count(*)::int AS waiting FROM pg_stat_activity WHERE usename = 'joda_api' AND wait_event_type = 'Lock'",
+    );
+    if (result.rows[0]!.waiting > 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("La edición concurrente no esperó el bloqueo de la fila.");
+}
 
 describe("RF-MKT-01…03 · proveedores y órdenes de compra (RN-EST-01)", () => {
   let testDb: TestDb;
@@ -51,6 +65,10 @@ describe("RF-MKT-01…03 · proveedores y órdenes de compra (RN-EST-01)", () =>
     await testDb.superuserClient.query(
       "INSERT INTO app.staff_user_roles (tenant_id, staff_user_id, role_id) VALUES ($1, $2, $3)",
       [TENANT, STAFF, ownerRole.rows[0]!.id],
+    );
+    await testDb.superuserClient.query(
+      "INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at) VALUES ($1, $2, $3, now() + interval '1 day')",
+      [SESSION, TENANT, STAFF],
     );
     for (const [tenant, variant, suffix] of [
       [TENANT, VARIANT, "a"],
@@ -100,6 +118,40 @@ describe("RF-MKT-01…03 · proveedores y órdenes de compra (RN-EST-01)", () =>
     ).toBe(true);
   });
 
+  it("docs/security-spec.md §7 · audita el estado confirmado después de esperar una edición concurrente", async () => {
+    const supplier = await market.createSupplier(db, ctx, {
+      code: "MKT-CONCURRENT",
+      name: "Proveedor Concurrente",
+      defaultCurrency: "USD",
+      paymentTermsDays: 0,
+      notes: "Inicial",
+    });
+    await testDb.superuserClient.query("BEGIN");
+    let pending: Promise<unknown> | null = null;
+    try {
+      await testDb.superuserClient.query(
+        "UPDATE app.suppliers SET notes = 'Edición previa' WHERE id = $1",
+        [supplier.id],
+      );
+      pending = market.updateSupplier(db, ctx, { id: supplier.id, country: "PY" });
+      await waitForApiRowLock(testDb.superuserClient);
+    } finally {
+      await testDb.superuserClient.query("COMMIT");
+    }
+    await pending;
+    const result = await testDb.superuserClient.query<{
+      before: { notes: string };
+      after: { notes: string; country: string };
+    }>(
+      "SELECT before, after FROM app.audit_log WHERE entity_id = $1 AND action = 'market.supplier.update' ORDER BY id DESC LIMIT 1",
+      [supplier.id],
+    );
+    expect(result.rows[0]).toMatchObject({
+      before: { notes: "Edición previa" },
+      after: { notes: "Edición previa", country: "PY" },
+    });
+  });
+
   it("RF-MKT-02…03 · crea OC multilínea en USD, audita cada transición y no mueve stock", async () => {
     const supplier = await market.createSupplier(db, ctx, {
       code: "MKT-S2",
@@ -117,10 +169,9 @@ describe("RF-MKT-01…03 · proveedores y órdenes de compra (RN-EST-01)", () =>
         { variantId: VARIANT, qtyOrdered: "3", uom: "unit", unitPriceMinor: "9999" },
       ],
     });
+    expect(order.status).toBe("draft");
     expect(order.lines).toHaveLength(2);
-    expect(order.transitions).toMatchObject([
-      { fromStatus: null, toStatus: "draft", actorId: STAFF },
-    ]);
+    expect(order.transitions).toEqual([]);
     const pending = await market.transitionOrder(db, ctx, {
       id: order.id,
       toStatus: "pending_approval",
@@ -134,7 +185,6 @@ describe("RF-MKT-01…03 · proveedores y órdenes de compra (RN-EST-01)", () =>
     ]);
     expect(sent.approvedBy).toBe(STAFF);
     expect(sent.transitions.map((transition) => transition.toStatus)).toEqual([
-      "draft",
       "pending_approval",
       "approved",
       "sent",
@@ -169,7 +219,82 @@ describe("RF-MKT-01…03 · proveedores y órdenes de compra (RN-EST-01)", () =>
     await expect(
       market.transitionOrder(db, ctx, { id: order.id, toStatus: "sent" }),
     ).rejects.toThrow("La orden no puede pasar de draft a sent.");
-    expect((await market.getOrder(db, ctx, order.id)).transitions).toHaveLength(1);
+    expect((await market.getOrder(db, ctx, order.id)).transitions).toHaveLength(0);
+  });
+
+  it("RN-EST-01 · borra un borrador sin transición y conserva creación y baja en la auditoría", async () => {
+    const supplier = await market.createSupplier(db, ctx, {
+      code: "MKT-S-DELETE",
+      name: "Proveedor Descartable",
+      defaultCurrency: "USD",
+      paymentTermsDays: 0,
+    });
+    const order = await market.createOrder(db, ctx, {
+      supplierId: supplier.id,
+      code: "MKT-PO-DELETE",
+      currency: "USD",
+      lines: [{ variantId: VARIANT, qtyOrdered: "1", uom: "unit", unitPriceMinor: "500" }],
+    });
+    expect(order.status).toBe("draft");
+    expect(order.transitions).toEqual([]);
+    await market.removeOrder(db, ctx, order.id);
+    await expect(market.getOrder(db, ctx, order.id)).rejects.toThrow("No encontrado.");
+    const auditRows = await testDb.superuserClient.query<{ action: string }>(
+      "SELECT action FROM app.audit_log WHERE entity_id = $1 ORDER BY id",
+      [order.id],
+    );
+    expect(auditRows.rows.map((row) => row.action)).toEqual([
+      "market.purchaseOrder.create",
+      "market.purchaseOrder.remove",
+    ]);
+  });
+
+  it("RN-EST-01 · una orden que volvió de aprobación responde 409 y pide cancelarla al borrar", async () => {
+    const supplier = await market.createSupplier(db, ctx, {
+      code: "MKT-S-HISTORY",
+      name: "Proveedor con historial",
+      defaultCurrency: "USD",
+      paymentTermsDays: 0,
+    });
+    const order = await market.createOrder(db, ctx, {
+      supplierId: supplier.id,
+      code: "MKT-PO-HISTORY",
+      currency: "USD",
+      lines: [{ variantId: VARIANT, qtyOrdered: "1", uom: "unit", unitPriceMinor: "500" }],
+    });
+    await market.transitionOrder(db, ctx, { id: order.id, toStatus: "pending_approval" });
+    await market.transitionOrder(db, ctx, { id: order.id, toStatus: "draft" });
+    const app = Fastify();
+    app.register(fastifyTRPCPlugin, {
+      prefix: "/trpc",
+      trpcOptions: {
+        router: router({ market: createMarketRouter(db) }),
+        createContext: ({ req, res }: CreateFastifyContextOptions) => ({
+          requestId: req.id,
+          userId: STAFF,
+          tenantId: TENANT,
+          audience: "staff" as const,
+          sessionId: SESSION,
+          mfaStatus: "satisfied" as const,
+          grantedPermissions: new Set(["market.purchase_order:write"]),
+          req,
+          res,
+        }),
+      },
+    });
+    try {
+      const denied = await app.inject({
+        method: "POST",
+        url: "/trpc/market.purchaseOrder.remove",
+        payload: { id: order.id },
+      });
+      expect(denied.statusCode).toBe(409);
+      expect(denied.json().error.data.appCode).toBe("CONFLICT_PURCHASE_ORDER_HISTORY");
+      expect(denied.json().error.message).toContain("hay que cancelarla");
+      expect((await market.getOrder(db, ctx, order.id)).transitions).toHaveLength(2);
+    } finally {
+      await app.close();
+    }
   });
 
   it("RF-MKT-02 · rechaza variante de otro tenant antes de insertar líneas", async () => {
@@ -295,7 +420,7 @@ describe("RF-MKT-01…03 · proveedores y órdenes de compra (RN-EST-01)", () =>
           userId: STAFF,
           tenantId: TENANT,
           audience: "staff" as const,
-          sessionId: null,
+          sessionId: SESSION,
           mfaStatus: "satisfied" as const,
           grantedPermissions: granted,
           req,

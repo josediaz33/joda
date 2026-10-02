@@ -8,6 +8,7 @@ import {
   listSuppliersOutput,
   purchaseOrderByIdInput,
   purchaseOrderSchema,
+  removePurchaseOrderOutput,
   supplierByIdInput,
   supplierSchema,
   transitionPurchaseOrderInput,
@@ -27,11 +28,12 @@ function requireDb(db: PrismaClient | null): PrismaClient {
   return db;
 }
 function staff(ctx: RequestContext): service.MarketContext {
-  if (ctx.audience === "staff" && ctx.userId && ctx.tenantId)
+  if (ctx.audience === "staff" && ctx.userId && ctx.tenantId && ctx.sessionId)
     return {
       userId: ctx.userId,
       tenantId: ctx.tenantId,
       audience: "staff",
+      sessionId: ctx.sessionId,
       auditMeta: {
         ip: ctx.req.ip,
         userAgent: ctx.req.headers["user-agent"] ?? null,
@@ -83,6 +85,14 @@ export function createMarketRouter(db: PrismaClient | null) {
         .input(createPurchaseOrderInput)
         .output(purchaseOrderSchema)
         .mutation(({ ctx, input }) => service.createOrder(requireDb(db), staff(ctx), input)),
+      remove: staffProcedure
+        .meta({ permission: "market.purchase_order:write" })
+        .input(purchaseOrderByIdInput)
+        .output(removePurchaseOrderOutput)
+        .mutation(async ({ ctx, input }) => {
+          await service.removeOrder(requireDb(db), staff(ctx), input.id);
+          return { ok: true as const };
+        }),
       transition: staffProcedure
         .meta({ permission: "market.purchase_order:write" })
         .input(transitionPurchaseOrderInput)

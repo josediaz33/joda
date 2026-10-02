@@ -9,10 +9,15 @@ const ORDER_INCLUDE = {
 export type SupplierRow = Prisma.suppliersGetPayload<Record<string, never>>;
 export type PurchaseOrderRow = Prisma.purchase_ordersGetPayload<{ include: typeof ORDER_INCLUDE }>;
 
-// Las políticas RLS de permisos son permisivas y se combinan con OR; por eso
-// cada lectura/escritura de este módulo filtra tenant_id explícitamente.
+// B10 volvió restrictiva la política de aislamiento RLS. Conservamos el
+// predicado tenant_id también en cada acceso de compras para que una futura
+// política más amplia no convierta un id relacionado en una referencia ajena.
 export const findSupplier = (tx: TenantTx, tenantId: string, id: string) =>
   tx.suppliers.findFirst({ where: { id, tenant_id: tenantId } });
+/** Lee el estado de auditoría después de adquirir el bloqueo de la fila. */
+export async function lockSupplier(tx: TenantTx, tenantId: string, id: string): Promise<void> {
+  await tx.$queryRaw`SELECT id FROM app.suppliers WHERE id = ${id}::uuid AND tenant_id = ${tenantId}::uuid FOR UPDATE`;
+}
 export const listSuppliers = (
   tx: TenantTx,
   input: { tenantId: string; cursor?: string; limit: number; isActive?: boolean },
@@ -80,6 +85,8 @@ export const updateOrderStatus = (
   id: string,
   data: Prisma.purchase_ordersUncheckedUpdateInput,
 ) => tx.purchase_orders.update({ where: { id, tenant_id: tenantId }, data });
+export const removeOrder = (tx: TenantTx, tenantId: string, id: string) =>
+  tx.$executeRaw`DELETE FROM app.purchase_orders WHERE id = ${id}::uuid AND tenant_id = ${tenantId}::uuid`;
 export const insertTransition = (
   tx: TenantTx,
   data: Prisma.purchase_order_transitionsUncheckedCreateInput,

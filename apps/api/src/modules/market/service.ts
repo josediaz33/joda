@@ -12,7 +12,7 @@ import type { PrismaClient } from "@joda/db";
 import { recordAuditEntry } from "../../db/audit.js";
 import { decodeCursor, encodeCursor } from "../../db/cursor.js";
 import { withTenantTx, type TenantTx, type TenantTxContext } from "../../db/withTenantTx.js";
-import { appError, toTRPCError } from "../../middleware/errorMapper.js";
+import { appError, hasSqlState, toTRPCError } from "../../middleware/errorMapper.js";
 import { toPurchaseOrder, toSupplier } from "./mappers.js";
 import * as repo from "./repository.js";
 
@@ -151,6 +151,7 @@ export async function updateSupplier(
   input: UpdateSupplierInput,
 ): Promise<SupplierDto> {
   return withTenantTx(db, ctx, async (tx) => {
+    await repo.lockSupplier(tx, ctx.tenantId, input.id);
     const before = await repo.findSupplier(tx, ctx.tenantId, input.id);
     if (!before) throw toTRPCError(NOT_FOUND);
     const row = await repo.updateSupplier(tx, ctx.tenantId, input.id, {
@@ -250,6 +251,7 @@ export async function createOrder(
         tenant_id: ctx.tenantId,
         supplier_id: input.supplierId,
         code: input.code,
+        status: "draft",
         currency: input.currency,
         fx_rate_to_pyg: input.fxRateToPyg ?? null,
         freight_minor: BigInt(input.freightMinor ?? "0"),
@@ -270,13 +272,6 @@ export async function createOrder(
         position,
       })),
     );
-    await repo.insertTransition(tx, {
-      tenant_id: ctx.tenantId,
-      purchase_order_id: id,
-      from_status: null,
-      to_status: "draft",
-      actor_id: ctx.userId,
-    });
     await audit(tx, ctx, "market.purchaseOrder.create", "purchase_orders", id, null, {
       status: "draft",
       code: input.code,
@@ -287,6 +282,52 @@ export async function createOrder(
     const row = await repo.findOrder(tx, ctx.tenantId, id);
     if (!row) throw new Error("orden recién creada no se pudo releer");
     return toPurchaseOrder(row);
+  });
+}
+
+export async function removeOrder(db: PrismaClient, ctx: MarketContext, id: string): Promise<void> {
+  return withTenantTx(db, ctx, async (tx) => {
+    await repo.lockOrder(tx, ctx.tenantId, id);
+    const before = await repo.findOrder(tx, ctx.tenantId, id);
+    if (!before) throw toTRPCError(NOT_FOUND);
+    if (before.status !== "draft") {
+      throw toTRPCError(
+        appError(
+          "CONFLICT_PURCHASE_ORDER_NOT_DRAFT",
+          409,
+          "Solo se puede borrar una orden en borrador.",
+        ),
+      );
+    }
+    try {
+      await repo.removeOrder(tx, ctx.tenantId, id);
+    } catch (error) {
+      if (hasSqlState(error, "23001")) {
+        throw toTRPCError(
+          appError(
+            "CONFLICT_PURCHASE_ORDER_HISTORY",
+            409,
+            "La orden tiene historial de aprobación; hay que cancelarla.",
+          ),
+        );
+      }
+      throw error;
+    }
+    await audit(
+      tx,
+      ctx,
+      "market.purchaseOrder.remove",
+      "purchase_orders",
+      id,
+      {
+        status: before.status,
+        code: before.code,
+        supplierId: before.supplier_id,
+        currency: before.currency,
+        lineCount: before.purchase_order_lines.length,
+      },
+      null,
+    );
   });
 }
 

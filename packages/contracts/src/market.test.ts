@@ -42,6 +42,41 @@ describe("docs/api-conventions.md §3 · contratos de compras", () => {
     ).toBe(false);
   });
 
+  it("limita importes a bigint, cantidades a numeric(14,3) y cambio a numeric(18,8)", () => {
+    expect(
+      createPurchaseOrderInput.safeParse({
+        ...order,
+        freightMinor: "9223372036854775807",
+        fxRateToPyg: "9999999999.99999999",
+        lines: [{ ...line, qtyOrdered: "99999999999.999", unitPriceMinor: "9223372036854775807" }],
+      }).success,
+    ).toBe(true);
+    expect(
+      createPurchaseOrderInput.safeParse({ ...order, freightMinor: "9223372036854775808" }).success,
+    ).toBe(false);
+    expect(
+      createPurchaseOrderInput.safeParse({ ...order, fxRateToPyg: "10000000000" }).success,
+    ).toBe(false);
+    expect(
+      createPurchaseOrderInput.safeParse({
+        ...order,
+        lines: [{ ...line, qtyOrdered: "100000000000" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      createPurchaseOrderInput.safeParse({
+        ...order,
+        lines: [{ ...line, unitPriceMinor: "9223372036854775808" }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("una OC nueva no acepta estado provisto por el cliente", () => {
+    expect(createPurchaseOrderInput.safeParse({ ...order, status: "approved" }).success).toBe(
+      false,
+    );
+  });
+
   it("deja los estados de recepción para el flujo de C15", () => {
     expect(
       transitionPurchaseOrderInput.safeParse({

@@ -143,6 +143,8 @@ const PG_ERROR_MAP: Record<string, (e: PgError) => ApiError> = {
 
 Una FK `RESTRICT` que se rompe al borrar a propósito, para que borrar no pierda nada en silencio, tiene su mensaje propio, por el nombre de la restricción (`PgError.constraint`) y no el genérico de `mapForeignKeyViolation`: hoy, `customer_deposits_sale_order_id_fkey` → `CONFLICT_ORDER_HAS_DEPOSIT` (409, «el pedido tiene una seña asociada: desvinculala antes de borrarlo», WP-B11d).
 
+El middleware global también reconoce el `P2002` de Prisma (violación de `UNIQUE`) y lo traduce a `409 CONFLICT_DUPLICATE` para todos los módulos; `P2002` no es un SQLSTATE. En errores de consulta cruda (`P2010`), toma el SQLSTATE estructurado de `meta.code`.
+
 ---
 
 ## 5. Idempotencia

@@ -104,6 +104,7 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
       "market.purchaseOrder.byId",
       "market.purchaseOrder.create",
       "market.purchaseOrder.list",
+      "market.purchaseOrder.remove",
       "market.purchaseOrder.transition",
       "market.supplier.byId",
       "market.supplier.create",
