@@ -4,7 +4,7 @@
 - **Fecha:** 2026-09-30
 - **Ámbito:** Base de datos
 - **Reemplaza:** ADR-017 (entero). El principio "la base hace cumplir invariantes, la aplicación calcula decisiones" se conserva; cambia la regla sobre las máquinas de estado y desaparecen sus tres excepciones anotadas.
-- **Nota (2026-10-01):** la lista de guardas que impone hoy la base salió de este ADR y vive en `docs/data-model.md` §4.6. Cambia con cada caso nuevo y un ADR no se reescribe por eso. No cambia la decisión ni el criterio.
+- **Corrección (2026-10-01):** la lista de casos de la base («hoy son dos» y los terminales que quedan en el dominio) salió de este ADR, porque quedaba vieja con cada guarda nueva, y pasó a `docs/data-model.md` §4.6. La decisión y el criterio no cambian, ver `docs/data-model.md` §4.6.
 
 ---
 
@@ -34,11 +34,11 @@ La línea cae ahí por lo que cuesta cada lado. Una transición común se puede 
 
 **Cuándo lo impone la base.** Cuando volver atrás desarmaría otros invariantes de la base, porque se apoyan en que ese estado no se abandone. Para un caso nuevo alcanza una pregunta: **¿volver de este estado desarmaría algún invariante de la base?** Si sí, la base impone que no se vuelva. Si no, es del dominio, aunque el estado sea terminal y aunque sea una regla importante: que importe, o que sea terminal, no alcanza.
 
-Apoyarse en un estado es más que leerlo. Una restricción que exige datos para entrar a un estado lo lee, pero se sigue cumpliendo si la fila sale de él: no es una premisa de que no se salga. Lo que se desarma al volver atrás es lo que da por hecho que el estado no se abandona.
+Leer un estado no es apoyarse en él: exigir datos para entrar a un estado no es apoyarse en que no se salga de él.
 
-Para sostener la irreversibilidad la base lleva las aristas que hacen falta y no más: el mapa entero cuando el estado es chico y todas sus aristas importan, una sola entrada cuando alcanza con eso. El dominio replica el mapa para consultarlo antes de intentar la transición, y lo que decide —qué generar, cuándo, con qué líneas— sigue siendo suyo.
+Para sostener la irreversibilidad la base lleva las aristas que hacen falta y no más. En el asiento, que tiene tres estados, eso la deja con el mapa entero (ver `docs/data-model.md` §4.6). El dominio lo replica para consultarlo antes de intentar la transición, y lo que decide —qué generar, cuándo, con qué líneas— sigue siendo suyo.
 
-**Dónde está la lista.** Qué guardas impone hoy la base, y qué estados terminales se evaluaron y quedaron en el dominio, está en `docs/data-model.md` §4.6, «Guardas de irreversibilidad vigentes». Esa lista cambia con cada caso nuevo; este ADR cambia solo si cambia el criterio. Sumar una guarda, o decidir que un terminal no la lleva, se anota ahí, con la respuesta a la pregunta de arriba.
+**Dónde está la lista.** Qué guardas impone hoy la base, y qué estados terminales se evaluaron y quedaron en el dominio, está en `docs/data-model.md` §4.6, «Guardas de irreversibilidad vigentes». Esa lista cambia con cada caso nuevo; este ADR cambia solo si cambia el criterio. Sumar una guarda, o decidir que un terminal no la lleva, se anota ahí.
 
 ## Proyección de saldos
 
@@ -54,7 +54,7 @@ La de `inventory_balances` la mantiene un trigger. No es lógica de negocio ni u
 
 - **Sumar una cuarta excepción a ADR-017.** Cada estado terminal nuevo pediría la suya, y la regla perdería contenido.
 - **Reescribir ADR-017 en el lugar.** Las migraciones `0018`, `0020` y `0023` citan su texto y no se pueden editar; sus citas apuntarían a algo que ya no existe.
-- **Llevar a la base la matriz de todas las máquinas de estado.** Cada estado costaría un trigger, su prueba y su mapeo de `ERRCODE`, y cambiar una matriz pasaría a ser una migración en vez de código con su test. Además, lo único que la base necesita de un estado es que no se abandone, y eso lo cubre una guarda de irreversibilidad, no la matriz.
+- **Llevar a la base la matriz de todas las máquinas de estado.** Cada estado costaría un trigger, su prueba y su mapeo de `ERRCODE`, y cambiar una matriz pasaría a ser una migración en vez de código con su test.
 - **El criterio "¿esta transición reabre algo ya cerrado?".** Da "sí" para cualquier salida de un terminal (`received`, `done`, `refunded`), que esta decisión deja en el dominio salvo que desarme un invariante de la base. Lo que separa los casos es si volver atrás desarmaría un invariante de la base.
 
 ## Mapa de las excepciones de ADR-017

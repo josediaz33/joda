@@ -266,7 +266,7 @@ Dos invariantes que hacen que la apertura no se pueda hacer mal aunque alguien s
 
 ### 4.6 Guardas de irreversibilidad vigentes
 
-Los estados de los que la base impone que no se vuelva (ADR-026). El ADR guarda el criterio —**¿volver de este estado desarmaría algún invariante de la base?**— y esta es la lista que cambia: un PR que suma una guarda agrega su entrada acá, en el mismo cambio que la migración, y uno que decide que un terminal no la lleva agrega la suya en «Terminales que siguen en el dominio». Hoy son tres. Qué hace cada una, para qué existe y dónde se prueba está en su entrada; la matriz completa de cada máquina vive en `packages/domain`.
+Los estados de los que la base impone que no se vuelva (ADR-026). El ADR guarda el criterio —**¿volver de este estado desarmaría algún invariante de la base?**— y esta es la lista que cambia: un PR que suma una guarda agrega su entrada acá, en el mismo cambio que la migración, y uno que decide que un terminal no la lleva agrega la suya en «Terminales que siguen en el dominio». Qué hace cada guarda, de qué invariante depende y si su mapa tiene prueba de paridad con el del dominio está en su entrada; la matriz completa de cada máquina vive en `packages/domain`.
 
 **1. Asiento contable.** WP-B14, 2026-09-25. `trg_journal_entry_guard` (`0020_journal_immutability.sql`). El asiento tiene tres estados y la base lleva su mapa completo: nace en `draft`, y rechaza toda arista que no sea `draft → draft`, `draft → posted` y `posted → reversed`. Esta última no toca ninguna otra columna y exige que exista su reversión contabilizada, porque RN-CTB-06 deshace un asiento con un asiento inverso, no con una marca.
 
@@ -276,17 +276,19 @@ Los estados de los que la base impone que no se vuelva (ADR-026). El ADR guarda 
 
 **2. Lote sellado terminal.** WP-B08c, 2026-09-25. `trg_sealed_lot_terminal` (`0023_cross_tenant_fks.sql`): un lote **sellado** no sale de `open_for_decant`. Es inmutabilidad física, no una regla importante: un frasco abierto no se desabre.
 
-- **Premisa de la que depende.** `assert_sealed_lot_not_open` (RN-LOT-03): el lote sellado abierto no admite ningún movimiento. Si el estado pudiera volver, alcanzaría un UPDATE a `available` para eludirla y vender como sellado un frasco abierto (RN-LOT-03) o abrir dos veces el mismo frasco (caso borde 5).
+- **Premisa de la que depende.** `assert_sealed_lot_not_open` (RN-LOT-03): el lote sellado abierto no admite ningún movimiento. Si el estado pudiera volver, alcanzaría un UPDATE a `available` para eludirla y vender como sellado un frasco abierto o abrir dos veces el mismo frasco (caso borde 5).
 - **No alcanza al granel hijo,** que también está en `open_for_decant` y sigue a `depleted` (RN-LOT-04).
 - **Sigue en el dominio** cuándo abrir un frasco, cuál, y cómo separar la unidad de un lote de varios (caso borde 21, WP-C11).
+- **Paridad entre los dos mapas.** No aplica: el dominio no modela un mapa de estados del lote para esta guarda (`lotOpening.ts` decide cuándo abrir, no replica la arista que la base prohíbe).
 - **Decisión de José:** el 2026-09-25, que el lote sellado abierto «es terminal y rechaza cualquier movimiento»; el 2026-09-30, que «terminal» incluye el estado, no solo los movimientos: el trigger que impide sacarlo de `open_for_decant` es parte de la regla.
 
-**3. Orden de compra que no vuelve a borrador.** WP-B11, 2026-10-01. `trg_po_no_return_to_draft` (`0031_purchase_order_no_return_to_draft.sql`): se entra a `draft` o a `pending_approval` solo desde `draft` o `pending_approval`.
+**3. Orden de compra que no vuelve a borrador.** WP-B11, 2026-10-01. `trg_po_no_return_to_draft` (`0031_purchase_order_no_return_to_draft.sql`): se entra a `draft` o a `pending_approval` solo desde `draft` o `pending_approval`. Por eso tampoco vuelve a `pending_approval` (§4.5).
 
 - **Premisa de la que depende.** La política de DELETE de `purchase_orders` (`0030`) borra solo en `draft` y lee ese estado como «nunca enviada». Volver atrás desde `approved` en adelante desarma esa premisa, y el detalle de la guarda y de su prueba está en §4.5.
 - **Sigue en el dominio** la matriz de la orden (`packages/domain/src/procurement/purchaseOrder.ts`, WP-A08), con sus terminales.
+- **Paridad entre los dos mapas.** Sin prueba que ate la guarda a `PURCHASE_ORDER_TRANSITIONS`: la segunda revisión de B11 comparó a mano los 49 pares de estados con la matriz de A08 y no encontró arista que la guarda rechace y el dominio permita. Ningún WP la convierte en prueba.
 
-**Terminales que siguen en el dominio.** Se evaluaron con la pregunta del criterio y la respuesta fue no: si una de esas órdenes volviera atrás, ningún invariante de la base se desarmaría.
+**Terminales que siguen en el dominio.** Se evaluaron con la pregunta del criterio y la respuesta fue no, salvo lo que dice la guarda 3 para la orden de compra: si una de esas órdenes volviera atrás, ningún invariante de la base se desarmaría.
 
 - **Orden de compra:** `received` y `cancelled`, salvo la entrada a `draft` y a `pending_approval`, que es la guarda 3. Esa guarda no los hace terminales: solo les impide volver a los dos estados previos a la aprobación.
 - **Pedido de venta:** `cancelled` y `refunded`.
