@@ -40,6 +40,7 @@ const LOT_ID = "b1100000-0000-0000-0000-0000000000c1";
 const NEW_LOT_ID = "b1100000-0000-0000-0000-0000000000c2";
 const DEPOSIT_ID = "b1100000-0000-0000-0000-0000000000e1";
 const SCENARIO_ID = "b1100000-0000-0000-0000-0000000000f1";
+const SCENARIO_LINE_ID = "b1100000-0000-0000-0000-0000000000f2";
 
 interface Actor {
   userId: string;
@@ -142,6 +143,21 @@ const UPDATE_SCENARIO = `UPDATE app.sourcing_scenarios SET name = 'editado' WHER
 const UPDATE_ALL_SCENARIOS = `UPDATE app.sourcing_scenarios SET name = 'editado'`;
 const DELETE_SCENARIO = `DELETE FROM app.sourcing_scenarios WHERE id = '${SCENARIO_ID}'`;
 const DELETE_ALL_SCENARIOS = `DELETE FROM app.sourcing_scenarios`;
+
+// Las líneas del escenario llevan precios de proveedor, FX asumido y margen
+// proyectado: se leen con `market.sourcing:read` y se escriben con `:write`.
+const SELECT_SCENARIO_LINES = `SELECT unit_price_minor FROM app.sourcing_scenario_lines`;
+const INSERT_SCENARIO_LINE = `INSERT INTO app.sourcing_scenario_lines
+  (tenant_id, scenario_id, variant_id, qty, unit_price_minor, currency, fx_assumed)
+  VALUES ('${REAL_TENANT_ID}', '${SCENARIO_ID}', '${SEALED_VARIANT_ID}', 1, 9000, 'USD', 7400)`;
+const UPDATE_SCENARIO_LINE = `UPDATE app.sourcing_scenario_lines SET unit_price_minor = 1
+  WHERE id = '${SCENARIO_LINE_ID}'`;
+const UPDATE_ALL_SCENARIO_LINES = `UPDATE app.sourcing_scenario_lines SET unit_price_minor = 1`;
+const DELETE_SCENARIO_LINE = `DELETE FROM app.sourcing_scenario_lines
+  WHERE id = '${SCENARIO_LINE_ID}'`;
+const DELETE_ALL_SCENARIO_LINES = `DELETE FROM app.sourcing_scenario_lines`;
+const COUNT_SCENARIO_LINES = `SELECT count(*)::int AS n FROM app.sourcing_scenario_lines
+  WHERE scenario_id = '${SCENARIO_ID}'`;
 
 describe("escribir en las tablas sensibles exige el permiso de escritura, no solo tenant (WP-B11, docs/security-spec.md §3.1, ADR-016)", () => {
   let db: TestDb;
@@ -284,6 +300,10 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       VALUES ('${DEPOSIT_ID}', '${REAL_TENANT_ID}', '${CUSTOMER_ID}', 100000);
       INSERT INTO app.sourcing_scenarios (id, tenant_id, name, created_by)
       VALUES ('${SCENARIO_ID}', '${REAL_TENANT_ID}', 'Escenario B11b', '${REAL_OWNER_ID}');
+      INSERT INTO app.sourcing_scenario_lines
+        (id, tenant_id, scenario_id, variant_id, qty, unit_price_minor, currency, fx_assumed)
+      VALUES ('${SCENARIO_LINE_ID}', '${REAL_TENANT_ID}', '${SCENARIO_ID}', '${SEALED_VARIANT_ID}',
+              3, 12000, 'USD', 7400);
     `);
 
     await db.client.query(`ALTER ROLE joda_api PASSWORD '${JODA_API_TEST_PASSWORD}'`);
@@ -902,6 +922,161 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
         remaining,
       }).toEqual({ withWhere: 0, withoutWhere: 1, remaining: 0 });
     });
+  });
+
+  // WP-B11b, la tabla hija. Nada exigía permiso: ni leer ni escribir. Un
+  // vendedor leía y editaba precios de proveedor y márgenes proyectados.
+  describe("sourcing_scenario_lines: leer exige market.sourcing:read; escribir, market.sourcing:write (WP-B11b)", () => {
+    it("el owner agrega una línea, con el RETURNING que emite Prisma, cambia su precio y la borra", async () => {
+      const created = await as(owner, `${INSERT_SCENARIO_LINE} RETURNING id`);
+      const edited = await api.query(UPDATE_SCENARIO_LINE);
+      const deleted = await api.query(DELETE_SCENARIO_LINE);
+
+      expect({
+        created: created.rowCount,
+        edited: edited.rowCount,
+        deleted: deleted.rowCount,
+      }).toEqual({ created: 1, edited: 1, deleted: 1 });
+    });
+
+    it("quien lee y escribe sourcing agrega, edita y borra líneas", async () => {
+      const created = await as(custom.sourcingEditor, `${INSERT_SCENARIO_LINE} RETURNING id`);
+      const edited = await api.query(UPDATE_SCENARIO_LINE);
+      const deleted = await api.query(DELETE_SCENARIO_LINE);
+
+      expect({
+        created: created.rowCount,
+        edited: edited.rowCount,
+        deleted: deleted.rowCount,
+      }).toEqual({ created: 1, edited: 1, deleted: 1 });
+    });
+
+    // El defecto: como vendedor, esta consulta devolvía las líneas.
+    it("el vendedor no ve las líneas: no lee precios de proveedor", async () => {
+      const { rowCount } = await as(seller, SELECT_SCENARIO_LINES);
+
+      expect(rowCount).toBe(0);
+    });
+
+    it("el depósito no ve las líneas", async () => {
+      const { rowCount } = await as(warehouse, SELECT_SCENARIO_LINES);
+
+      expect(rowCount).toBe(0);
+    });
+
+    it("el vendedor no agrega una línea, aunque el INSERT no pida RETURNING (42501)", async () => {
+      await expect(as(seller, INSERT_SCENARIO_LINE)).rejects.toMatchObject({ code: "42501" });
+    });
+
+    it("el vendedor no edita ni borra líneas: sin WHERE afectan cero filas", async () => {
+      const edited = await as(seller, UPDATE_ALL_SCENARIO_LINES);
+      const deleted = await api.query(DELETE_ALL_SCENARIO_LINES);
+      const remaining = await countScenarioLinesAsOwner();
+
+      expect({ edited: edited.rowCount, deleted: deleted.rowCount, remaining }).toEqual({
+        edited: 0,
+        deleted: 0,
+        remaining: 1,
+      });
+    });
+
+    it("un rol que solo lee sourcing ve las líneas pero no las agrega (42501)", async () => {
+      const seen = await as(custom.readOnly, SELECT_SCENARIO_LINES);
+      await api.query("ROLLBACK");
+
+      expect(seen.rowCount).toBe(1);
+      await expect(as(custom.readOnly, INSERT_SCENARIO_LINE)).rejects.toMatchObject({
+        code: "42501",
+      });
+    });
+
+    it("un rol que solo lee sourcing no edita ni borra líneas: afectan cero filas", async () => {
+      const edited = await as(custom.readOnly, UPDATE_SCENARIO_LINE);
+      const deleted = await api.query(DELETE_SCENARIO_LINE);
+
+      expect({ edited: edited.rowCount, deleted: deleted.rowCount }).toEqual({
+        edited: 0,
+        deleted: 0,
+      });
+    });
+
+    // La trampa de la lectura, ahora también en las líneas: la lectura está
+    // gateada.
+    it("quien escribe sourcing sin leerlo: el INSERT pasa, el INSERT ... RETURNING se rechaza", async () => {
+      const plain = await as(custom.sourcingWriterNoRead, INSERT_SCENARIO_LINE);
+      await api.query("ROLLBACK");
+
+      expect(plain.rowCount).toBe(1);
+      await expect(
+        as(custom.sourcingWriterNoRead, `${INSERT_SCENARIO_LINE} RETURNING id`),
+      ).rejects.toMatchObject({ code: "42501" });
+    });
+
+    // Fijado a propósito: sin WHERE ni RETURNING el UPDATE y el DELETE no leen,
+    // y la capa 1 solo pide el permiso de escritura.
+    it("quien escribe sourcing sin leerlo: UPDATE ... WHERE afecta cero filas, y sin WHERE sí edita", async () => {
+      const withWhere = await as(custom.sourcingWriterNoRead, UPDATE_SCENARIO_LINE);
+      const withoutWhere = await api.query(UPDATE_ALL_SCENARIO_LINES);
+
+      expect({ withWhere: withWhere.rowCount, withoutWhere: withoutWhere.rowCount }).toEqual({
+        withWhere: 0,
+        withoutWhere: 1,
+      });
+    });
+
+    it("quien escribe sourcing sin leerlo: DELETE ... WHERE afecta cero filas, y sin WHERE sí borra", async () => {
+      const withWhere = await as(custom.sourcingWriterNoRead, DELETE_SCENARIO_LINE);
+      const withoutWhere = await api.query(DELETE_ALL_SCENARIO_LINES);
+      const remaining = await countScenarioLinesAsOwner();
+
+      expect({
+        withWhere: withWhere.rowCount,
+        withoutWhere: withoutWhere.rowCount,
+        remaining,
+      }).toEqual({ withWhere: 0, withoutWhere: 1, remaining: 0 });
+    });
+
+    // La cascada no evalúa RLS: borrar un escenario borra sus líneas, y como
+    // exige el mismo permiso que borrarlas, no abre nada.
+    it("borrar un escenario borra sus líneas (la cascada no evalúa RLS)", async () => {
+      await as(custom.sourcingEditor, DELETE_SCENARIO);
+      const remaining = await countScenarioLinesAsOwner();
+
+      expect(remaining).toBe(0);
+    });
+
+    it("el vendedor, que no borra el escenario, no pierde sus líneas por la cascada", async () => {
+      await as(seller, DELETE_SCENARIO);
+      const remaining = await countScenarioLinesAsOwner();
+
+      expect(remaining).toBe(1);
+    });
+
+    it("el owner de otro tenant no ve ni escribe líneas del tenant real", async () => {
+      const seen = await as(peerOwner, SELECT_SCENARIO_LINES, PEER_TENANT_ID);
+      const edited = await api.query(UPDATE_SCENARIO_LINE);
+      const deleted = await api.query(DELETE_SCENARIO_LINE);
+
+      expect({ seen: seen.rowCount, edited: edited.rowCount, deleted: deleted.rowCount }).toEqual({
+        seen: 0,
+        edited: 0,
+        deleted: 0,
+      });
+    });
+
+    it("el owner de otro tenant no agrega una línea al escenario del tenant real (42501)", async () => {
+      await expect(as(peerOwner, INSERT_SCENARIO_LINE, PEER_TENANT_ID)).rejects.toMatchObject({
+        code: "42501",
+      });
+    });
+
+    // Mira como el owner, dentro de la misma transacción del actor denegado,
+    // que puede no ver nada (no tiene `:read`).
+    async function countScenarioLinesAsOwner(): Promise<number> {
+      await actAs(owner, REAL_TENANT_ID);
+      const { rows } = await api.query(COUNT_SCENARIO_LINES);
+      return rows[0].n;
+    }
   });
 
   // El defecto de B10, ahora en la escritura: tener el permiso NO alcanza si
