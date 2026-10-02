@@ -37,6 +37,34 @@ describe("mapPgError — traducción por ERRCODE (api-conventions.md §4.4)", ()
     });
   });
 
+  // WP-B11d (0034): borrar un pedido con una seña enganchada rompe la FK
+  // RESTRICT, y el mensaje tiene que decir qué hacer, no que "el registro
+  // referenciado no existe".
+  it("23503 sobre customer_deposits_sale_order_id_fkey es CONFLICT_ORDER_HAS_DEPOSIT, 409, y dice que hay que desvincular la seña", () => {
+    const result = mapPgError({
+      code: "23503",
+      message: "update or delete on table sale_orders violates foreign key constraint",
+      constraint: "customer_deposits_sale_order_id_fkey",
+    });
+
+    expect(result).toEqual({
+      code: "CONFLICT_ORDER_HAS_DEPOSIT",
+      httpStatus: 409,
+      message:
+        "No se puede borrar el pedido porque tiene una seña asociada. Desvinculá la seña del pedido y volvé a intentarlo.",
+    });
+  });
+
+  it("23503 sobre otra restricción sigue siendo el CONFLICT_FOREIGN_KEY genérico", () => {
+    const result = mapPgError({
+      code: "23503",
+      message: "violates foreign key constraint",
+      constraint: "sale_order_lines_variant_id_fkey",
+    });
+
+    expect(result.code).toBe("CONFLICT_FOREIGN_KEY");
+  });
+
   it("2F004 (ledger inmutable) es CONFLICT_IMMUTABLE_LEDGER, 409", () => {
     const result = mapPgError({ code: "2F004", message: "reading sql-data not permitted" });
 

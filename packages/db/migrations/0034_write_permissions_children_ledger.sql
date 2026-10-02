@@ -8,25 +8,28 @@
 -- (el libro de stock, con un permiso que el vendedor no tiene); y borrar una
 -- venta, que desengancha su seña (`customer_deposits.sale_order_id ON DELETE
 -- SET NULL`). Cada tabla tenía una única permisiva `tenant_access` FOR ALL
--- con `true` (0014): escribir pedía solo tenant.
+-- con `true` (0014): escribir pedía solo tenant. Y `purchase_order_lines`
+-- se podía LEER sin permiso: el vendedor veía los precios de compra, aunque
+-- `purchase_orders` exige `market.purchase_order:read` (revisión cruzada).
 --
 -- CORRECCIÓN. Esa permisiva se reemplaza, en cada tabla, por una política por
--- comando (nunca `FOR ALL`). El SELECT sigue por tenant (`tenant_access_select`
--- con `true`, combinada con la restrictiva `tenant_isolation` de 0016): esta
--- migración no cambia quién lee. `has_permission` exige sesión de staff, así
--- que una audiencia `system` (un webhook de pago) no escribe en estas tablas
--- por esta vía; ver "QUÉ QUEDA FUERA".
+-- comando (nunca `FOR ALL`). `tenant_isolation` (RESTRICTIVE, 0016) sigue
+-- combinándose con AND contra todas: tenant Y permiso. El SELECT sigue por
+-- tenant (`tenant_access_select` con `true`) salvo en `purchase_order_lines`,
+-- que desde esta migración exige `market.purchase_order:read`. `has_permission`
+-- exige sesión de staff, así que una audiencia `system` (un webhook de pago)
+-- no escribe en estas tablas por esta vía; ver "QUÉ QUEDA FUERA".
 --
---   tabla                    INSERT                 UPDATE                  DELETE
---   -----------------------  ---------------------  ----------------------  ---------------------
---   inventory_movements      según `movement_type`  nadie (ledger)          nadie (ledger)
---   purchase_order_lines     purchase_order:write   write, approve, receive purchase_order:write
---   goods_receipts           purchase_order:receive purchase_order:receive  nadie
---   goods_receipt_lines      purchase_order:receive purchase_order:receive  nadie
---   sale_orders              solo tenant (*)        solo tenant (*)         sales.order:write, y
---                                                                           solo en borrador
+--   tabla                  SELECT      INSERT                  UPDATE                   DELETE
+--   ---------------------  ----------  ----------------------  -----------------------  ------------------------
+--   inventory_movements    tenant      según `movement_type`   nadie (ledger)           nadie (ledger)
+--   purchase_order_lines   po:read     po:write, orden draft   po:write, approve        po:write, orden draft
+--                                                              o receive
+--   goods_receipts         tenant      po:receive              po:receive               nadie
+--   goods_receipt_lines    tenant      po:receive              po:receive               nadie
+--   sale_orders            tenant      solo tenant (*)         solo tenant (*)          sales.order:write y draft
 --
---   (*) Ver "QUÉ QUEDA FUERA".
+--   po = market.purchase_order. (*) Ver "QUÉ QUEDA FUERA".
 --
 -- inventory_movements. La política de INSERT mira `movement_type`, que es lo
 -- único que distingue qué operación está haciendo quien escribe (los
@@ -59,13 +62,22 @@
 -- mapee a propósito. UPDATE y DELETE no tienen política: el ledger es
 -- append-only y `joda_api` ya no tiene esos privilegios (0010, 0009).
 --
--- purchase_order_lines. Con los permisos de `purchase_orders` (0030): INSERT
--- y DELETE con `:write`; UPDATE con `:write`, `:approve` o `:receive`, porque
--- la recepción actualiza `qty_received`. Como en 0030, la base pone el piso:
--- qué puede hacer cada permiso sobre una orden en cada estado lo imponen la
--- capa 2 y `packages/domain`. A diferencia de la orden, borrar una línea no
--- exige borrador: la política de DELETE de la orden lee `draft` como "nunca
--- enviada" y por eso necesita la guarda de 0031; una línea no tiene estado.
+-- purchase_order_lines. Con los permisos de `purchase_orders` (0030):
+--   · SELECT con `market.purchase_order:read`.
+--   · INSERT y DELETE con `:write` Y con la orden padre en `draft`
+--     (EXISTS sobre `purchase_orders`). Es la misma premisa que la política de
+--     DELETE de la orden ("nunca enviada", sostenida por `trg_po_no_return_to_
+--     draft`, 0031): sin ella, quien tenía `:write` borraba las líneas de una
+--     orden ya enviada y dejaba una orden vacía, lo que el DELETE de la
+--     cabecera no permite (revisión cruzada). Una vez enviada, las líneas no
+--     se agregan ni se quitan.
+--   · UPDATE con `:write`, `:approve` o `:receive`, porque la recepción
+--     actualiza `qty_received`; queda abierto en cualquier estado. Si el
+--     precio o la cantidad pedida pueden cambiar después de enviar la orden,
+--     es una decisión de WP-C15 (anotada en su fila): la base pone el piso.
+-- El EXISTS lee `purchase_orders` bajo RLS, así que exige que quien escribe
+-- pueda leer la orden (`market.purchase_order:read`): es la trampa de la
+-- lectura, y el invariante 94 la verifica para los roles sembrados.
 --
 -- goods_receipts y goods_receipt_lines. `market.purchase_order:receive` para
 -- INSERT y UPDATE. SIN DELETE, igual que los lotes: son documentos con costos
@@ -90,22 +102,42 @@
 -- cerrado por lista blanca, no es SECURITY DEFINER (el invariante 29 la admite
 -- por nombre) y fija `search_path = app, pg_temp`.
 --
--- LA TRAMPA DE LA LECTURA no aplica a estas tablas: su SELECT es por tenant, y
--- ni `INSERT ... RETURNING` ni `UPDATE ... WHERE` dependen de otro permiso.
--- Quien escribe siempre puede leer. Si un WP futuro cierra la lectura de una
--- de ellas (por ejemplo, las líneas de órdenes, que hoy muestran el precio de
--- compra a todo el staff), el invariante 94 tiene que sumar el par.
+-- customer_deposits.sale_order_id. Pasa de `ON DELETE SET NULL` a `ON DELETE
+-- RESTRICT`. Una seña existe ANTES del cobro (la FK es opcional justamente
+-- para atarla a un pedido), así que un borrador puede tener una enganchada, y
+-- borrarlo la desengancha en silencio: el mismo defecto que esta migración
+-- cierra para las ventas cobradas, en el caso que la premisa "un borrador no
+-- tiene seña" no cubría (revisión cruzada). Con RESTRICT, para borrar el
+-- borrador hay que desvincular la seña a propósito; el DELETE da 23503, y la
+-- API lo traduce a un mensaje que lo dice (`errorMapper.ts`). Es la única FK
+-- hacia `sale_orders` con SET NULL; las demás ya son RESTRICT o CASCADE hacia
+-- tablas que no tienen plata.
 --
--- QUÉ QUEDA FUERA. (1) INSERT y UPDATE de `sale_orders` siguen solo por
--- tenant: un pago confirmado por un webhook (audiencia `system`) los escribe,
--- y `has_permission` exige staff; hay que definir primero ese camino (WP-G13).
+-- LA TRAMPA DE LA LECTURA no aplica a las tablas cuyo SELECT es por tenant:
+-- ni `INSERT ... RETURNING` ni `UPDATE ... WHERE` dependen de otro permiso. Sí
+-- aplica a `purchase_order_lines`, cuya lectura ahora exige
+-- `market.purchase_order:read`: quien escribe líneas sin poder leerlas recibe
+-- 42501 en el INSERT ... RETURNING y cero filas en un UPDATE o DELETE con
+-- WHERE. En los roles sembrados, todo permiso de escritura de las líneas
+-- viene con ese de lectura, con una excepción registrada: el depósito
+-- (`:receive` sin `:read`), que desde esta migración deja de ver las líneas de
+-- la orden que recibe. Cómo recibe sin ver precios es de WP-C15, que ya tenía
+-- la excepción anotada (invariante 94).
+--
+-- QUÉ QUEDA FUERA, cada uno con su destino en `docs/backlog.md`.
+-- (1) INSERT y UPDATE de `sale_orders` siguen solo por tenant: un pago
+-- confirmado por un webhook (audiencia `system`) los escribe, y
+-- `has_permission` exige staff; hay que definir primero ese camino (WP-G13).
 -- Lo mismo vale ahora para los movimientos `sale` que genera esa confirmación:
 -- con esta migración un contexto `system` no los inserta. (2) Las demás tablas
--- de la venta (`sale_order_lines`, `payments`, ...) y `movement_cost_allocations`
--- siguen solo por tenant. (3) La lectura de las líneas de órdenes de compra.
--- Los tres quedan anotados en `docs/backlog.md`.
+-- de la venta (`sale_order_lines`, `payments`, ...) siguen solo por tenant
+-- (WP-G13). (3) `movement_cost_allocations`, las capas de costo de cada salida,
+-- sigue solo por tenant en INSERT: WP-B11e. (4) La lectura de
+-- `goods_receipt_lines` (precio unitario y flete prorrateado) sigue por tenant:
+-- WP-C15, que define qué ve el depósito al recibir.
 --
--- Esta migración agrega un CHECK y un trigger; no cambia columnas.
+-- Esta migración agrega un CHECK y un trigger y cambia la acción de una FK;
+-- no cambia columnas.
 -- =====================================================================
 SET search_path = app, public;
 
@@ -144,11 +176,15 @@ CREATE POLICY movements_insert ON app.inventory_movements
 -- ---------------------------------------------------------------------
 DROP POLICY tenant_access ON app.purchase_order_lines;
 
-CREATE POLICY tenant_access_select ON app.purchase_order_lines
-  FOR SELECT USING (true);
-CREATE POLICY pol_insert ON app.purchase_order_lines
-  FOR INSERT WITH CHECK (app.has_permission('market.purchase_order:write'));
-CREATE POLICY pol_update ON app.purchase_order_lines
+CREATE POLICY po_lines_read ON app.purchase_order_lines
+  FOR SELECT USING (app.has_permission('market.purchase_order:read'));
+CREATE POLICY po_lines_insert ON app.purchase_order_lines
+  FOR INSERT WITH CHECK (
+    app.has_permission('market.purchase_order:write')
+    AND EXISTS (SELECT 1 FROM app.purchase_orders po
+                 WHERE po.id = purchase_order_lines.purchase_order_id
+                   AND po.status = 'draft'));
+CREATE POLICY po_lines_update ON app.purchase_order_lines
   FOR UPDATE USING (
     app.has_permission('market.purchase_order:write')
     OR app.has_permission('market.purchase_order:approve')
@@ -157,8 +193,12 @@ CREATE POLICY pol_update ON app.purchase_order_lines
     app.has_permission('market.purchase_order:write')
     OR app.has_permission('market.purchase_order:approve')
     OR app.has_permission('market.purchase_order:receive'));
-CREATE POLICY pol_delete ON app.purchase_order_lines
-  FOR DELETE USING (app.has_permission('market.purchase_order:write'));
+CREATE POLICY po_lines_delete ON app.purchase_order_lines
+  FOR DELETE USING (
+    app.has_permission('market.purchase_order:write')
+    AND EXISTS (SELECT 1 FROM app.purchase_orders po
+                 WHERE po.id = purchase_order_lines.purchase_order_id
+                   AND po.status = 'draft'));
 
 -- ---------------------------------------------------------------------
 -- goods_receipts y goods_receipt_lines
@@ -196,6 +236,15 @@ CREATE POLICY tenant_access_update ON app.sale_orders
   FOR UPDATE USING (true) WITH CHECK (true);
 CREATE POLICY sales_delete ON app.sale_orders
   FOR DELETE USING (app.has_permission('sales.order:write') AND status = 'draft');
+
+-- La seña existe antes del cobro: borrar un borrador no la desengancha en
+-- silencio. Misma FK compuesta de 0023, con otra acción.
+ALTER TABLE app.customer_deposits
+  DROP CONSTRAINT customer_deposits_sale_order_id_fkey;
+ALTER TABLE app.customer_deposits
+  ADD CONSTRAINT customer_deposits_sale_order_id_fkey
+  FOREIGN KEY (sale_order_id, tenant_id) REFERENCES app.sale_orders (id, tenant_id)
+  ON DELETE RESTRICT;
 
 CREATE FUNCTION app.guard_so_no_return_to_draft() RETURNS trigger
 LANGUAGE plpgsql SET search_path = app, pg_temp AS $$

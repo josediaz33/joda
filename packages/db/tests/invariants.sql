@@ -1937,10 +1937,12 @@ SELECT pg_temp.expect_true(93,
 -- órdenes de compra; carga la recepción en borrador y la contabiliza quien
 -- las lee. Si C15 la resuelve, se quita de acá. Los roles que crea un
 -- administrador no entran: validar el par al crearlos es de WP-C24.
--- Las tres últimas filas (WP-B11c) no responden a la trampa: el SELECT de
--- `roles`, `role_permissions` y `staff_user_roles` es por tenant, porque la
--- API lo lee para resolver los permisos de cada sesión. El par existe porque
--- quien administra usuarios y roles tiene que ver la pantalla que los lista.
+-- Las filas de `roles`, `role_permissions` y `staff_user_roles` (WP-B11c) no
+-- responden a la trampa: su SELECT es por tenant, porque la API lo lee para
+-- resolver los permisos de cada sesión. El par existe porque quien administra
+-- usuarios y roles tiene que ver la pantalla que los lista. Las de
+-- `purchase_order_lines` (WP-B11d) sí: su lectura exige
+-- `market.purchase_order:read`, con la misma excepción del depósito.
 WITH par(tabla, escribe, lee) AS (
   VALUES
     ('suppliers',         'market.supplier:write',         'market.supplier:read'),
@@ -1957,7 +1959,10 @@ WITH par(tabla, escribe, lee) AS (
     ('sourcing_scenario_lines', 'market.sourcing:write',    'market.sourcing:read'),
     ('roles',              'settings.user:write',           'settings.user:read'),
     ('role_permissions',   'settings.user:write',           'settings.user:read'),
-    ('staff_user_roles',   'settings.user:write',           'settings.user:read')
+    ('staff_user_roles',   'settings.user:write',           'settings.user:read'),
+    ('purchase_order_lines', 'market.purchase_order:write',   'market.purchase_order:read'),
+    ('purchase_order_lines', 'market.purchase_order:approve', 'market.purchase_order:read'),
+    ('purchase_order_lines', 'market.purchase_order:receive', 'market.purchase_order:read')
 ), roles_sembrados AS (
   SELECT id, code, tenant_id FROM app.roles WHERE is_system
 ), escribe_sin_leer AS (
@@ -1968,11 +1973,12 @@ WITH par(tabla, escribe, lee) AS (
     JOIN par p ON p.escribe = w.permission_code
    WHERE NOT EXISTS (SELECT 1 FROM app.role_permissions l
                       WHERE l.role_id = r.id AND l.permission_code = p.lee)
-     AND NOT (r.code = 'deposito' AND p.tabla = 'purchase_orders'
+     AND NOT (r.code = 'deposito'
+              AND p.tabla IN ('purchase_orders', 'purchase_order_lines')
               AND p.escribe = 'market.purchase_order:receive')
 )
 SELECT pg_temp.expect_true(94,
-  'Ningún rol sembrado escribe en una tabla sensible sin poder leerla (salvo depósito en órdenes, WP-C15)'
+  'Ningún rol sembrado escribe en una tabla sensible sin poder leerla (salvo depósito en órdenes y sus líneas, WP-C15)'
     || COALESCE(' — escriben sin leer: '
                 || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM escribe_sin_leer), ''),
   (SELECT count(*) FROM roles_sembrados) >= 4 AND NOT EXISTS (SELECT 1 FROM escribe_sin_leer));
@@ -2423,8 +2429,11 @@ SELECT pg_temp.expect_fail_like(117, 'Transfer de separación y apertura entran;
 -- 118 ─ purchase_order_lines, goods_receipts y goods_receipt_lines: cada
 -- política de escritura es la esperada (tabla, comando y permiso), no hay
 -- ninguna otra (en particular, ningún DELETE en recepciones: se cancelan con
--- su estado) y ninguna es `true` ni FOR ALL. El nombre lista las que faltan y
--- las que sobran.
+-- su estado) y ninguna es `true` ni FOR ALL. Además, el INSERT y el DELETE de
+-- las líneas de órdenes exigen que la orden padre esté en `draft` (sin eso,
+-- `:write` vaciaba una orden enviada), y su SELECT exige
+-- `market.purchase_order:read` (sin eso, el vendedor veía los precios de
+-- compra). El nombre lista las que faltan y las que sobran.
 WITH esperadas(tabla, cmd, permiso) AS (
   VALUES
     ('purchase_order_lines', 'a'::"char", 'market.purchase_order:write'),
@@ -2456,14 +2465,38 @@ WITH esperadas(tabla, cmd, permiso) AS (
     FROM politicas p
    WHERE p.polcmd = '*' OR p.expresion ~ '\mtrue\M'
       OR NOT EXISTS (SELECT 1 FROM esperadas e WHERE e.tabla = p.tabla AND e.cmd = p.polcmd)
+), sin_borrador AS (
+  SELECT p.tabla || '.' || p.polname AS descripcion
+    FROM politicas p
+   WHERE p.tabla = 'purchase_order_lines' AND p.polcmd IN ('a', 'd')
+     AND (p.expresion NOT LIKE '%purchase_orders%' OR p.expresion NOT LIKE '%''draft''%')
+), lectura_lineas AS (
+  SELECT p.polname, COALESCE(pg_get_expr(p.polqual, p.polrelid), '') AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND c.relname = 'purchase_order_lines'
+     AND p.polpermissive AND p.polcmd = 'r'
+), lectura_sin_permiso AS (
+  SELECT 'purchase_order_lines.' || polname AS descripcion
+    FROM lectura_lineas
+   WHERE expresion NOT LIKE '%has_permission(''market.purchase_order:read''%'
+  UNION ALL
+  SELECT 'purchase_order_lines (sin política de SELECT)'
+   WHERE NOT EXISTS (SELECT 1 FROM lectura_lineas)
 )
 SELECT pg_temp.expect_true(118,
-  'Líneas de órdenes de compra y recepciones: escribir exige su permiso; las recepciones no se borran'
+  'Líneas de órdenes de compra y recepciones: escribir exige su permiso, las líneas solo en borrador y leerlas, :read; las recepciones no se borran'
     || COALESCE(' — faltan: '
                 || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM faltan), '')
     || COALESCE(' — sobran: '
-                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sobran), ''),
-  NOT EXISTS (SELECT 1 FROM faltan) AND NOT EXISTS (SELECT 1 FROM sobran));
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sobran), '')
+    || COALESCE(' — sin exigir la orden en borrador: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sin_borrador), '')
+    || COALESCE(' — lectura sin permiso: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM lectura_sin_permiso), ''),
+  NOT EXISTS (SELECT 1 FROM faltan) AND NOT EXISTS (SELECT 1 FROM sobran)
+  AND NOT EXISTS (SELECT 1 FROM sin_borrador) AND NOT EXISTS (SELECT 1 FROM lectura_sin_permiso));
 
 -- 119 ─ sale_orders se borra solo con `sales.order:write` Y en borrador, con
 -- el estado dentro de la política y ninguna otra condición (ningún `OR`), y
@@ -2553,6 +2586,50 @@ SELECT pg_temp.expect_fail_like(123, 'Pedido draft se edita y avanza por la máq
        WHERE id = '12012012-0000-0000-0000-000000000120';
       UPDATE app.sale_orders SET status = 'refunded'
        WHERE id = '12012012-0000-0000-0000-000000000120';
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+-- 124 ─ Un pedido con una seña enganchada no se borra: la FK
+-- `customer_deposits.sale_order_id` es RESTRICT y no SET NULL. Una seña existe
+-- antes del cobro, así que un borrador puede tener una; con SET NULL, borrarlo
+-- la desenganchaba en silencio (revisión cruzada de B11d). Para borrarlo hay
+-- que desvincularla a propósito. Rechaza como superusuario: es la FK, no RLS.
+SELECT pg_temp.expect_fail_like(124, 'Borrar un borrador con una seña enganchada',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.sale_orders (id, tenant_id, channel_id, code, status)
+      VALUES ('12412412-0000-0000-0000-000000000124', '11111111-1111-1111-1111-111111111111',
+              'bbbbbbbb-0000-0000-0000-000000000001', 'VTA-INV-124', 'draft');
+      INSERT INTO app.customer_deposits (tenant_id, customer_id, amount_pyg, sale_order_id)
+      VALUES ('11111111-1111-1111-1111-111111111111', 'aaaaaaaa-0000-0000-0000-000000000001',
+              100000, '12412412-0000-0000-0000-000000000124');
+      DELETE FROM app.sale_orders WHERE id = '12412412-0000-0000-0000-000000000124';
+    END $x$
+  $$,
+  '%customer_deposits_sale_order_id_fkey%');
+
+-- 125 ─ Control positivo de 124: un borrador SIN seña se borra, y uno con la
+-- seña ya desvinculada también. Sin esto, una FK que rechazara todo borrado
+-- de pedidos pasaría el anterior.
+SELECT pg_temp.expect_fail_like(125, 'Borrar un borrador sin seña, o con la seña desvinculada',
+  $$DO $x$
+    DECLARE
+      v_deposit uuid;
+    BEGIN
+      INSERT INTO app.sale_orders (id, tenant_id, channel_id, code, status)
+      VALUES ('12512512-0000-0000-0000-000000000125', '11111111-1111-1111-1111-111111111111',
+              'bbbbbbbb-0000-0000-0000-000000000001', 'VTA-INV-125', 'draft'),
+             ('12512512-0000-0000-0000-000000000126', '11111111-1111-1111-1111-111111111111',
+              'bbbbbbbb-0000-0000-0000-000000000001', 'VTA-INV-126', 'draft');
+      DELETE FROM app.sale_orders WHERE id = '12512512-0000-0000-0000-000000000125';
+      INSERT INTO app.customer_deposits (tenant_id, customer_id, amount_pyg, sale_order_id)
+      VALUES ('11111111-1111-1111-1111-111111111111', 'aaaaaaaa-0000-0000-0000-000000000001',
+              100000, '12512512-0000-0000-0000-000000000126')
+      RETURNING id INTO v_deposit;
+      UPDATE app.customer_deposits SET sale_order_id = NULL WHERE id = v_deposit;
+      DELETE FROM app.sale_orders WHERE id = '12512512-0000-0000-0000-000000000126';
       RAISE EXCEPTION 'aceptado';
     END $x$
   $$,

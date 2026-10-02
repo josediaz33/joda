@@ -45,12 +45,34 @@ export function appError(
 // Familias de docs/api-conventions.md §4.2: un CHECK/UNIQUE/FK roto es
 // CONFLICT_* (409, "estado incompatible"), no VALIDATION_* (eso es un 400 de
 // entrada mal formada, que ya rechaza Zod antes de llegar a la base).
+// Una FK puede romperse al INSERTAR (el registro referenciado no existe) o al
+// BORRAR (algo todavía lo referencia con RESTRICT). El mensaje genérico solo
+// describe lo primero; una FK que se rompe al borrar a propósito, para que
+// borrar no pierda nada en silencio, tiene el suyo, por el nombre de la
+// restricción (`PgError.constraint`).
+const FOREIGN_KEY_MESSAGES: Record<string, ApiError> = {
+  // customer_deposits.sale_order_id es RESTRICT desde WP-B11d (0034): una seña
+  // existe antes del cobro, y borrar el borrador la desenganchaba en silencio.
+  customer_deposits_sale_order_id_fkey: appError(
+    "CONFLICT_ORDER_HAS_DEPOSIT",
+    409,
+    "No se puede borrar el pedido porque tiene una seña asociada. Desvinculá la seña del pedido y volvé a intentarlo.",
+  ),
+};
+
+function mapForeignKeyViolation(error: PgError): ApiError {
+  const specific = error.constraint ? FOREIGN_KEY_MESSAGES[error.constraint] : undefined;
+  return (
+    specific ??
+    appError("CONFLICT_FOREIGN_KEY", 409, "El registro referenciado no existe o fue eliminado.")
+  );
+}
+
 const PG_ERROR_MAP: Record<string, (error: PgError) => ApiError> = {
   "23514": () =>
     appError("CONFLICT_CHECK_VIOLATION", 409, "Los datos no cumplen una restricción del sistema."),
   "23505": () => appError("CONFLICT_DUPLICATE", 409, "Ya existe un registro con esos datos."),
-  "23503": () =>
-    appError("CONFLICT_FOREIGN_KEY", 409, "El registro referenciado no existe o fue eliminado."),
+  "23503": mapForeignKeyViolation,
   "2F004": () =>
     appError(
       "CONFLICT_IMMUTABLE_LEDGER",
