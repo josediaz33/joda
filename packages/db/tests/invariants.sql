@@ -407,12 +407,13 @@ SELECT pg_temp.expect_true(28,
   ));
 
 -- 29 ─ Toda función de disparador de app.* es SECURITY DEFINER, salvo las
--- dos que no leen ninguna tabla. Una función de invariante SECURITY
--- INVOKER lee con los permisos de quien dispara el trigger: si RLS le
--- oculta la fila, decide sobre un NULL (el defecto de B10 y de B09). Una
--- función nueva que lea tablas y no esté en esta lista hace fallar esto.
+-- tres que no leen ninguna tabla (`guard_po_no_return_to_draft`, WP-B11,
+-- lee solo OLD y NEW). Una función de invariante SECURITY INVOKER lee con
+-- los permisos de quien dispara el trigger: si RLS le oculta la fila, decide
+-- sobre un NULL (el defecto de B10 y de B09). Una función nueva que lea
+-- tablas y no esté en esta lista hace fallar esto.
 SELECT pg_temp.expect_true(29,
-  'Toda función de disparador de app.* es SECURITY DEFINER, salvo set_updated_at/guard_append_only',
+  'Toda función de disparador de app.* es SECURITY DEFINER, salvo set_updated_at/guard_append_only/guard_po_no_return_to_draft',
   NOT EXISTS (
     SELECT 1
       FROM pg_proc p
@@ -420,7 +421,8 @@ SELECT pg_temp.expect_true(29,
      WHERE n.nspname = 'app'
        AND p.prorettype = 'trigger'::regtype
        AND NOT p.prosecdef
-       AND p.proname NOT IN ('set_updated_at', 'guard_append_only')
+       AND p.proname NOT IN ('set_updated_at', 'guard_append_only',
+                             'guard_po_no_return_to_draft')
   ));
 
 -- 30 ─ El dueño de toda función SECURITY DEFINER de app.* elude RLS. Una
@@ -1763,6 +1765,316 @@ SELECT pg_temp.expect_fail_like(90, 'El mismo número de serie en dos tenants di
               '55555555-0000-0000-0000-00000000a001', 'SN-INV-89'),
              ('89898989-0000-0000-0000-000000000089',
               '89898989-0000-0000-0000-0000000000b1', 'SN-INV-89');
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+-- WP-B11 (0030_write_permissions_sensitive_tables.sql): escribir en
+-- suppliers, purchase_orders, inventory_lots, chart_of_accounts y
+-- customer_deposits exige el permiso de escritura, no solo tenant.
+-- Propiedades del catálogo y de la matriz sembrada; el comportamiento, con
+-- cada rol conectado como joda_api, lo prueba write_permissions.test.ts.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Los invariantes 91 a 93 leen el TEXTO de las políticas (pg_get_expr): no
+-- pueden probar que la política haga lo que dice, solo que no se la reemplazó
+-- por una que ni lo intenta. Que lo haga lo prueba, con cada rol conectado
+-- como joda_api, write_permissions.test.ts.
+
+-- 91 ─ Toda política permisiva de escritura (INSERT, UPDATE, DELETE o ALL)
+-- de esas cinco tablas exige un permiso, y cada una tiene las de INSERT y
+-- UPDATE. Con la `tenant_access_*` con `true` de 0016 la escritura vuelve a
+-- pedir solo tenant; un `true OR has_permission(..)` tampoco cuenta como
+-- exigir un permiso. El nombre lista las políticas culpables y las tablas a
+-- las que les falta la de INSERT o la de UPDATE.
+WITH sensibles(tabla) AS (
+  VALUES ('suppliers'), ('purchase_orders'), ('inventory_lots'),
+         ('chart_of_accounts'), ('customer_deposits')
+), politicas AS (
+  SELECT c.relname AS tabla, p.polname, p.polcmd,
+         COALESCE(pg_get_expr(p.polqual, p.polrelid), '')
+           || ' ' || COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN sensibles s ON s.tabla = c.relname
+   WHERE n.nspname = 'app' AND p.polpermissive AND p.polcmd IN ('a', 'w', 'd', '*')
+), sin_permiso AS (
+  SELECT tabla || '.' || polname AS descripcion
+    FROM politicas
+   WHERE expresion NOT LIKE '%has_permission(%' OR expresion ~ '\mtrue\M'
+), falta AS (
+  SELECT s.tabla || CASE c.cmd WHEN 'a' THEN ' (INSERT)' ELSE ' (UPDATE)' END AS descripcion
+    FROM sensibles s
+   CROSS JOIN (VALUES ('a'::"char"), ('w'::"char")) AS c(cmd)
+   WHERE NOT EXISTS (SELECT 1 FROM politicas p WHERE p.tabla = s.tabla AND p.polcmd = c.cmd)
+)
+SELECT pg_temp.expect_true(91,
+  'Escribir en las tablas sensibles exige un permiso, no solo tenant'
+    || COALESCE(' — sin permiso: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sin_permiso), '')
+    || COALESCE(' — sin política: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM falta), ''),
+  NOT EXISTS (SELECT 1 FROM sin_permiso) AND NOT EXISTS (SELECT 1 FROM falta));
+
+-- 92 ─ Ninguna política permisiva de esas tablas es FOR ALL. Un FOR ALL
+-- también cubre SELECT: quien puede escribir leería la tabla entera aunque
+-- no tenga el permiso de leer, y con él se abre la lectura de costos y
+-- proveedores. Una política por comando. El nombre lista las culpables.
+WITH for_all AS (
+  SELECT c.relname || '.' || p.polname AS descripcion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app'
+     AND c.relname IN ('suppliers', 'purchase_orders', 'inventory_lots',
+                       'chart_of_accounts', 'customer_deposits')
+     AND p.polpermissive
+     AND p.polcmd = '*'
+)
+SELECT pg_temp.expect_true(92,
+  'Ninguna política de permiso de las tablas sensibles es FOR ALL'
+    || COALESCE(' — FOR ALL: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM for_all), ''),
+  NOT EXISTS (SELECT 1 FROM for_all));
+
+-- 93 ─ Nadie borra lotes, señas, cuentas ni proveedores: sin política
+-- permisiva de DELETE. En purchase_orders hay una sola, con
+-- `market.purchase_order:write` Y el estado `draft` dentro de la política:
+-- el DELETE directo de una orden enviada no pasa aunque quien lo intenta
+-- tenga el permiso. Que `draft` signifique "nunca enviada" lo sostiene el
+-- trigger de 0031 (invariantes 95-103), no esta política. El nombre lista las
+-- políticas de DELETE que sobran, o avisa que la de órdenes no es la esperada.
+WITH borrado AS (
+  SELECT c.relname AS tabla, p.polname,
+         COALESCE(pg_get_expr(p.polqual, p.polrelid), '') AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app'
+     AND c.relname IN ('suppliers', 'purchase_orders', 'inventory_lots',
+                       'chart_of_accounts', 'customer_deposits')
+     AND p.polpermissive
+     AND p.polcmd IN ('d', '*')
+), sobran AS (
+  SELECT tabla || '.' || polname AS descripcion FROM borrado WHERE tabla <> 'purchase_orders'
+), orden_ok AS (
+  SELECT count(*) AS n
+    FROM borrado
+   WHERE tabla = 'purchase_orders'
+     AND expresion LIKE '%market.purchase_order:write%'
+     AND expresion LIKE '%(status = ''draft''%'
+     AND expresion NOT LIKE '% OR %'
+)
+SELECT pg_temp.expect_true(93,
+  'Sin DELETE en lotes, señas, cuentas y proveedores; en órdenes de compra, solo borradores'
+    || COALESCE(' — DELETE que sobra: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sobran), '')
+    || CASE WHEN (SELECT n FROM orden_ok) = 1
+             AND (SELECT count(*) FROM borrado WHERE tabla = 'purchase_orders') = 1
+            THEN '' ELSE ' — la política de DELETE de purchase_orders no es la esperada' END,
+  NOT EXISTS (SELECT 1 FROM sobran)
+  AND (SELECT n FROM orden_ok) = 1
+  AND (SELECT count(*) FROM borrado WHERE tabla = 'purchase_orders') = 1);
+
+-- 94 ─ En los roles sembrados (`is_system`, de cualquier tenant), todo
+-- permiso de escritura de esas tablas viene con el de lectura de la MISMA
+-- tabla. Con RLS, INSERT ... RETURNING y los UPDATE o DELETE que leen
+-- columnas evalúan también la política de lectura: un rol que escribe sin
+-- leer recibe 42501 en el INSERT de Prisma y cero filas en el UPDATE, sin un
+-- error que explique por qué (el vendedor, que registra señas con
+-- accounting.deposit:write y no tenía :read). Única excepción, registrada
+-- para WP-C15: depósito recibe (market.purchase_order:receive) sin leer
+-- órdenes de compra; carga la recepción en borrador y la contabiliza quien
+-- las lee. Si C15 la resuelve, se quita de acá. Los roles que crea un
+-- administrador no entran: validar el par al crearlos es de WP-C24.
+WITH par(tabla, escribe, lee) AS (
+  VALUES
+    ('suppliers',         'market.supplier:write',         'market.supplier:read'),
+    ('purchase_orders',   'market.purchase_order:write',   'market.purchase_order:read'),
+    ('purchase_orders',   'market.purchase_order:approve', 'market.purchase_order:read'),
+    ('purchase_orders',   'market.purchase_order:receive', 'market.purchase_order:read'),
+    ('inventory_lots',    'market.purchase_order:receive', 'inventory.stock:read'),
+    ('inventory_lots',    'inventory.decant:execute',      'inventory.stock:read'),
+    ('inventory_lots',    'sales.order:refund',            'inventory.stock:read'),
+    ('inventory_lots',    'inventory.stock:adjust',        'inventory.stock:read'),
+    ('chart_of_accounts', 'accounting.journal:write',      'accounting.journal:read'),
+    ('customer_deposits', 'accounting.deposit:write',      'accounting.deposit:read')
+), roles_sembrados AS (
+  SELECT id, code, tenant_id FROM app.roles WHERE is_system
+), escribe_sin_leer AS (
+  SELECT r.code || ' (' || left(r.tenant_id::text, 8) || ') → ' || p.tabla
+           || ' (' || p.escribe || ')' AS descripcion
+    FROM roles_sembrados r
+    JOIN app.role_permissions w ON w.role_id = r.id
+    JOIN par p ON p.escribe = w.permission_code
+   WHERE NOT EXISTS (SELECT 1 FROM app.role_permissions l
+                      WHERE l.role_id = r.id AND l.permission_code = p.lee)
+     AND NOT (r.code = 'deposito' AND p.tabla = 'purchase_orders'
+              AND p.escribe = 'market.purchase_order:receive')
+)
+SELECT pg_temp.expect_true(94,
+  'Ningún rol sembrado escribe en una tabla sensible sin poder leerla (salvo depósito en órdenes, WP-C15)'
+    || COALESCE(' — escriben sin leer: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM escribe_sin_leer), ''),
+  (SELECT count(*) FROM roles_sembrados) >= 4 AND NOT EXISTS (SELECT 1 FROM escribe_sin_leer));
+
+
+-- WP-B11 (0031_purchase_order_no_return_to_draft.sql, ADR-026): una orden de
+-- compra no vuelve a `draft` ni a `pending_approval` desde `approved` en
+-- adelante. La política de DELETE de 0030 lee `status = 'draft'` como "nunca
+-- enviada"; sin este guarda, un UPDATE a `draft` y un DELETE la eludían en
+-- dos pasos, y pasando antes por `pending_approval`, en tres. Estos nueve
+-- prueban el COMPORTAMIENTO del trigger, no el texto de ninguna política.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 95 ─ Una orden `approved` no vuelve a borrador.
+SELECT pg_temp.expect_fail_like(95, 'Orden de compra approved vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('95959595-0000-0000-0000-000000000095', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-95', 'approved', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      UPDATE app.purchase_orders SET status = 'draft'
+       WHERE id = '95959595-0000-0000-0000-000000000095';
+    END $x$
+  $$,
+  'La orden de compra 95959595-0000-0000-0000-000000000095 está en approved y no puede volver a draft%');
+
+-- 96 ─ Una orden `sent` no vuelve a borrador (el rodeo de la revisión de B11).
+SELECT pg_temp.expect_fail_like(96, 'Orden de compra sent vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('96969696-0000-0000-0000-000000000096', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-96', 'sent', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      UPDATE app.purchase_orders SET status = 'draft'
+       WHERE id = '96969696-0000-0000-0000-000000000096';
+    END $x$
+  $$,
+  'La orden de compra 96969696-0000-0000-0000-000000000096 está en sent y no puede volver a draft%');
+
+-- 97 ─ Una orden `partially_received` no vuelve a borrador.
+SELECT pg_temp.expect_fail_like(97, 'Orden de compra partially_received vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('97979797-0000-0000-0000-000000000097', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-97', 'partially_received', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      UPDATE app.purchase_orders SET status = 'draft'
+       WHERE id = '97979797-0000-0000-0000-000000000097';
+    END $x$
+  $$,
+  'La orden de compra 97979797-0000-0000-0000-000000000097 está en partially_received y no puede volver a draft%');
+
+-- 98 ─ Una orden `received` no vuelve a borrador. El terminal sigue siendo
+-- del dominio (ADR-026): esto guarda solo la ENTRADA a `draft`.
+SELECT pg_temp.expect_fail_like(98, 'Orden de compra received vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('98989898-0000-0000-0000-000000000098', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-98', 'received', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      UPDATE app.purchase_orders SET status = 'draft'
+       WHERE id = '98989898-0000-0000-0000-000000000098';
+    END $x$
+  $$,
+  'La orden de compra 98989898-0000-0000-0000-000000000098 está en received y no puede volver a draft%');
+
+-- 99 ─ Una orden `cancelled` no vuelve a borrador.
+SELECT pg_temp.expect_fail_like(99, 'Orden de compra cancelled vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency, created_by)
+      VALUES ('99999999-0000-0000-0000-000000000199', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-99', 'cancelled', 'USD',
+              '22222222-2222-2222-2222-222222222222');
+      UPDATE app.purchase_orders SET status = 'draft'
+       WHERE id = '99999999-0000-0000-0000-000000000199';
+    END $x$
+  $$,
+  'La orden de compra 99999999-0000-0000-0000-000000000199 está en cancelled y no puede volver a draft%');
+
+-- 100 ─ Control positivo de 95-99: una orden en `pending_approval` SÍ vuelve
+-- a borrador (la arista de la máquina de A08: el aprobador la devuelve a
+-- corregir), y un borrador se edita sin salir de `draft`. Sin esto, un
+-- trigger que rechazara todo `draft` pasaría los cinco anteriores.
+SELECT pg_temp.expect_fail_like(100, 'Orden de compra pending_approval vuelve a draft',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency, created_by)
+      VALUES ('10001000-0000-0000-0000-000000000100', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-100', 'pending_approval', 'USD',
+              '22222222-2222-2222-2222-222222222222');
+      UPDATE app.purchase_orders SET status = 'draft'
+       WHERE id = '10001000-0000-0000-0000-000000000100';
+      UPDATE app.purchase_orders SET status = 'draft', notes = 'corregida'
+       WHERE id = '10001000-0000-0000-0000-000000000100';
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+
+-- 101 ─ Una orden `approved` no vuelve a `pending_approval`. Es el primer
+-- paso del rodeo de tres: `approved → pending_approval → draft → DELETE`.
+-- Guardar solo la entrada a `draft` lo dejaba abierto: `pending_approval` es
+-- el otro estado previo a la aprobación, y desde él se llega a `draft`.
+SELECT pg_temp.expect_fail_like(101, 'Orden de compra approved vuelve a pending_approval',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('10110110-0000-0000-0000-000000000101', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-101', 'approved', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      UPDATE app.purchase_orders SET status = 'pending_approval'
+       WHERE id = '10110110-0000-0000-0000-000000000101';
+    END $x$
+  $$,
+  'La orden de compra 10110110-0000-0000-0000-000000000101 está en approved y no puede volver a pending_approval%');
+
+-- 102 ─ Una orden `sent` no vuelve a `pending_approval`.
+SELECT pg_temp.expect_fail_like(102, 'Orden de compra sent vuelve a pending_approval',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('10210210-0000-0000-0000-000000000102', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-102', 'sent', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      UPDATE app.purchase_orders SET status = 'pending_approval'
+       WHERE id = '10210210-0000-0000-0000-000000000102';
+    END $x$
+  $$,
+  'La orden de compra 10210210-0000-0000-0000-000000000102 está en sent y no puede volver a pending_approval%');
+
+-- 103 ─ Control positivo de 101 y 102: el camino hacia adelante sigue andando.
+-- Un borrador pasa a `pending_approval` y de ahí a `approved` (con la
+-- constancia de quién aprobó, que exige `po_approved_has_approver`). Sin
+-- esto, un trigger que rechazara todo cambio de estado pasaría 95-102.
+SELECT pg_temp.expect_fail_like(103, 'Orden de compra draft avanza a pending_approval y a approved',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency, created_by)
+      VALUES ('10310310-0000-0000-0000-000000000103', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-103', 'draft', 'USD',
+              '22222222-2222-2222-2222-222222222222');
+      UPDATE app.purchase_orders SET status = 'pending_approval'
+       WHERE id = '10310310-0000-0000-0000-000000000103';
+      UPDATE app.purchase_orders
+         SET status = 'approved',
+             approved_by = '22222222-2222-2222-2222-222222222222', approved_at = now()
+       WHERE id = '10310310-0000-0000-0000-000000000103';
       RAISE EXCEPTION 'aceptado';
     END $x$
   $$,
