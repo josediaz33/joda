@@ -362,7 +362,6 @@ export interface InsertVariantInput {
   readonly productionMode?: string;
   readonly sourceVariantId: string | null;
   readonly isSerialized?: boolean;
-  readonly onlineVisible?: boolean;
   readonly minStockAlert: number | null;
   readonly weightG: number | null;
   readonly position?: number;
@@ -386,7 +385,6 @@ export async function insertVariantRow(tx: TenantTx, input: InsertVariantInput):
         Prisma.product_variantsCreateInput["production_mode"] | undefined,
       source_variant_id: input.sourceVariantId,
       is_serialized: input.isSerialized,
-      online_visible: input.onlineVisible,
       min_stock_alert: input.minStockAlert,
       weight_g: input.weightG,
       position: input.position,

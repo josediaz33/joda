@@ -183,6 +183,9 @@ export type AdminVariant = z.infer<typeof adminVariantSchema>;
 const VARIANTS_WITH_SIZE = new Set<VariantType>(["sealed", "decant", "tester"]);
 const VARIANTS_IN_ML = new Set<VariantType>(["decant", "bulk"]);
 
+// onlineVisible queda fuera de create/update: esos procedimientos exigen
+// catalog.product:write. La visibilidad se administrará bajo
+// catalog.product:publish (RF-CAT-09), nunca como campo de edición común.
 // Mismos CHECK de product_variants (packages/db/migrations/0003_catalog.sql,
 // líneas 174-183) validados en la frontera para devolver VALIDATION_* con un
 // mensaje claro en vez de dejar que Postgres los rechace como
@@ -203,7 +206,6 @@ export const createVariantInput = z
     productionMode: productionModeSchema.optional(),
     sourceVariantId: idSchema.nullable().optional(),
     isSerialized: z.boolean().optional(),
-    onlineVisible: z.boolean().optional(),
     minStockAlert: z.number().nonnegative().nullable().optional(),
     weightG: z.number().positive().nullable().optional(),
     position: z.number().int().optional(),
@@ -248,7 +250,6 @@ export const updateVariantInput = z
     productionMode: productionModeSchema.optional(),
     sourceVariantId: idSchema.nullable().optional(),
     isSerialized: z.boolean().optional(),
-    onlineVisible: z.boolean().optional(),
     minStockAlert: z.number().nonnegative().nullable().optional(),
     weightG: z.number().positive().nullable().optional(),
     position: z.number().int().optional(),
@@ -523,6 +524,10 @@ export const createProductInput = z
   });
 export type CreateProductInput = z.infer<typeof createProductInput>;
 
+// `status` tampoco viaja por este procedimiento: catalog.product.update solo
+// exige catalog.product:write y no debe activar una ficha que ya tenga
+// published_at. La transición de publicación tendrá un procedimiento propio
+// protegido por catalog.product:publish (RF-CAT-09).
 // A diferencia de create, update NO redeclara `kind`: la vertical es fija
 // (ver el comentario de arriba de adminProductSchema). El service rechaza
 // perfumeDetails/watchDetails/accessoryDetails que no correspondan a la
@@ -535,7 +540,6 @@ export const updateProductInput = z
     name: z.string().min(1).optional(),
     description: z.string().nullable().optional(),
     brandId: idSchema.nullable().optional(),
-    status: z.enum(["draft", "active"]).optional(),
     seo: jsonRecordSchema.optional(),
     categoryIds: z.array(idSchema).min(1).optional(),
     primaryCategoryId: idSchema.optional(),

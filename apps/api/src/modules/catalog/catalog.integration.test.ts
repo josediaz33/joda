@@ -339,6 +339,21 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       pricePyg: "0",
     });
 
+    const forbiddenBulkVisibility = await mutate("catalog.variant.update", {
+      id: bulk.id,
+      onlineVisible: true,
+    });
+    expect(forbiddenBulkVisibility.statusCode).toBe(400);
+    await testDb.superuserClient.query(
+      `UPDATE app.product_variants SET online_visible = true WHERE id = $1`,
+      [bulk.id],
+    );
+    const repairedBulk = await mutateOk<{ onlineVisible: boolean }>("catalog.variant.update", {
+      id: bulk.id,
+      sku: "LAYTON-125-GRANEL",
+    });
+    expect(repairedBulk.onlineVisible).toBe(false);
+
     const decant = await mutateOk<{
       id: string;
       variantType: string;
@@ -589,6 +604,15 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(updated.name).toBe("Eros Intense");
     expect(updated.perfumeDetails?.concentration).toBe("parfum");
     expect(updated.facets.concentration).toBe("parfum");
+
+    const forbiddenActivation = await mutate("catalog.product.update", {
+      id: product.id,
+      status: "active",
+    });
+    expect(forbiddenActivation.statusCode).toBe(400);
+    expect(
+      (await call<{ status: string }>("catalog.product.byId", { id: product.id })).status,
+    ).toBe("draft");
 
     const wrongVertical = await mutate("catalog.product.update", {
       id: product.id,

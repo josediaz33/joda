@@ -251,7 +251,7 @@ describe("docs/frontend-spec.md §9 · importes de variantes (WP-E05)", () => {
 });
 
 describe("GLOSARIO.md · el granel no se vende directo (WP-E05)", () => {
-  it("oculta la opción de venta en línea y envía false al crear granel", async () => {
+  it("no ofrece publicación ni envía onlineVisible al crear granel", async () => {
     vi.mocked(api.createVariant).mockResolvedValue({ id: "saved" } as Awaited<
       ReturnType<typeof api.createVariant>
     >);
@@ -260,7 +260,6 @@ describe("GLOSARIO.md · el granel no se vende directo (WP-E05)", () => {
       <CreateVariantForm productId="22222222-2222-4222-a222-222222222222" onSaved={vi.fn()} />,
     );
 
-    await user.click(screen.getByRole("checkbox", { name: "Visible en línea" }));
     await user.selectOptions(screen.getByLabelText("Presentación"), "bulk");
     expect(screen.queryByRole("checkbox", { name: "Visible en línea" })).toBeNull();
     await user.type(screen.getByLabelText("SKU *"), "GRANEL-01");
@@ -269,12 +268,13 @@ describe("GLOSARIO.md · el granel no se vende directo (WP-E05)", () => {
 
     await waitFor(() =>
       expect(api.createVariant).toHaveBeenCalledWith(
-        expect.objectContaining({ variantType: "bulk", onlineVisible: false }),
+        expect.objectContaining({ variantType: "bulk" }),
       ),
     );
+    expect(vi.mocked(api.createVariant).mock.calls[0]?.[0]).not.toHaveProperty("onlineVisible");
   });
 
-  it("corrige un granel que ya tenía visibilidad al editarlo", async () => {
+  it("no ofrece publicación al editar un granel que ya tenía visibilidad", async () => {
     vi.mocked(api.updateVariant).mockResolvedValue({ id: "saved" } as Awaited<
       ReturnType<typeof api.updateVariant>
     >);
@@ -299,10 +299,7 @@ describe("GLOSARIO.md · el granel no se vende directo (WP-E05)", () => {
 
     expect(screen.queryByRole("checkbox", { name: "Visible en línea" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Guardar variante" }));
-    await waitFor(() =>
-      expect(api.updateVariant).toHaveBeenCalledWith(
-        expect.objectContaining({ onlineVisible: false }),
-      ),
-    );
+    await waitFor(() => expect(api.updateVariant).toHaveBeenCalled());
+    expect(vi.mocked(api.updateVariant).mock.calls[0]?.[0]).not.toHaveProperty("onlineVisible");
   });
 });
