@@ -163,17 +163,21 @@ Los cuatro permisos de los lotes son el mapeo que aprobó José el 2026-09-25: r
 
 Quien escribe estas tablas se da permisos: si bastara con el tenant, B11 entero se anularía con un `INSERT` en `role_permissions`. Desde 0033, en `roles`, `role_permissions` y `staff_user_roles`, INSERT, UPDATE y DELETE exigen `settings.user:write`, una política por comando.
 
-| Tabla              | INSERT                                            | UPDATE                | DELETE                |
-| ------------------ | ------------------------------------------------- | --------------------- | --------------------- |
-| `roles`            | `settings.user:write`, y la fila no es de sistema | `settings.user:write` | `settings.user:write` |
-| `role_permissions` | `settings.user:write`                             | `settings.user:write` | `settings.user:write` |
-| `staff_user_roles` | `settings.user:write`                             | `settings.user:write` | `settings.user:write` |
+| Tabla              | INSERT                                            | UPDATE                  | DELETE                |
+| ------------------ | ------------------------------------------------- | ----------------------- | --------------------- |
+| `roles`            | `settings.user:write`, y la fila no es de sistema | `settings.user:write`   | `settings.user:write` |
+| `role_permissions` | `settings.user:write`, y el rol no es de sistema  | ídem (origen y destino) | ídem                  |
+| `staff_user_roles` | `settings.user:write`                             | `settings.user:write`   | `settings.user:write` |
 
 **La lectura no cambia: sigue por tenant.** La API lee `role_permissions` y `staff_user_roles` como `joda_api`, bajo RLS, para resolver los permisos de cada sesión (`getGrantedPermissionCodes`), y el vendedor no tiene `settings.user:read`. Exigirlo para leer rompería el login de todos. Por eso la trampa de la lectura de arriba no aplica: quien escribe estas tablas siempre puede leerlas. El invariante 104 verifica las dos mitades: la escritura exige el permiso, la lectura no.
 
 **Los roles de sistema (`is_system`) no se borran ni se renombran, por nadie.** `trg_system_roles_guard` rechaza (`23514`) borrar un rol de sistema, cambiarle el `name` o el `code`, y cambiar la marca `is_system` en cualquier sentido; la política de INSERT exige `NOT is_system`. Es un trigger y no una política porque «por nadie» incluye al superusuario y a `service_role`, que eluden RLS. Sin él, quien pudiera borrar roles borraría el de dueño. Lee solo `OLD` y `NEW` y no es `SECURITY DEFINER` (invariante 29). Detalle en `docs/data-model.md` §4.7.
 
-**Lo que el WP no cierra.** Quien tiene `settings.user:write` edita las `role_permissions` y las asignaciones de un rol de sistema (por ejemplo, quitarle todo al dueño): se congela la fila del rol, no sus permisos. `permissions`, el catálogo global, no tiene RLS y `joda_api` puede escribirlo. Ambos están anotados en `docs/backlog.md` (WP-B11c).
+**Los permisos de un rol de sistema no se modifican desde la API.** `role_permissions` de un rol `is_system` no admite INSERT, UPDATE ni DELETE por `joda_api`: las tres políticas exigen, además del permiso, que el rol no sea de sistema (el UPDATE, en la fila de origen y en la de destino, para que no se mueva un permiso hacia uno). Esos permisos son la matriz de §2.1 y se cambian por el seed, que corre como superusuario. Sin esto, el dueño se vaciaba su propio rol con un `DELETE` y quedaba tan bloqueado como si lo hubiera borrado. Es solo RLS: el ETL (`service_role`) y el seed la eluden. El invariante 113 lo verifica por el texto de las políticas y `write_permissions.test.ts`, por comportamiento.
+
+**El catálogo `permissions` lo carga el seed, no la API.** `joda_api` no tiene INSERT, UPDATE ni DELETE sobre él (`REVOKE` de 0033); conserva SELECT. Como no tiene RLS ni `tenant_id` (es global, 0014), el único freno era el privilegio: un `DELETE` de un vendedor del tenant A borraba por cascada las `role_permissions` de todos los tenants. El invariante 111 lo verifica, incluidos los privilegios de columna y los heredados de PUBLIC.
+
+**Lo que el WP no cierra.** La asignación del rol de dueño: quien tiene `settings.user:write` puede borrar la fila de `staff_user_roles` del dueño. El rol está protegido como fila y como matriz, pero no su asignación. Es la regla del último dueño —nadie se quita el rol de dueño si es el único que lo tiene en el tenant—, criterio de WP-C24 (`docs/backlog.md`).
 
 **La condición que hace que esta capa exista de verdad:**
 

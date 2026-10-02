@@ -2258,6 +2258,64 @@ SELECT pg_temp.expect_fail_like(110, 'Rol personalizado se renombra y se borra',
   $$,
   'aceptado');
 
+-- 111 ─ `joda_api` no escribe el catálogo global `permissions`: ni INSERT,
+-- UPDATE, DELETE ni TRUNCATE sobre la tabla, ni INSERT o UPDATE sobre una
+-- columna (`has_table_privilege` no ve los privilegios por columna), ni por
+-- un GRANT a PUBLIC; y sigue leyéndolo. El catálogo lo carga el seed. Sin
+-- esto, un DELETE de un vendedor del tenant A borraba por cascada las
+-- `role_permissions` de TODOS los tenants (revisión cruzada de B11c).
+SELECT pg_temp.expect_true(111,
+  'joda_api lee el catálogo permissions y no lo escribe',
+  has_table_privilege('joda_api', 'app.permissions', 'SELECT')
+  AND NOT has_table_privilege('joda_api', 'app.permissions', 'INSERT')
+  AND NOT has_table_privilege('joda_api', 'app.permissions', 'UPDATE')
+  AND NOT has_table_privilege('joda_api', 'app.permissions', 'DELETE')
+  AND NOT has_table_privilege('joda_api', 'app.permissions', 'TRUNCATE')
+  AND NOT has_any_column_privilege('joda_api', 'app.permissions', 'INSERT')
+  AND NOT has_any_column_privilege('joda_api', 'app.permissions', 'UPDATE'));
+
+-- 112 ─ La política de INSERT de `roles` exige que el rol NO sea de sistema:
+-- un administrador no fabrica roles imborrables (con `is_system` el trigger
+-- impide borrarlos y renombrarlos). Lee el texto de la política; el
+-- comportamiento, como joda_api, lo prueba write_permissions.test.ts.
+WITH de_insert AS (
+  SELECT COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND c.relname = 'roles'
+     AND p.polpermissive AND p.polcmd = 'a'
+)
+SELECT pg_temp.expect_true(112,
+  'roles: la política de INSERT exige que el rol no sea de sistema',
+  (SELECT count(*) FROM de_insert) = 1
+  AND (SELECT count(*) FROM de_insert WHERE expresion LIKE '%NOT is_system%') = 1);
+
+-- 113 ─ Las políticas de escritura de `role_permissions` excluyen los roles
+-- de sistema: el INSERT y el UPDATE (el de destino también, para que no se
+-- mueva una fila hacia uno) y el DELETE. Sus permisos son la matriz de
+-- security-spec §2.1 y se cambian por el seed; sin esto, el dueño se vacía su
+-- propio rol con un DELETE (revisión cruzada de B11c). Lee el texto de las
+-- políticas; el comportamiento, como joda_api, lo prueba
+-- write_permissions.test.ts.
+WITH pol AS (
+  SELECT p.polcmd,
+         COALESCE(pg_get_expr(p.polqual, p.polrelid), '') AS usando,
+         COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') AS chequea
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND c.relname = 'role_permissions'
+     AND p.polpermissive AND p.polcmd IN ('a', 'w', 'd', '*')
+)
+SELECT pg_temp.expect_true(113,
+  'role_permissions: no se escribe un rol de sistema (INSERT, UPDATE y DELETE)',
+  EXISTS (SELECT 1 FROM pol WHERE polcmd = 'a' AND chequea LIKE '%is_system%')
+  AND EXISTS (SELECT 1 FROM pol WHERE polcmd = 'w'
+                 AND usando LIKE '%is_system%' AND chequea LIKE '%is_system%')
+  AND EXISTS (SELECT 1 FROM pol WHERE polcmd = 'd' AND usando LIKE '%is_system%')
+  AND NOT EXISTS (SELECT 1 FROM pol WHERE polcmd = '*'));
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'

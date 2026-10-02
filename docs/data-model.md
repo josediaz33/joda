@@ -175,7 +175,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 110: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 113: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -302,7 +302,9 @@ Los estados de los que la base impone que no se vuelva (ADR-026). El ADR guarda 
 - **Por qué congela también `is_system`.** Sin eso, bajar la marca y borrar el rol eran dos pasos: el rodeo que la revisión de B11 encontró con `draft`. La política de INSERT exige `NOT is_system`, así que tampoco se fabrican roles imborrables. `seed_roles` corre como dueño de las tablas (elude RLS) y los crea.
 - **Mecanismo.** Lee solo `OLD` y `NEW`: no es `SECURITY DEFINER` y el invariante 29 la admite por nombre. Compara con `IS DISTINCT FROM`. Fija `search_path = app, pg_temp`.
 - **Borrar un tenant** borraría por cascada sus roles de sistema y el trigger lo rechaza: ningún camino de producto lo hace (`staff_users.tenant_id` es `RESTRICT`) y quien lo necesite lo deshabilita a propósito.
-- **Verificación.** Invariantes 105 a 109 (borrar, renombrar por `name` y por `code`, bajar y subir `is_system`) y el control positivo 110, como superusuario. `write_permissions.test.ts` lo prueba como `joda_api` con el dueño, que SÍ tiene `settings.user:write`.
+- **Verificación.** Invariantes 105 a 109 (borrar, renombrar por `name` y por `code`, bajar y subir `is_system`) y el control positivo 110, como superusuario; el 112, que la política de INSERT de `roles` exija `NOT is_system`. `write_permissions.test.ts` lo prueba como `joda_api` con el dueño, que SÍ tiene `settings.user:write`.
+- **Sus permisos tampoco se tocan desde la API (RLS, no trigger).** Las políticas de escritura de `role_permissions` excluyen los roles de sistema (invariante 113), porque sin eso el dueño se vaciaba su propio rol con un `DELETE` y quedaba tan bloqueado como si lo hubiera borrado. Se cambian por el seed. Es solo RLS: el seed y el ETL la eluden.
+- **El catálogo `permissions` no lo escribe `joda_api`** (`REVOKE` de 0033, invariante 111).
 
 ---
 

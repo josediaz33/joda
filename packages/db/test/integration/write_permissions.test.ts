@@ -188,6 +188,35 @@ const COUNT_DEPOSITO_PERMISSIONS = `SELECT count(*)::int AS n FROM app.role_perm
   JOIN app.roles r ON r.id = rp.role_id
   WHERE r.tenant_id = '${REAL_TENANT_ID}' AND r.code = 'deposito'`;
 const COUNT_ROLE = (where: string) => `SELECT count(*)::int AS n FROM app.roles WHERE ${where}`;
+
+// Los permisos de los roles de sistema son la matriz de security-spec §2.1: los
+// cambia el seed, no la API. Del tenant real: dueño 28, encargado 27, vendedor 6,
+// depósito 5.
+const COUNT_OWNER_ROLE_PERMISSIONS = `SELECT count(*)::int AS n FROM app.role_permissions rp
+  JOIN app.roles r ON r.id = rp.role_id
+  WHERE r.tenant_id = '${REAL_TENANT_ID}' AND r.code = 'owner'`;
+const COUNT_SYSTEM_ROLE_PERMISSIONS = `SELECT count(*)::int AS n FROM app.role_permissions rp
+  JOIN app.roles r ON r.id = rp.role_id
+  WHERE r.tenant_id = '${REAL_TENANT_ID}' AND r.is_system`;
+const DELETE_OWNER_ROLE_PERMISSIONS = `DELETE FROM app.role_permissions
+  WHERE role_id = (SELECT id FROM app.roles WHERE ${OWNER_ROLE})`;
+const CAN_ADMINISTER_USERS = `SELECT app.has_permission('settings.user:write') AS ok`;
+const SELLER_ROLE_ID = `(SELECT id FROM app.roles
+  WHERE tenant_id = '${REAL_TENANT_ID}' AND code = 'vendedor')`;
+const INSERT_PERMISSION_INTO_SYSTEM_ROLE = `INSERT INTO app.role_permissions
+  (tenant_id, role_id, permission_code)
+  VALUES ('${REAL_TENANT_ID}', ${SELLER_ROLE_ID}, 'settings.user:write')`;
+const UPDATE_SYSTEM_ROLE_PERMISSION = `UPDATE app.role_permissions
+  SET permission_code = 'catalog.product:publish'
+  WHERE role_id = ${SELLER_ROLE_ID} AND permission_code = 'catalog.product:read'`;
+const MOVE_PERMISSION_TO_SYSTEM_ROLE = `UPDATE app.role_permissions
+  SET role_id = ${SELLER_ROLE_ID} WHERE role_id = '${TARGET_ROLE_ID}'`;
+
+const INSERT_PERMISSION = `INSERT INTO app.permissions (code, description)
+  VALUES ('b11c.prueba:read', 'Permiso de prueba')`;
+const UPDATE_PERMISSION = `UPDATE app.permissions SET description = 'editado'
+  WHERE code = 'catalog.product:read'`;
+const DELETE_PERMISSION = `DELETE FROM app.permissions WHERE code = 'catalog.product:read'`;
 // Las líneas del escenario llevan precios de proveedor, FX asumido y margen
 // proyectado: se leen con `market.sourcing:read` y se escriben con `:write`.
 const SELECT_SCENARIO_LINES = `SELECT unit_price_minor FROM app.sourcing_scenario_lines`;
@@ -1259,6 +1288,97 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
         );
 
         expect(rowCount).toBe(1);
+      });
+    });
+
+    // Revisión cruzada de B11c: el dueño, con `settings.user:write`, se vaciaba
+    // su propio rol con un DELETE (27 permisos en una sentencia) y quedaba tan
+    // bloqueado como si lo hubiera borrado. Los permisos de un rol de sistema son
+    // la matriz de security-spec §2.1 y los cambia el seed.
+    describe("los permisos de un rol de sistema no se modifican en tiempo de ejecución", () => {
+      it("el dueño no se vacía su propio rol: el DELETE afecta cero filas, conserva los 28 permisos y sigue administrando", async () => {
+        const { rowCount } = await as(owner, DELETE_OWNER_ROLE_PERMISSIONS);
+        const remaining = await countAsOwner(COUNT_OWNER_ROLE_PERMISSIONS);
+        const { rows } = await api.query(CAN_ADMINISTER_USERS);
+
+        expect({ deleted: rowCount, remaining, canAdminister: rows[0].ok }).toEqual({
+          deleted: 0,
+          remaining: 28,
+          canAdminister: true,
+        });
+      });
+
+      it("un DELETE sin WHERE del dueño solo alcanza a los roles personalizados: los de sistema conservan sus 66 permisos", async () => {
+        const { rowCount } = await as(owner, DELETE_ALL_ROLE_PERMISSIONS);
+        const remaining = await countAsOwner(COUNT_SYSTEM_ROLE_PERMISSIONS);
+
+        expect(rowCount).toBeGreaterThan(0);
+        expect(remaining).toBe(66);
+      });
+
+      it("el dueño no le agrega un permiso a un rol de sistema (42501)", async () => {
+        await expect(as(owner, INSERT_PERMISSION_INTO_SYSTEM_ROLE)).rejects.toMatchObject({
+          code: "42501",
+        });
+      });
+
+      it("el dueño no cambia un permiso de un rol de sistema: el UPDATE afecta cero filas", async () => {
+        const { rowCount } = await as(owner, UPDATE_SYSTEM_ROLE_PERMISSION);
+
+        expect(rowCount).toBe(0);
+      });
+
+      it("el dueño no mueve un permiso de un rol personalizado a uno de sistema (42501)", async () => {
+        await expect(as(owner, MOVE_PERMISSION_TO_SYSTEM_ROLE)).rejects.toMatchObject({
+          code: "42501",
+        });
+      });
+
+      it("quien administra usuarios sin ser dueño tampoco toca los permisos de un rol de sistema", async () => {
+        await expect(
+          as(custom.userAdmin, INSERT_PERMISSION_INTO_SYSTEM_ROLE),
+        ).rejects.toMatchObject({ code: "42501" });
+      });
+
+      // El seed y el ETL son el camino para cambiarlos, y siguen funcionando:
+      // corren como superusuario, que elude RLS.
+      it("el seed sí los siembra: seed_roles, como superusuario, es idempotente", async () => {
+        await db.client.query(`SELECT app.seed_roles('${REAL_TENANT_ID}')`);
+        const remaining = await countAsSuperuser(COUNT_SYSTEM_ROLE_PERMISSIONS);
+
+        expect(remaining).toBe(66);
+      });
+    });
+
+    // Revisión cruzada de B11c: `permissions` no tiene RLS y `joda_api` conservaba
+    // el GRANT general. Un vendedor del tenant A borró un código y las
+    // `role_permissions` de ambos tenants que lo tenían pasaron de 3 y 3 a 0.
+    describe("permissions: el catálogo global lo carga el seed, no la API", () => {
+      it.each([
+        ["INSERT", INSERT_PERMISSION],
+        ["UPDATE", UPDATE_PERMISSION],
+        ["DELETE", DELETE_PERMISSION],
+      ])(
+        "el dueño, que tiene todos los permisos, no puede hacer %s (42501)",
+        async (_verb, sql) => {
+          await expect(as(owner, sql)).rejects.toMatchObject({ code: "42501" });
+        },
+      );
+
+      it("el vendedor no puede borrar un código del catálogo (42501): no vacía los roles de ningún tenant", async () => {
+        await expect(as(seller, DELETE_PERMISSION)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      it("el owner de otro tenant tampoco (42501)", async () => {
+        await expect(as(peerOwner, DELETE_PERMISSION, PEER_TENANT_ID)).rejects.toMatchObject({
+          code: "42501",
+        });
+      });
+
+      it("joda_api sigue leyendo el catálogo: las 28 filas", async () => {
+        const { rows } = await as(seller, `SELECT count(*)::int AS n FROM app.permissions`);
+
+        expect(rows[0].n).toBe(28);
       });
     });
 

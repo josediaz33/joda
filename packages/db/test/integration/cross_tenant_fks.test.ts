@@ -183,13 +183,17 @@ const REJECTED_BEFORE_THE_FK: Record<string, { code: string; message: RegExp; wh
 // Un lote con movimientos no cambia de variante (la FK lote+variante de
 // los movimientos lo frena primero): se usa uno sin movimientos. Para
 // copiar un movimiento, uno de un lote disponible: el sellado abierto no
-// admite ninguno (RN-LOT-03).
+// admite ninguno (RN-LOT-03). Los permisos de un rol de sistema no se escriben
+// desde la API (WP-B11c, 0033): se usa la fila de un rol personalizado,
+// sembrada en beforeAll, para que lo único que pueda rechazar sea la FK.
 const ROW_FILTER: Record<string, string> = {
   inventory_lots:
     "NOT EXISTS (SELECT 1 FROM app.inventory_movements m WHERE m.lot_id = inventory_lots.id)",
   inventory_movements: "lot_id IN (SELECT id FROM app.inventory_lots WHERE status = 'available')",
   journal_entries: "status = 'draft'",
   journal_lines: "entry_id IN (SELECT id FROM app.journal_entries WHERE status = 'draft')",
+  role_permissions:
+    "NOT EXISTS (SELECT 1 FROM app.roles r WHERE r.id = role_permissions.role_id AND r.is_system)",
 };
 
 // Blanco propio para algunas FKs, clonado de una fila real que cumpla el
@@ -287,6 +291,16 @@ describe("toda FK entre tablas con tenant_id rechaza apuntar a otro tenant, como
     db = await startTestDb();
     await runSmokeBusinessFlow(db.client);
     await db.client.query(readFileSync(FIXTURE, "utf8"));
+
+    // WP-B11c: un rol personalizado con un permiso en el tenant real, para el
+    // UPDATE de `role_permissions` (ver ROW_FILTER).
+    await db.client.query(`
+      INSERT INTO app.roles (id, tenant_id, code, name)
+      VALUES ('b11c0000-0000-0000-0000-0000000000f1', '${REAL_TENANT_ID}', 'b11c-fk',
+              'Rol personalizado B11c');
+      INSERT INTO app.role_permissions (tenant_id, role_id, permission_code)
+      VALUES ('${REAL_TENANT_ID}', 'b11c0000-0000-0000-0000-0000000000f1', 'catalog.product:read');
+    `);
 
     const { rows } = await db.client.query<ForeignKey>(
       `SELECT ch.relname || '.' || a.attname AS key,
