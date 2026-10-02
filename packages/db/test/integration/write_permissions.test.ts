@@ -40,6 +40,9 @@ const LOT_ID = "b1100000-0000-0000-0000-0000000000c1";
 const NEW_LOT_ID = "b1100000-0000-0000-0000-0000000000c2";
 const DEPOSIT_ID = "b1100000-0000-0000-0000-0000000000e1";
 const SCENARIO_ID = "b1100000-0000-0000-0000-0000000000f1";
+// WP-B11c: un rol personalizado con un permiso y asignado a un usuario, para
+// que las pruebas lo editen, lo revoquen y lo borren sin tocar roles de sistema.
+const TARGET_ROLE_ID = "b1100000-0000-0000-0000-0000000000b1";
 const SCENARIO_LINE_ID = "b1100000-0000-0000-0000-0000000000f2";
 
 interface Actor {
@@ -56,6 +59,7 @@ const READ_ONLY = [
   "accounting.journal:read",
   "accounting.deposit:read",
   "market.sourcing:read",
+  "settings.user:read",
 ];
 const CUSTOM_ROLES = {
   // Lee todo lo sensible y no escribe nada.
@@ -86,6 +90,11 @@ const CUSTOM_ROLES = {
   // lectura) y, aparte, los lee y escribe.
   sourcingWriterNoRead: { n: 13, permissions: ["market.sourcing:write"] },
   sourcingEditor: { n: 14, permissions: ["market.sourcing:read", "market.sourcing:write"] },
+  // WP-B11c: administra usuarios y roles, con y sin el permiso de lectura de
+  // `settings.user`. Como el SELECT de las tres tablas es por tenant, la
+  // trampa de la lectura no existe: los dos escriben igual.
+  userAdmin: { n: 15, permissions: ["settings.user:read", "settings.user:write"] },
+  userAdminNoRead: { n: 16, permissions: ["settings.user:write"] },
 } as const;
 
 // Las denegaciones de un rol que tampoco LEE usan las formas que no
@@ -144,6 +153,70 @@ const UPDATE_ALL_SCENARIOS = `UPDATE app.sourcing_scenarios SET name = 'editado'
 const DELETE_SCENARIO = `DELETE FROM app.sourcing_scenarios WHERE id = '${SCENARIO_ID}'`;
 const DELETE_ALL_SCENARIOS = `DELETE FROM app.sourcing_scenarios`;
 
+// WP-B11c. `INSERT ... SELECT` y `WHERE role_id` leen `roles` y las otras dos
+// tablas: su SELECT es por tenant, así que ningún rol tiene la trampa de la
+// lectura y todas las operaciones valen con o sin `settings.user:read`.
+const INSERT_ROLE = `INSERT INTO app.roles (tenant_id, code, name)
+  VALUES ('${REAL_TENANT_ID}', 'b11c-nuevo', 'Rol B11c nuevo')`;
+const INSERT_SYSTEM_ROLE = `INSERT INTO app.roles (tenant_id, code, name, is_system)
+  VALUES ('${REAL_TENANT_ID}', 'b11c-sistema', 'Rol de sistema falso', true)`;
+const RENAME_TARGET_ROLE = `UPDATE app.roles SET name = 'renombrado' WHERE id = '${TARGET_ROLE_ID}'`;
+const RENAME_ALL_ROLES = `UPDATE app.roles SET name = 'renombrado'`;
+const DELETE_TARGET_ROLE = `DELETE FROM app.roles WHERE id = '${TARGET_ROLE_ID}'`;
+const DELETE_DEPOSITO_ROLE = `DELETE FROM app.roles
+  WHERE tenant_id = '${REAL_TENANT_ID}' AND code = 'deposito'`;
+const OWNER_ROLE = `tenant_id = '${REAL_TENANT_ID}' AND code = 'owner'`;
+const DELETE_OWNER_ROLE = `DELETE FROM app.roles WHERE ${OWNER_ROLE}`;
+const RENAME_OWNER_ROLE = `UPDATE app.roles SET name = 'Otro nombre' WHERE ${OWNER_ROLE}`;
+const RECODE_OWNER_ROLE = `UPDATE app.roles SET code = 'otro-codigo' WHERE ${OWNER_ROLE}`;
+const UNMARK_OWNER_ROLE = `UPDATE app.roles SET is_system = false WHERE ${OWNER_ROLE}`;
+
+const INSERT_ROLE_PERMISSION = `INSERT INTO app.role_permissions (tenant_id, role_id, permission_code)
+  VALUES ('${REAL_TENANT_ID}', '${TARGET_ROLE_ID}', 'catalog.product:write')`;
+const UPDATE_ROLE_PERMISSION = `UPDATE app.role_permissions SET permission_code = 'catalog.product:publish'
+  WHERE role_id = '${TARGET_ROLE_ID}' AND permission_code = 'catalog.product:read'`;
+const UPDATE_ALL_ROLE_PERMISSIONS = `UPDATE app.role_permissions SET permission_code = 'catalog.product:publish'`;
+const DELETE_ROLE_PERMISSION = `DELETE FROM app.role_permissions
+  WHERE role_id = '${TARGET_ROLE_ID}' AND permission_code = 'catalog.product:read'`;
+// La fila que deja UPDATE_ROLE_PERMISSION, para quien cambia y después quita.
+const DELETE_UPDATED_ROLE_PERMISSION = `DELETE FROM app.role_permissions
+  WHERE role_id = '${TARGET_ROLE_ID}' AND permission_code = 'catalog.product:publish'`;
+const DELETE_ALL_ROLE_PERMISSIONS = `DELETE FROM app.role_permissions`;
+const COUNT_TARGET_ROLE_PERMISSIONS = `SELECT count(*)::int AS n FROM app.role_permissions
+  WHERE role_id = '${TARGET_ROLE_ID}'`;
+const COUNT_DEPOSITO_PERMISSIONS = `SELECT count(*)::int AS n FROM app.role_permissions rp
+  JOIN app.roles r ON r.id = rp.role_id
+  WHERE r.tenant_id = '${REAL_TENANT_ID}' AND r.code = 'deposito'`;
+const COUNT_ROLE = (where: string) => `SELECT count(*)::int AS n FROM app.roles WHERE ${where}`;
+
+// Los permisos de los roles de sistema son la matriz de security-spec §2.1: los
+// cambia el seed, no la API. Del tenant real: dueño 28, encargado 27, vendedor 6,
+// depósito 5.
+const COUNT_OWNER_ROLE_PERMISSIONS = `SELECT count(*)::int AS n FROM app.role_permissions rp
+  JOIN app.roles r ON r.id = rp.role_id
+  WHERE r.tenant_id = '${REAL_TENANT_ID}' AND r.code = 'owner'`;
+const COUNT_SYSTEM_ROLE_PERMISSIONS = `SELECT count(*)::int AS n FROM app.role_permissions rp
+  JOIN app.roles r ON r.id = rp.role_id
+  WHERE r.tenant_id = '${REAL_TENANT_ID}' AND r.is_system`;
+const DELETE_OWNER_ROLE_PERMISSIONS = `DELETE FROM app.role_permissions
+  WHERE role_id = (SELECT id FROM app.roles WHERE ${OWNER_ROLE})`;
+const CAN_ADMINISTER_USERS = `SELECT app.has_permission('settings.user:write') AS ok`;
+const SELLER_ROLE_ID = `(SELECT id FROM app.roles
+  WHERE tenant_id = '${REAL_TENANT_ID}' AND code = 'vendedor')`;
+const INSERT_PERMISSION_INTO_SYSTEM_ROLE = `INSERT INTO app.role_permissions
+  (tenant_id, role_id, permission_code)
+  VALUES ('${REAL_TENANT_ID}', ${SELLER_ROLE_ID}, 'settings.user:write')`;
+const UPDATE_SYSTEM_ROLE_PERMISSION = `UPDATE app.role_permissions
+  SET permission_code = 'catalog.product:publish'
+  WHERE role_id = ${SELLER_ROLE_ID} AND permission_code = 'catalog.product:read'`;
+const MOVE_PERMISSION_TO_SYSTEM_ROLE = `UPDATE app.role_permissions
+  SET role_id = ${SELLER_ROLE_ID} WHERE role_id = '${TARGET_ROLE_ID}'`;
+
+const INSERT_PERMISSION = `INSERT INTO app.permissions (code, description)
+  VALUES ('b11c.prueba:read', 'Permiso de prueba')`;
+const UPDATE_PERMISSION = `UPDATE app.permissions SET description = 'editado'
+  WHERE code = 'catalog.product:read'`;
+const DELETE_PERMISSION = `DELETE FROM app.permissions WHERE code = 'catalog.product:read'`;
 // Las líneas del escenario llevan precios de proveedor, FX asumido y margen
 // proyectado: se leen con `market.sourcing:read` y se escriben con `:write`.
 const SELECT_SCENARIO_LINES = `SELECT unit_price_minor FROM app.sourcing_scenario_lines`;
@@ -304,6 +377,17 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
         (id, tenant_id, scenario_id, variant_id, qty, unit_price_minor, currency, fx_assumed)
       VALUES ('${SCENARIO_LINE_ID}', '${REAL_TENANT_ID}', '${SCENARIO_ID}', '${SEALED_VARIANT_ID}',
               3, 12000, 'USD', 7400);
+    `);
+
+    // WP-B11c: el rol personalizado que editan las pruebas de roles, con un
+    // permiso y asignado al usuario de `stockReader`.
+    await db.client.query(`
+      INSERT INTO app.roles (id, tenant_id, code, name)
+      VALUES ('${TARGET_ROLE_ID}', '${REAL_TENANT_ID}', 'b11c-objetivo', 'Rol objetivo B11c');
+      INSERT INTO app.role_permissions (tenant_id, role_id, permission_code)
+      VALUES ('${REAL_TENANT_ID}', '${TARGET_ROLE_ID}', 'catalog.product:read');
+      INSERT INTO app.staff_user_roles (staff_user_id, role_id, tenant_id)
+      VALUES ('${custom.stockReader.userId}', '${TARGET_ROLE_ID}', '${REAL_TENANT_ID}');
     `);
 
     await db.client.query(`ALTER ROLE joda_api PASSWORD '${JODA_API_TEST_PASSWORD}'`);
@@ -924,6 +1008,434 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
     });
   });
 
+  // WP-B11c. Quien escribe estas tres tablas se da permisos: si bastara con el
+  // tenant, B11 entero se anularía con un INSERT en role_permissions.
+  describe("roles, role_permissions y staff_user_roles: settings.user:write; los roles de sistema no se borran ni se renombran (WP-B11c)", () => {
+    // El actor denegado puede no ver lo que quedó (o la transacción se abortó
+    // con el error): se cuenta como el owner, en la misma transacción.
+    async function countAsOwner(sql: string): Promise<number> {
+      await actAs(owner, REAL_TENANT_ID);
+      const { rows } = await api.query(sql);
+      return rows[0].n;
+    }
+
+    // Con una sola conexión de superusuario, fuera de la transacción del actor.
+    async function countAsSuperuser(sql: string): Promise<number> {
+      const { rows } = await db.client.query(sql);
+      return rows[0].n;
+    }
+
+    describe("role_permissions", () => {
+      it("el owner agrega, cambia y quita un permiso de un rol, con el RETURNING que emite Prisma", async () => {
+        const created = await as(owner, `${INSERT_ROLE_PERMISSION} RETURNING role_id`);
+        const edited = await api.query(UPDATE_ROLE_PERMISSION);
+        const deleted = await api.query(DELETE_UPDATED_ROLE_PERMISSION);
+
+        expect({
+          created: created.rowCount,
+          edited: edited.rowCount,
+          deleted: deleted.rowCount,
+        }).toEqual({ created: 1, edited: 1, deleted: 1 });
+      });
+
+      it("quien administra usuarios sin settings.user:read también escribe: no hay trampa de la lectura", async () => {
+        const created = await as(
+          custom.userAdminNoRead,
+          `${INSERT_ROLE_PERMISSION} RETURNING role_id`,
+        );
+        const edited = await api.query(UPDATE_ROLE_PERMISSION);
+        const deleted = await api.query(DELETE_UPDATED_ROLE_PERMISSION);
+
+        expect({
+          created: created.rowCount,
+          edited: edited.rowCount,
+          deleted: deleted.rowCount,
+        }).toEqual({ created: 1, edited: 1, deleted: 1 });
+      });
+
+      it("el vendedor no puede darse un permiso: el INSERT en role_permissions se rechaza (42501)", async () => {
+        const grantSelfSupplierWrite = `INSERT INTO app.role_permissions (tenant_id, role_id, permission_code)
+          SELECT tenant_id, id, 'market.supplier:write' FROM app.roles
+           WHERE tenant_id = '${REAL_TENANT_ID}' AND code = 'vendedor'`;
+
+        await expect(as(seller, grantSelfSupplierWrite)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      it("el encargado, que tiene todo salvo settings.user:write, no agrega permisos a un rol", async () => {
+        await expect(as(manager, INSERT_ROLE_PERMISSION)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      it("el encargado no cambia ni quita permisos: afecta cero filas y el rol los conserva", async () => {
+        const edited = await as(manager, UPDATE_ROLE_PERMISSION);
+        const deleted = await api.query(DELETE_ROLE_PERMISSION);
+        const remaining = await countAsOwner(COUNT_TARGET_ROLE_PERMISSIONS);
+
+        expect({ edited: edited.rowCount, deleted: deleted.rowCount, remaining }).toEqual({
+          edited: 0,
+          deleted: 0,
+          remaining: 1,
+        });
+      });
+
+      it("el vendedor no edita ni borra permisos de roles: sin WHERE afecta cero filas y el depósito conserva los cinco", async () => {
+        const edited = await as(seller, UPDATE_ALL_ROLE_PERMISSIONS);
+        const deleted = await api.query(DELETE_ALL_ROLE_PERMISSIONS);
+        const remaining = await countAsOwner(COUNT_DEPOSITO_PERMISSIONS);
+
+        expect({ edited: edited.rowCount, deleted: deleted.rowCount, remaining }).toEqual({
+          edited: 0,
+          deleted: 0,
+          remaining: 5,
+        });
+      });
+
+      it("un rol que solo lee settings.user ve los permisos de un rol pero no los escribe", async () => {
+        await expect(as(custom.readOnly, INSERT_ROLE_PERMISSION)).rejects.toMatchObject({
+          code: "42501",
+        });
+      });
+
+      it("un rol que solo lee settings.user no cambia ni quita permisos: afecta cero filas", async () => {
+        const edited = await as(custom.readOnly, UPDATE_ROLE_PERMISSION);
+        const deleted = await api.query(DELETE_ROLE_PERMISSION);
+
+        expect({ edited: edited.rowCount, deleted: deleted.rowCount }).toEqual({
+          edited: 0,
+          deleted: 0,
+        });
+      });
+    });
+
+    describe("staff_user_roles", () => {
+      it("el owner asigna un rol a un usuario, con RETURNING, lo cambia y lo revoca", async () => {
+        const assignedUser = custom.readOnly.userId;
+        const created = await as(
+          owner,
+          `INSERT INTO app.staff_user_roles (staff_user_id, role_id, tenant_id)
+           VALUES ('${assignedUser}', '${TARGET_ROLE_ID}', '${REAL_TENANT_ID}')
+           RETURNING staff_user_id`,
+        );
+        const edited = await api.query(
+          `UPDATE app.staff_user_roles SET granted_by = '${REAL_OWNER_ID}'
+            WHERE staff_user_id = '${assignedUser}' AND role_id = '${TARGET_ROLE_ID}'`,
+        );
+        const deleted = await api.query(
+          `DELETE FROM app.staff_user_roles
+            WHERE staff_user_id = '${assignedUser}' AND role_id = '${TARGET_ROLE_ID}'`,
+        );
+
+        expect({
+          created: created.rowCount,
+          edited: edited.rowCount,
+          deleted: deleted.rowCount,
+        }).toEqual({ created: 1, edited: 1, deleted: 1 });
+      });
+
+      it("el vendedor no puede asignarse el rol de dueño: el INSERT en staff_user_roles se rechaza (42501)", async () => {
+        const assignOwnerToSeller = `INSERT INTO app.staff_user_roles (staff_user_id, role_id, tenant_id)
+          SELECT '${seller.userId}', id, tenant_id FROM app.roles WHERE ${OWNER_ROLE}`;
+
+        await expect(as(seller, assignOwnerToSeller)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      it("el encargado no asigna un rol a un usuario", async () => {
+        const assign = `INSERT INTO app.staff_user_roles (staff_user_id, role_id, tenant_id)
+          VALUES ('${custom.readOnly.userId}', '${TARGET_ROLE_ID}', '${REAL_TENANT_ID}')`;
+
+        await expect(as(manager, assign)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      it("el encargado no revoca un rol: el DELETE afecta cero filas y el usuario lo conserva", async () => {
+        const revoke = `DELETE FROM app.staff_user_roles WHERE role_id = '${TARGET_ROLE_ID}'`;
+        const countAssignments = `SELECT count(*)::int AS n FROM app.staff_user_roles
+          WHERE role_id = '${TARGET_ROLE_ID}'`;
+
+        const { rowCount } = await as(manager, revoke);
+        const remaining = await countAsOwner(countAssignments);
+
+        expect({ revoked: rowCount, remaining }).toEqual({ revoked: 0, remaining: 1 });
+      });
+
+      it("el depósito no revoca el rol de nadie: un DELETE sin WHERE afecta cero filas y el owner conserva el suyo", async () => {
+        const countOwnerAssignment = `SELECT count(*)::int AS n FROM app.staff_user_roles
+          WHERE staff_user_id = '${REAL_OWNER_ID}'`;
+
+        const { rowCount } = await as(warehouse, `DELETE FROM app.staff_user_roles`);
+        const remaining = await countAsOwner(countOwnerAssignment);
+
+        expect({ revoked: rowCount, remaining }).toEqual({ revoked: 0, remaining: 1 });
+      });
+
+      it("quien administra usuarios sin settings.user:read asigna un rol, con RETURNING", async () => {
+        const { rowCount } = await as(
+          custom.userAdminNoRead,
+          `INSERT INTO app.staff_user_roles (staff_user_id, role_id, tenant_id)
+           VALUES ('${custom.readOnly.userId}', '${TARGET_ROLE_ID}', '${REAL_TENANT_ID}')
+           RETURNING staff_user_id`,
+        );
+
+        expect(rowCount).toBe(1);
+      });
+    });
+
+    describe("roles", () => {
+      it("el owner crea un rol, con el RETURNING que emite Prisma, lo renombra y lo borra", async () => {
+        const created = await as(owner, `${INSERT_ROLE} RETURNING id`);
+        const renamed = await api.query(RENAME_TARGET_ROLE);
+        const deleted = await api.query(DELETE_TARGET_ROLE);
+
+        expect({
+          created: created.rowCount,
+          renamed: renamed.rowCount,
+          deleted: deleted.rowCount,
+        }).toEqual({ created: 1, renamed: 1, deleted: 1 });
+      });
+
+      it("quien administra usuarios sin settings.user:read crea un rol y lo renombra", async () => {
+        const created = await as(custom.userAdminNoRead, `${INSERT_ROLE} RETURNING id`);
+        const renamed = await api.query(RENAME_TARGET_ROLE);
+
+        expect({ created: created.rowCount, renamed: renamed.rowCount }).toEqual({
+          created: 1,
+          renamed: 1,
+        });
+      });
+
+      it("el vendedor no puede crear un rol, aunque el INSERT no pida RETURNING", async () => {
+        await expect(as(seller, INSERT_ROLE)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      it("el encargado no puede crear un rol", async () => {
+        await expect(as(manager, INSERT_ROLE)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      it("el vendedor no renombra roles: un UPDATE sin WHERE afecta cero filas", async () => {
+        const { rowCount } = await as(seller, RENAME_ALL_ROLES);
+
+        expect(rowCount).toBe(0);
+      });
+
+      // El defecto que la revisión de B11 reprodujo: como vendedor, este DELETE
+      // borró la fila y, por la cascada (que no evalúa RLS), sus permisos.
+      it("el vendedor no borra el rol de depósito: afecta cero filas y el rol conserva sus cinco permisos", async () => {
+        const { rowCount } = await as(seller, DELETE_DEPOSITO_ROLE);
+        const roleLeft = await countAsOwner(
+          COUNT_ROLE(`tenant_id = '${REAL_TENANT_ID}' AND code = 'deposito'`),
+        );
+        const permissionsLeft = await countAsOwner(COUNT_DEPOSITO_PERMISSIONS);
+
+        expect({ deleted: rowCount, roleLeft, permissionsLeft }).toEqual({
+          deleted: 0,
+          roleLeft: 1,
+          permissionsLeft: 5,
+        });
+      });
+
+      it("el encargado no borra un rol personalizado: afecta cero filas y el rol sigue", async () => {
+        const { rowCount } = await as(manager, DELETE_TARGET_ROLE);
+        const roleLeft = await countAsOwner(COUNT_ROLE(`id = '${TARGET_ROLE_ID}'`));
+
+        expect({ deleted: rowCount, roleLeft }).toEqual({ deleted: 0, roleLeft: 1 });
+      });
+    });
+
+    // Probado con el rol que SÍ tiene el permiso, para que lo que frene sea el
+    // trigger y no la falta de permiso. Los errores de un trigger de invariante
+    // llegan como 23514 (check_violation), como en la guarda de 0031.
+    describe("los roles de sistema no se borran ni se renombran, por nadie", () => {
+      it("el owner, con settings.user:write, no puede borrar el rol de dueño: el trigger lo rechaza y el rol sigue", async () => {
+        await expect(as(owner, DELETE_OWNER_ROLE)).rejects.toMatchObject({
+          code: "23514",
+          message: expect.stringContaining("no se puede borrar"),
+        });
+        expect(await countAsSuperuser(COUNT_ROLE(OWNER_ROLE))).toBe(1);
+      });
+
+      it("el owner no renombra el rol de dueño", async () => {
+        await expect(as(owner, RENAME_OWNER_ROLE)).rejects.toMatchObject({
+          code: "23514",
+          message: expect.stringContaining("no se puede renombrar"),
+        });
+      });
+
+      it("el owner no le cambia el código al rol de dueño", async () => {
+        await expect(as(owner, RECODE_OWNER_ROLE)).rejects.toMatchObject({
+          code: "23514",
+          message: expect.stringContaining("no se puede renombrar"),
+        });
+      });
+
+      it("el owner no baja la marca is_system del rol de dueño: bajarla y borrarlo serían dos pasos", async () => {
+        await expect(as(owner, UNMARK_OWNER_ROLE)).rejects.toMatchObject({
+          code: "23514",
+          message: expect.stringContaining("no se puede cambiar"),
+        });
+      });
+
+      it("el owner no crea un rol marcado is_system: la política de INSERT lo rechaza (42501)", async () => {
+        await expect(as(owner, INSERT_SYSTEM_ROLE)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      it("ni el superusuario, que elude RLS, borra un rol de sistema", async () => {
+        await expect(db.client.query(DELETE_OWNER_ROLE)).rejects.toMatchObject({ code: "23514" });
+      });
+
+      it("un rol de sistema admite un UPDATE que no toca su nombre, su código ni su marca", async () => {
+        const { rowCount } = await as(
+          owner,
+          `UPDATE app.roles SET created_at = created_at
+            WHERE tenant_id = '${REAL_TENANT_ID}' AND code = 'deposito'`,
+        );
+
+        expect(rowCount).toBe(1);
+      });
+    });
+
+    // Revisión cruzada de B11c: el dueño, con `settings.user:write`, se vaciaba
+    // su propio rol con un DELETE (27 permisos en una sentencia) y quedaba tan
+    // bloqueado como si lo hubiera borrado. Los permisos de un rol de sistema son
+    // la matriz de security-spec §2.1 y los cambia el seed.
+    describe("los permisos de un rol de sistema no se modifican en tiempo de ejecución", () => {
+      it("el dueño no se vacía su propio rol: el DELETE afecta cero filas, conserva los 28 permisos y sigue administrando", async () => {
+        const { rowCount } = await as(owner, DELETE_OWNER_ROLE_PERMISSIONS);
+        const remaining = await countAsOwner(COUNT_OWNER_ROLE_PERMISSIONS);
+        const { rows } = await api.query(CAN_ADMINISTER_USERS);
+
+        expect({ deleted: rowCount, remaining, canAdminister: rows[0].ok }).toEqual({
+          deleted: 0,
+          remaining: 28,
+          canAdminister: true,
+        });
+      });
+
+      it("un DELETE sin WHERE del dueño solo alcanza a los roles personalizados: los de sistema conservan sus 66 permisos", async () => {
+        const { rowCount } = await as(owner, DELETE_ALL_ROLE_PERMISSIONS);
+        const remaining = await countAsOwner(COUNT_SYSTEM_ROLE_PERMISSIONS);
+
+        expect(rowCount).toBeGreaterThan(0);
+        expect(remaining).toBe(66);
+      });
+
+      it("el dueño no le agrega un permiso a un rol de sistema (42501)", async () => {
+        await expect(as(owner, INSERT_PERMISSION_INTO_SYSTEM_ROLE)).rejects.toMatchObject({
+          code: "42501",
+        });
+      });
+
+      it("el dueño no cambia un permiso de un rol de sistema: el UPDATE afecta cero filas", async () => {
+        const { rowCount } = await as(owner, UPDATE_SYSTEM_ROLE_PERMISSION);
+
+        expect(rowCount).toBe(0);
+      });
+
+      it("el dueño no mueve un permiso de un rol personalizado a uno de sistema (42501)", async () => {
+        await expect(as(owner, MOVE_PERMISSION_TO_SYSTEM_ROLE)).rejects.toMatchObject({
+          code: "42501",
+        });
+      });
+
+      it("quien administra usuarios sin ser dueño tampoco toca los permisos de un rol de sistema", async () => {
+        await expect(
+          as(custom.userAdmin, INSERT_PERMISSION_INTO_SYSTEM_ROLE),
+        ).rejects.toMatchObject({ code: "42501" });
+      });
+
+      // El seed y el ETL son el camino para cambiarlos, y siguen funcionando:
+      // corren como superusuario, que elude RLS.
+      it("el seed sí los siembra: seed_roles, como superusuario, es idempotente", async () => {
+        await db.client.query(`SELECT app.seed_roles('${REAL_TENANT_ID}')`);
+        const remaining = await countAsSuperuser(COUNT_SYSTEM_ROLE_PERMISSIONS);
+
+        expect(remaining).toBe(66);
+      });
+    });
+
+    // Revisión cruzada de B11c: `permissions` no tiene RLS y `joda_api` conservaba
+    // el GRANT general. Un vendedor del tenant A borró un código y las
+    // `role_permissions` de ambos tenants que lo tenían pasaron de 3 y 3 a 0.
+    describe("permissions: el catálogo global lo carga el seed, no la API", () => {
+      it.each([
+        ["INSERT", INSERT_PERMISSION],
+        ["UPDATE", UPDATE_PERMISSION],
+        ["DELETE", DELETE_PERMISSION],
+      ])(
+        "el dueño, que tiene todos los permisos, no puede hacer %s (42501)",
+        async (_verb, sql) => {
+          await expect(as(owner, sql)).rejects.toMatchObject({ code: "42501" });
+        },
+      );
+
+      it("el vendedor no puede borrar un código del catálogo (42501): no vacía los roles de ningún tenant", async () => {
+        await expect(as(seller, DELETE_PERMISSION)).rejects.toMatchObject({ code: "42501" });
+      });
+
+      it("el owner de otro tenant tampoco (42501)", async () => {
+        await expect(as(peerOwner, DELETE_PERMISSION, PEER_TENANT_ID)).rejects.toMatchObject({
+          code: "42501",
+        });
+      });
+
+      it("joda_api sigue leyendo el catálogo: las 28 filas", async () => {
+        const { rows } = await as(seller, `SELECT count(*)::int AS n FROM app.permissions`);
+
+        expect(rows[0].n).toBe(28);
+      });
+    });
+
+    // El SELECT sigue siendo por tenant: la API lee estas dos tablas para
+    // resolver los permisos de cada sesión (`getGrantedPermissionCodes`), y el
+    // vendedor no tiene `settings.user:read`.
+    describe("la lectura sigue por tenant", () => {
+      it("el vendedor, sin settings.user:read, lee los seis permisos de su rol", async () => {
+        const { rows } = await as(
+          seller,
+          `SELECT count(*)::int AS n FROM app.role_permissions rp
+            JOIN app.staff_user_roles sur ON sur.role_id = rp.role_id
+            WHERE sur.staff_user_id = '${seller.userId}'`,
+        );
+
+        expect(rows[0].n).toBe(6);
+      });
+    });
+
+    describe("tenant Y permiso: el owner de otro tenant no escribe en el tenant real", () => {
+      it.each([
+        ["roles", INSERT_ROLE],
+        ["role_permissions", INSERT_ROLE_PERMISSION],
+      ])(
+        "%s: el INSERT con tenant_id del tenant real se rechaza (42501)",
+        async (_table, insert) => {
+          await expect(as(peerOwner, insert, PEER_TENANT_ID)).rejects.toMatchObject({
+            code: "42501",
+          });
+        },
+      );
+
+      it("staff_user_roles: el INSERT con tenant_id del tenant real se rechaza (42501)", async () => {
+        const assign = `INSERT INTO app.staff_user_roles (staff_user_id, role_id, tenant_id)
+          VALUES ('${custom.readOnly.userId}', '${TARGET_ROLE_ID}', '${REAL_TENANT_ID}')`;
+
+        await expect(as(peerOwner, assign, PEER_TENANT_ID)).rejects.toMatchObject({
+          code: "42501",
+        });
+      });
+
+      it.each([
+        ["roles (UPDATE)", RENAME_TARGET_ROLE],
+        ["roles (DELETE)", DELETE_TARGET_ROLE],
+        ["role_permissions (UPDATE)", UPDATE_ROLE_PERMISSION],
+        ["role_permissions (DELETE)", DELETE_ROLE_PERMISSION],
+        [
+          "staff_user_roles (DELETE)",
+          `DELETE FROM app.staff_user_roles WHERE role_id = '${TARGET_ROLE_ID}'`,
+        ],
+      ])("%s de una fila del tenant real afecta cero filas", async (_what, sql) => {
+        const { rowCount } = await as(peerOwner, sql, PEER_TENANT_ID);
+
+        expect(rowCount).toBe(0);
+      });
+    });
+  });
   // WP-B11b, la tabla hija. Nada exigía permiso: ni leer ni escribir. Un
   // vendedor leía y editaba precios de proveedor y márgenes proyectados.
   describe("sourcing_scenario_lines: leer exige market.sourcing:read; escribir, market.sourcing:write (WP-B11b)", () => {
