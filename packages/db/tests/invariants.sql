@@ -1775,6 +1775,10 @@ SELECT pg_temp.expect_fail_like(90, 'El mismo número de serie en dos tenants di
 -- customer_deposits exige el permiso de escritura, no solo tenant.
 -- Propiedades del catálogo y de la matriz sembrada; el comportamiento, con
 -- cada rol conectado como joda_api, lo prueba write_permissions.test.ts.
+--
+-- WP-B11b (0032_write_permissions_sourcing_scenarios.sql) suma
+-- sourcing_scenarios a los invariantes 91 a 94, con una diferencia en el 93:
+-- esa tabla SÍ se borra, con `market.sourcing:write`.
 -- ─────────────────────────────────────────────────────────────────────
 
 -- Los invariantes 91 a 93 leen el TEXTO de las políticas (pg_get_expr): no
@@ -1783,14 +1787,14 @@ SELECT pg_temp.expect_fail_like(90, 'El mismo número de serie en dos tenants di
 -- como joda_api, write_permissions.test.ts.
 
 -- 91 ─ Toda política permisiva de escritura (INSERT, UPDATE, DELETE o ALL)
--- de esas cinco tablas exige un permiso, y cada una tiene las de INSERT y
+-- de esas seis tablas exige un permiso, y cada una tiene las de INSERT y
 -- UPDATE. Con la `tenant_access_*` con `true` de 0016 la escritura vuelve a
 -- pedir solo tenant; un `true OR has_permission(..)` tampoco cuenta como
 -- exigir un permiso. El nombre lista las políticas culpables y las tablas a
 -- las que les falta la de INSERT o la de UPDATE.
 WITH sensibles(tabla) AS (
   VALUES ('suppliers'), ('purchase_orders'), ('inventory_lots'),
-         ('chart_of_accounts'), ('customer_deposits')
+         ('chart_of_accounts'), ('customer_deposits'), ('sourcing_scenarios')
 ), politicas AS (
   SELECT c.relname AS tabla, p.polname, p.polcmd,
          COALESCE(pg_get_expr(p.polqual, p.polrelid), '')
@@ -1829,7 +1833,7 @@ WITH for_all AS (
     JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'app'
      AND c.relname IN ('suppliers', 'purchase_orders', 'inventory_lots',
-                       'chart_of_accounts', 'customer_deposits')
+                       'chart_of_accounts', 'customer_deposits', 'sourcing_scenarios')
      AND p.polpermissive
      AND p.polcmd = '*'
 )
@@ -1844,8 +1848,11 @@ SELECT pg_temp.expect_true(92,
 -- `market.purchase_order:write` Y el estado `draft` dentro de la política:
 -- el DELETE directo de una orden enviada no pasa aunque quien lo intenta
 -- tenga el permiso. Que `draft` signifique "nunca enviada" lo sostiene el
--- trigger de 0031 (invariantes 95-103), no esta política. El nombre lista las
--- políticas de DELETE que sobran, o avisa que la de órdenes no es la esperada.
+-- trigger de 0031 (invariantes 95-103), no esta política. En
+-- sourcing_scenarios (WP-B11b) hay también una sola, con
+-- `market.sourcing:write` y sin más condición: un escenario es una
+-- simulación y se borra. El nombre lista las políticas de DELETE que sobran,
+-- o avisa que la de órdenes o la de escenarios no es la esperada.
 WITH borrado AS (
   SELECT c.relname AS tabla, p.polname,
          COALESCE(pg_get_expr(p.polqual, p.polrelid), '') AS expresion
@@ -1854,11 +1861,12 @@ WITH borrado AS (
     JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'app'
      AND c.relname IN ('suppliers', 'purchase_orders', 'inventory_lots',
-                       'chart_of_accounts', 'customer_deposits')
+                       'chart_of_accounts', 'customer_deposits', 'sourcing_scenarios')
      AND p.polpermissive
      AND p.polcmd IN ('d', '*')
 ), sobran AS (
-  SELECT tabla || '.' || polname AS descripcion FROM borrado WHERE tabla <> 'purchase_orders'
+  SELECT tabla || '.' || polname AS descripcion
+    FROM borrado WHERE tabla NOT IN ('purchase_orders', 'sourcing_scenarios')
 ), orden_ok AS (
   SELECT count(*) AS n
     FROM borrado
@@ -1866,17 +1874,29 @@ WITH borrado AS (
      AND expresion LIKE '%market.purchase_order:write%'
      AND expresion LIKE '%(status = ''draft''%'
      AND expresion NOT LIKE '% OR %'
+), escenario_ok AS (
+  SELECT count(*) AS n
+    FROM borrado
+   WHERE tabla = 'sourcing_scenarios'
+     AND expresion LIKE '%market.sourcing:write%'
+     AND expresion NOT LIKE '% OR %'
+     AND expresion NOT LIKE '% AND %'
 )
 SELECT pg_temp.expect_true(93,
-  'Sin DELETE en lotes, señas, cuentas y proveedores; en órdenes de compra, solo borradores'
+  'Sin DELETE en lotes, señas, cuentas y proveedores; en órdenes de compra, solo borradores; en escenarios de sourcing, con su permiso'
     || COALESCE(' — DELETE que sobra: '
                 || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sobran), '')
     || CASE WHEN (SELECT n FROM orden_ok) = 1
              AND (SELECT count(*) FROM borrado WHERE tabla = 'purchase_orders') = 1
-            THEN '' ELSE ' — la política de DELETE de purchase_orders no es la esperada' END,
+            THEN '' ELSE ' — la política de DELETE de purchase_orders no es la esperada' END
+    || CASE WHEN (SELECT n FROM escenario_ok) = 1
+             AND (SELECT count(*) FROM borrado WHERE tabla = 'sourcing_scenarios') = 1
+            THEN '' ELSE ' — la política de DELETE de sourcing_scenarios no es la esperada' END,
   NOT EXISTS (SELECT 1 FROM sobran)
   AND (SELECT n FROM orden_ok) = 1
-  AND (SELECT count(*) FROM borrado WHERE tabla = 'purchase_orders') = 1);
+  AND (SELECT count(*) FROM borrado WHERE tabla = 'purchase_orders') = 1
+  AND (SELECT n FROM escenario_ok) = 1
+  AND (SELECT count(*) FROM borrado WHERE tabla = 'sourcing_scenarios') = 1);
 
 -- 94 ─ En los roles sembrados (`is_system`, de cualquier tenant), todo
 -- permiso de escritura de esas tablas viene con el de lectura de la MISMA
@@ -1900,7 +1920,8 @@ WITH par(tabla, escribe, lee) AS (
     ('inventory_lots',    'sales.order:refund',            'inventory.stock:read'),
     ('inventory_lots',    'inventory.stock:adjust',        'inventory.stock:read'),
     ('chart_of_accounts', 'accounting.journal:write',      'accounting.journal:read'),
-    ('customer_deposits', 'accounting.deposit:write',      'accounting.deposit:read')
+    ('customer_deposits', 'accounting.deposit:write',      'accounting.deposit:read'),
+    ('sourcing_scenarios', 'market.sourcing:write',         'market.sourcing:read')
 ), roles_sembrados AS (
   SELECT id, code, tenant_id FROM app.roles WHERE is_system
 ), escribe_sin_leer AS (
