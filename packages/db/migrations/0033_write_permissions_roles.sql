@@ -12,7 +12,14 @@
 -- 'deposito'` borró la fila y, por la cascada (que no evalúa RLS), las
 -- `role_permissions` del rol.
 --
--- CORRECCIÓN, en dos partes.
+-- Y el catálogo `permissions`, que no tiene RLS ni `tenant_id` por diseño
+-- (0014), conservaba el GRANT general de 0010 (`INSERT, UPDATE, DELETE`) a
+-- `joda_api`. Lo encontró la revisión cruzada: un vendedor del tenant A
+-- borró un código y las `role_permissions` de AMBOS tenants que lo tenían
+-- pasaron de 3 y 3 a 0, por la cascada de `role_permissions.permission_code`,
+-- que no evalúa RLS.
+--
+-- CORRECCIÓN, en cuatro partes.
 --
 -- 1. RLS. `tenant_access` FOR ALL se reemplaza, en las tres tablas, por una
 --    política por comando: INSERT, UPDATE y DELETE exigen
@@ -20,10 +27,10 @@
 --    combinándose con AND contra todas: tenant Y permiso. Mismo patrón que
 --    0030: nunca `FOR ALL` en una política de permiso.
 --
--- 2. Roles de sistema. Los roles `is_system` (dueño, encargado, vendedor y
---    depósito, los que siembra `seed_roles`) no se borran ni se renombran,
---    por nadie: sin eso, quien pueda borrar roles puede borrar el de dueño y
---    dejar al negocio sin quien administre. Lo impone un trigger y no una
+-- 2. Roles de sistema: no se borran ni se renombran, por nadie. Los roles
+--    `is_system` (dueño, encargado, vendedor y depósito, los que siembra
+--    `seed_roles`) no se borran ni cambian de nombre: sin eso, quien pueda
+--    borrar roles puede borrar el de dueño. Lo impone un trigger y no una
 --    política, porque "por nadie" incluye a quien eludiría la política: el
 --    superusuario de una migración, `service_role` en el ETL. El trigger
 --    también congela `is_system` (en los dos sentidos) y la política de INSERT
@@ -32,6 +39,27 @@
 --    con `draft`, y un administrador podría fabricar roles que nadie puede
 --    borrar después. `seed_roles` inserta como dueño de las tablas (elude
 --    RLS) y no se ve afectada.
+--
+-- 3. Roles de sistema: sus permisos no se modifican en tiempo de ejecución.
+--    `role_permissions` de un rol `is_system` no admite INSERT, UPDATE ni
+--    DELETE por `joda_api`: las tres políticas de escritura de esa tabla
+--    exigen, además del permiso, que el rol no sea de sistema (y el UPDATE, que
+--    no se mueva una fila hacia uno). Esos permisos son la matriz de
+--    `docs/security-spec.md` §2.1 y se cambian por el seed. Sin esto, el
+--    dueño se vacía su propio rol con un `DELETE` y queda tan bloqueado como
+--    si lo hubiera borrado: lo encontró la revisión cruzada (27 permisos del
+--    rol dueño borrados en una sentencia, y `has_permission('settings.user:
+--    write')` pasa a `false`). Decisión de José, 2026-10-02. Es solo RLS y no un
+--    trigger: la regla es sobre la API, y el seed y el ETL (`service_role`,
+--    que elude RLS) siguen siendo el camino para cambiarlos. No cubre
+--    `staff_user_roles`: quitarle a alguien el rol de dueño es la regla del
+--    último dueño, criterio de WP-C24.
+--
+-- 4. `permissions`: `REVOKE INSERT, UPDATE, DELETE FROM joda_api`. El catálogo
+--    es global y lo carga el seed (superusuario): ninguna sesión de la API lo
+--    escribe, y un vendedor de un tenant no puede vaciar los roles de todos.
+--    Conserva SELECT. El invariante 111 lo verifica (incluye los privilegios
+--    de columna y los heredados de PUBLIC).
 --
 -- LECTURA, SIN CAMBIOS. El SELECT de las tres tablas sigue siendo por tenant:
 -- `tenant_access_select`, `USING (true)`, combinada con la restrictiva. No es
@@ -49,16 +77,8 @@
 -- `role_permissions` para resolver permisos. Estas políticas la llaman: no
 -- se rompe esa lectura porque corre como el dueño de las tablas, que elude
 -- RLS (invariante 30); una política que consultara la misma tabla con los
--- privilegios de quien escribe recursaría.
---
--- QUÉ QUEDA FUERA. (1) Quien tiene `settings.user:write` puede editar las
--- `role_permissions` de un rol de sistema (por ejemplo, quitarle todo al
--- dueño): este WP congela los roles como filas, no sus permisos. Es una regla
--- de negocio que hoy no está escrita y se anota en `docs/backlog.md`. (2)
--- `permissions`, el catálogo global, no tiene RLS ni `tenant_id` por diseño
--- (0014) y `joda_api` conserva el GRANT general de 0010: borrar un código de
--- `permissions` borra por cascada las `role_permissions` de todos los
--- tenants. Se anota igual.
+-- privilegios de quien escribe recursaría. Las de `role_permissions` consultan
+-- `roles` (otra tabla, de SELECT por tenant), así que no recursan.
 --
 -- Esta migración no cambia el esquema de ninguna tabla.
 -- =====================================================================
@@ -80,19 +100,31 @@ CREATE POLICY roles_delete ON app.roles
   FOR DELETE USING (app.has_permission('settings.user:write'));
 
 -- ---------------------------------------------------------------------
--- role_permissions
+-- role_permissions: los permisos de un rol de sistema no se tocan
 -- ---------------------------------------------------------------------
 DROP POLICY tenant_access ON app.role_permissions;
 
 CREATE POLICY tenant_access_select ON app.role_permissions
   FOR SELECT USING (true);
 CREATE POLICY role_permissions_insert ON app.role_permissions
-  FOR INSERT WITH CHECK (app.has_permission('settings.user:write'));
+  FOR INSERT WITH CHECK (
+    app.has_permission('settings.user:write')
+    AND NOT EXISTS (SELECT 1 FROM app.roles r
+                     WHERE r.id = role_permissions.role_id AND r.is_system));
 CREATE POLICY role_permissions_update ON app.role_permissions
-  FOR UPDATE USING (app.has_permission('settings.user:write'))
-  WITH CHECK (app.has_permission('settings.user:write'));
+  FOR UPDATE USING (
+    app.has_permission('settings.user:write')
+    AND NOT EXISTS (SELECT 1 FROM app.roles r
+                     WHERE r.id = role_permissions.role_id AND r.is_system))
+  WITH CHECK (
+    app.has_permission('settings.user:write')
+    AND NOT EXISTS (SELECT 1 FROM app.roles r
+                     WHERE r.id = role_permissions.role_id AND r.is_system));
 CREATE POLICY role_permissions_delete ON app.role_permissions
-  FOR DELETE USING (app.has_permission('settings.user:write'));
+  FOR DELETE USING (
+    app.has_permission('settings.user:write')
+    AND NOT EXISTS (SELECT 1 FROM app.roles r
+                     WHERE r.id = role_permissions.role_id AND r.is_system));
 
 -- ---------------------------------------------------------------------
 -- staff_user_roles
@@ -108,6 +140,11 @@ CREATE POLICY staff_user_roles_update ON app.staff_user_roles
   WITH CHECK (app.has_permission('settings.user:write'));
 CREATE POLICY staff_user_roles_delete ON app.staff_user_roles
   FOR DELETE USING (app.has_permission('settings.user:write'));
+
+-- ---------------------------------------------------------------------
+-- permissions: el catálogo global lo carga el seed, no la API
+-- ---------------------------------------------------------------------
+REVOKE INSERT, UPDATE, DELETE ON app.permissions FROM joda_api;
 
 -- ---------------------------------------------------------------------
 -- Los roles de sistema no se borran ni se renombran, por nadie.

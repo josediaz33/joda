@@ -1780,8 +1780,10 @@ SELECT pg_temp.expect_fail_like(90, 'El mismo número de serie en dos tenants di
 -- cada rol conectado como joda_api, lo prueba write_permissions.test.ts.
 --
 -- WP-B11b (0032_write_permissions_sourcing_scenarios.sql) suma
--- sourcing_scenarios a los invariantes 91 a 94, con una diferencia en el 93:
--- esa tabla SÍ se borra, con `market.sourcing:write`.
+-- sourcing_scenarios y su tabla hija sourcing_scenario_lines a los
+-- invariantes 91 a 94, con una diferencia en el 93: esas dos tablas SÍ se
+-- borran, con `market.sourcing:write`. Y el 91 exige además que la LECTURA de
+-- las líneas pida `market.sourcing:read`: traen precios de proveedor.
 -- ─────────────────────────────────────────────────────────────────────
 
 -- Los invariantes 91 a 93 leen el TEXTO de las políticas (pg_get_expr): no
@@ -1790,14 +1792,17 @@ SELECT pg_temp.expect_fail_like(90, 'El mismo número de serie en dos tenants di
 -- como joda_api, write_permissions.test.ts.
 
 -- 91 ─ Toda política permisiva de escritura (INSERT, UPDATE, DELETE o ALL)
--- de esas seis tablas exige un permiso, y cada una tiene las de INSERT y
+-- de esas siete tablas exige un permiso, y cada una tiene las de INSERT y
 -- UPDATE. Con la `tenant_access_*` con `true` de 0016 la escritura vuelve a
 -- pedir solo tenant; un `true OR has_permission(..)` tampoco cuenta como
--- exigir un permiso. El nombre lista las políticas culpables y las tablas a
--- las que les falta la de INSERT o la de UPDATE.
+-- exigir un permiso. Y la política de SELECT de las líneas de escenarios de
+-- sourcing exige `market.sourcing:read` (WP-B11b). El nombre lista las
+-- políticas culpables y las tablas a las que les falta la de INSERT o la de
+-- UPDATE.
 WITH sensibles(tabla) AS (
   VALUES ('suppliers'), ('purchase_orders'), ('inventory_lots'),
-         ('chart_of_accounts'), ('customer_deposits'), ('sourcing_scenarios')
+         ('chart_of_accounts'), ('customer_deposits'), ('sourcing_scenarios'),
+         ('sourcing_scenario_lines')
 ), politicas AS (
   SELECT c.relname AS tabla, p.polname, p.polcmd,
          COALESCE(pg_get_expr(p.polqual, p.polrelid), '')
@@ -1816,14 +1821,31 @@ WITH sensibles(tabla) AS (
     FROM sensibles s
    CROSS JOIN (VALUES ('a'::"char"), ('w'::"char")) AS c(cmd)
    WHERE NOT EXISTS (SELECT 1 FROM politicas p WHERE p.tabla = s.tabla AND p.polcmd = c.cmd)
+), lectura_lineas AS (
+  SELECT p.polname, pg_get_expr(p.polqual, p.polrelid) AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND c.relname = 'sourcing_scenario_lines'
+     AND p.polpermissive AND p.polcmd = 'r'
+), lectura_sin_permiso AS (
+  SELECT 'sourcing_scenario_lines.' || polname AS descripcion
+    FROM lectura_lineas
+   WHERE expresion NOT LIKE '%has_permission(''market.sourcing:read''%'
+  UNION ALL
+  SELECT 'sourcing_scenario_lines (sin política de SELECT)'
+   WHERE NOT EXISTS (SELECT 1 FROM lectura_lineas)
 )
 SELECT pg_temp.expect_true(91,
-  'Escribir en las tablas sensibles exige un permiso, no solo tenant'
+  'Escribir en las tablas sensibles exige un permiso, no solo tenant; leer las líneas de sourcing, también'
     || COALESCE(' — sin permiso: '
                 || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sin_permiso), '')
     || COALESCE(' — sin política: '
-                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM falta), ''),
-  NOT EXISTS (SELECT 1 FROM sin_permiso) AND NOT EXISTS (SELECT 1 FROM falta));
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM falta), '')
+    || COALESCE(' — lectura sin permiso: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM lectura_sin_permiso), ''),
+  NOT EXISTS (SELECT 1 FROM sin_permiso) AND NOT EXISTS (SELECT 1 FROM falta)
+  AND NOT EXISTS (SELECT 1 FROM lectura_sin_permiso));
 
 -- 92 ─ Ninguna política permisiva de esas tablas es FOR ALL. Un FOR ALL
 -- también cubre SELECT: quien puede escribir leería la tabla entera aunque
@@ -1836,7 +1858,8 @@ WITH for_all AS (
     JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'app'
      AND c.relname IN ('suppliers', 'purchase_orders', 'inventory_lots',
-                       'chart_of_accounts', 'customer_deposits', 'sourcing_scenarios')
+                       'chart_of_accounts', 'customer_deposits', 'sourcing_scenarios',
+                       'sourcing_scenario_lines')
      AND p.polpermissive
      AND p.polcmd = '*'
 )
@@ -1852,10 +1875,10 @@ SELECT pg_temp.expect_true(92,
 -- el DELETE directo de una orden enviada no pasa aunque quien lo intenta
 -- tenga el permiso. Que `draft` signifique "nunca enviada" lo sostiene el
 -- trigger de 0031 (invariantes 95-103), no esta política. En
--- sourcing_scenarios (WP-B11b) hay también una sola, con
--- `market.sourcing:write` y sin más condición: un escenario es una
--- simulación y se borra. El nombre lista las políticas de DELETE que sobran,
--- o avisa que la de órdenes o la de escenarios no es la esperada.
+-- sourcing_scenarios y sourcing_scenario_lines (WP-B11b) hay también una sola
+-- por tabla, con `market.sourcing:write` y sin más condición: un escenario
+-- es una simulación y se borra. El nombre lista las políticas de DELETE que
+-- sobran, o avisa que la de órdenes o la de sourcing no es la esperada.
 WITH borrado AS (
   SELECT c.relname AS tabla, p.polname,
          COALESCE(pg_get_expr(p.polqual, p.polrelid), '') AS expresion
@@ -1864,12 +1887,14 @@ WITH borrado AS (
     JOIN pg_namespace n ON n.oid = c.relnamespace
    WHERE n.nspname = 'app'
      AND c.relname IN ('suppliers', 'purchase_orders', 'inventory_lots',
-                       'chart_of_accounts', 'customer_deposits', 'sourcing_scenarios')
+                       'chart_of_accounts', 'customer_deposits', 'sourcing_scenarios',
+                       'sourcing_scenario_lines')
      AND p.polpermissive
      AND p.polcmd IN ('d', '*')
 ), sobran AS (
   SELECT tabla || '.' || polname AS descripcion
-    FROM borrado WHERE tabla NOT IN ('purchase_orders', 'sourcing_scenarios')
+    FROM borrado
+   WHERE tabla NOT IN ('purchase_orders', 'sourcing_scenarios', 'sourcing_scenario_lines')
 ), orden_ok AS (
   SELECT count(*) AS n
     FROM borrado
@@ -1877,29 +1902,29 @@ WITH borrado AS (
      AND expresion LIKE '%market.purchase_order:write%'
      AND expresion LIKE '%(status = ''draft''%'
      AND expresion NOT LIKE '% OR %'
-), escenario_ok AS (
-  SELECT count(*) AS n
+), sourcing_ok AS (
+  SELECT count(DISTINCT tabla) AS n
     FROM borrado
-   WHERE tabla = 'sourcing_scenarios'
+   WHERE tabla IN ('sourcing_scenarios', 'sourcing_scenario_lines')
      AND expresion LIKE '%market.sourcing:write%'
      AND expresion NOT LIKE '% OR %'
      AND expresion NOT LIKE '% AND %'
 )
 SELECT pg_temp.expect_true(93,
-  'Sin DELETE en lotes, señas, cuentas y proveedores; en órdenes de compra, solo borradores; en escenarios de sourcing, con su permiso'
+  'Sin DELETE en lotes, señas, cuentas y proveedores; en órdenes de compra, solo borradores; en escenarios de sourcing y sus líneas, con su permiso'
     || COALESCE(' — DELETE que sobra: '
                 || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sobran), '')
     || CASE WHEN (SELECT n FROM orden_ok) = 1
              AND (SELECT count(*) FROM borrado WHERE tabla = 'purchase_orders') = 1
             THEN '' ELSE ' — la política de DELETE de purchase_orders no es la esperada' END
-    || CASE WHEN (SELECT n FROM escenario_ok) = 1
-             AND (SELECT count(*) FROM borrado WHERE tabla = 'sourcing_scenarios') = 1
-            THEN '' ELSE ' — la política de DELETE de sourcing_scenarios no es la esperada' END,
+    || CASE WHEN (SELECT n FROM sourcing_ok) = 2
+             AND (SELECT count(*) FROM borrado WHERE tabla LIKE 'sourcing_scenario%') = 2
+            THEN '' ELSE ' — la política de DELETE de sourcing_scenarios o de sus líneas no es la esperada' END,
   NOT EXISTS (SELECT 1 FROM sobran)
   AND (SELECT n FROM orden_ok) = 1
   AND (SELECT count(*) FROM borrado WHERE tabla = 'purchase_orders') = 1
-  AND (SELECT n FROM escenario_ok) = 1
-  AND (SELECT count(*) FROM borrado WHERE tabla = 'sourcing_scenarios') = 1);
+  AND (SELECT n FROM sourcing_ok) = 2
+  AND (SELECT count(*) FROM borrado WHERE tabla LIKE 'sourcing_scenario%') = 2);
 
 -- 94 ─ En los roles sembrados (`is_system`, de cualquier tenant), todo
 -- permiso de escritura de esas tablas viene con el de lectura de la MISMA
@@ -1929,6 +1954,7 @@ WITH par(tabla, escribe, lee) AS (
     ('chart_of_accounts', 'accounting.journal:write',      'accounting.journal:read'),
     ('customer_deposits', 'accounting.deposit:write',      'accounting.deposit:read'),
     ('sourcing_scenarios', 'market.sourcing:write',         'market.sourcing:read'),
+    ('sourcing_scenario_lines', 'market.sourcing:write',    'market.sourcing:read'),
     ('roles',              'settings.user:write',           'settings.user:read'),
     ('role_permissions',   'settings.user:write',           'settings.user:read'),
     ('staff_user_roles',   'settings.user:write',           'settings.user:read')
@@ -2234,18 +2260,76 @@ SELECT pg_temp.expect_fail_like(110, 'Rol personalizado se renombra y se borra',
   $$,
   'aceptado');
 
+-- 111 ─ `joda_api` no escribe el catálogo global `permissions`: ni INSERT,
+-- UPDATE, DELETE ni TRUNCATE sobre la tabla, ni INSERT o UPDATE sobre una
+-- columna (`has_table_privilege` no ve los privilegios por columna), ni por
+-- un GRANT a PUBLIC; y sigue leyéndolo. El catálogo lo carga el seed. Sin
+-- esto, un DELETE de un vendedor del tenant A borraba por cascada las
+-- `role_permissions` de TODOS los tenants (revisión cruzada de B11c).
+SELECT pg_temp.expect_true(111,
+  'joda_api lee el catálogo permissions y no lo escribe',
+  has_table_privilege('joda_api', 'app.permissions', 'SELECT')
+  AND NOT has_table_privilege('joda_api', 'app.permissions', 'INSERT')
+  AND NOT has_table_privilege('joda_api', 'app.permissions', 'UPDATE')
+  AND NOT has_table_privilege('joda_api', 'app.permissions', 'DELETE')
+  AND NOT has_table_privilege('joda_api', 'app.permissions', 'TRUNCATE')
+  AND NOT has_any_column_privilege('joda_api', 'app.permissions', 'INSERT')
+  AND NOT has_any_column_privilege('joda_api', 'app.permissions', 'UPDATE'));
+
+-- 112 ─ La política de INSERT de `roles` exige que el rol NO sea de sistema:
+-- un administrador no fabrica roles imborrables (con `is_system` el trigger
+-- impide borrarlos y renombrarlos). Lee el texto de la política; el
+-- comportamiento, como joda_api, lo prueba write_permissions.test.ts.
+WITH de_insert AS (
+  SELECT COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND c.relname = 'roles'
+     AND p.polpermissive AND p.polcmd = 'a'
+)
+SELECT pg_temp.expect_true(112,
+  'roles: la política de INSERT exige que el rol no sea de sistema',
+  (SELECT count(*) FROM de_insert) = 1
+  AND (SELECT count(*) FROM de_insert WHERE expresion LIKE '%NOT is_system%') = 1);
+
+-- 113 ─ Las políticas de escritura de `role_permissions` excluyen los roles
+-- de sistema: el INSERT y el UPDATE (el de destino también, para que no se
+-- mueva una fila hacia uno) y el DELETE. Sus permisos son la matriz de
+-- security-spec §2.1 y se cambian por el seed; sin esto, el dueño se vacía su
+-- propio rol con un DELETE (revisión cruzada de B11c). Lee el texto de las
+-- políticas; el comportamiento, como joda_api, lo prueba
+-- write_permissions.test.ts.
+WITH pol AS (
+  SELECT p.polcmd,
+         COALESCE(pg_get_expr(p.polqual, p.polrelid), '') AS usando,
+         COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') AS chequea
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND c.relname = 'role_permissions'
+     AND p.polpermissive AND p.polcmd IN ('a', 'w', 'd', '*')
+)
+SELECT pg_temp.expect_true(113,
+  'role_permissions: no se escribe un rol de sistema (INSERT, UPDATE y DELETE)',
+  EXISTS (SELECT 1 FROM pol WHERE polcmd = 'a' AND chequea LIKE '%is_system%')
+  AND EXISTS (SELECT 1 FROM pol WHERE polcmd = 'w'
+                 AND usando LIKE '%is_system%' AND chequea LIKE '%is_system%')
+  AND EXISTS (SELECT 1 FROM pol WHERE polcmd = 'd' AND usando LIKE '%is_system%')
+  AND NOT EXISTS (SELECT 1 FROM pol WHERE polcmd = '*'));
+
 
 -- WP-B11d (0034_write_permissions_children_ledger.sql): escribir en el
 -- ledger, en las líneas de órdenes de compra, en las recepciones y borrar un
--- pedido de venta exige permiso. Los invariantes 111, 115 y 116 leen el TEXTO
+-- pedido de venta exige permiso. Los invariantes 114, 118 y 119 leen el TEXTO
 -- de las políticas (pg_get_expr), con el límite de siempre: no prueban que
--- hagan lo que dicen, y el 111 no puede probar qué permiso va con qué tipo de
+-- hagan lo que dicen, y el 114 no puede probar qué permiso va con qué tipo de
 -- movimiento. Eso lo prueba, con cada rol como joda_api,
 -- write_permissions.test.ts. El CHECK y la guarda se prueban acá por
 -- comportamiento, como superusuario.
 -- ─────────────────────────────────────────────────────────────────────
 
--- 111 ─ inventory_movements tiene UNA política de escritura, la de INSERT, con
+-- 114 ─ inventory_movements tiene UNA política de escritura, la de INSERT, con
 -- permiso y sin `true`; ninguna de UPDATE, DELETE ni FOR ALL (el ledger es
 -- append-only); y nombra todos los valores de `movement_type` y los seis
 -- permisos del mapeo. Un valor de enum agregado después y no mapeado se
@@ -2278,7 +2362,7 @@ WITH politicas AS (
                  ('sales.order:refund'), ('market.purchase_order:write')) AS v(permiso)
    WHERE NOT EXISTS (SELECT 1 FROM de_insert i WHERE i.expresion LIKE '%''' || v.permiso || '''%')
 )
-SELECT pg_temp.expect_true(111,
+SELECT pg_temp.expect_true(114,
   'Ledger: una sola política de escritura (INSERT), con permiso, que cubre todo movement_type'
     || COALESCE(' — sobran: '
                 || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sobran), '')
@@ -2292,10 +2376,10 @@ SELECT pg_temp.expect_true(111,
   AND NOT EXISTS (SELECT 1 FROM sin_permiso) AND NOT EXISTS (SELECT 1 FROM tipos_sin_cubrir)
   AND NOT EXISTS (SELECT 1 FROM permisos_sin_usar));
 
--- 112 ─ Un transfer con un `reference_type` que no sea de la apertura o la
+-- 115 ─ Un transfer con un `reference_type` que no sea de la apertura o la
 -- separación se rechaza: la política de `transfer_*` no puede depender de un
 -- texto libre. Hay que rechazarlo por el CHECK y no por otra cosa.
-SELECT pg_temp.expect_fail_like(112, 'Transfer con reference_type libre',
+SELECT pg_temp.expect_fail_like(115, 'Transfer con reference_type libre',
   $$INSERT INTO app.inventory_movements
       (tenant_id, lot_id, variant_id, qty, uom, movement_type, reference_type)
     VALUES ('11111111-1111-1111-1111-111111111111',
@@ -2303,9 +2387,9 @@ SELECT pg_temp.expect_fail_like(112, 'Transfer con reference_type libre',
             '55555555-0000-0000-0000-000000000002', 1, 'ml', 'transfer_in', 'otro_texto')$$,
   '%movement_transfer_reference_type%');
 
--- 113 ─ Ni sin `reference_type`: un `IN` con NULL da NULL y un CHECK lo dejaría
+-- 116 ─ Ni sin `reference_type`: un `IN` con NULL da NULL y un CHECK lo dejaría
 -- pasar, así que el CHECK exige que no sea NULL.
-SELECT pg_temp.expect_fail_like(113, 'Transfer sin reference_type',
+SELECT pg_temp.expect_fail_like(116, 'Transfer sin reference_type',
   $$INSERT INTO app.inventory_movements
       (tenant_id, lot_id, variant_id, qty, uom, movement_type)
     VALUES ('11111111-1111-1111-1111-111111111111',
@@ -2313,11 +2397,11 @@ SELECT pg_temp.expect_fail_like(113, 'Transfer sin reference_type',
             '55555555-0000-0000-0000-000000000002', 1, 'ml', 'transfer_in')$$,
   '%movement_transfer_reference_type%');
 
--- 114 ─ Control positivo de 112 y 113: un transfer de la separación y uno de
+-- 117 ─ Control positivo de 115 y 116: un transfer de la separación y uno de
 -- la apertura SÍ entran, y un movimiento que no es transfer sigue aceptando
 -- un `reference_type` libre (`sale_order`, `goods_receipt`...). Sin esto, un
 -- CHECK que rechazara todo movimiento pasaría los dos anteriores.
-SELECT pg_temp.expect_fail_like(114, 'Transfer de separación y apertura entran; otros tipos, texto libre',
+SELECT pg_temp.expect_fail_like(117, 'Transfer de separación y apertura entran; otros tipos, texto libre',
   $$DO $x$
     BEGIN
       INSERT INTO app.inventory_movements
@@ -2336,7 +2420,7 @@ SELECT pg_temp.expect_fail_like(114, 'Transfer de separación y apertura entran;
   $$,
   'aceptado');
 
--- 115 ─ purchase_order_lines, goods_receipts y goods_receipt_lines: cada
+-- 118 ─ purchase_order_lines, goods_receipts y goods_receipt_lines: cada
 -- política de escritura es la esperada (tabla, comando y permiso), no hay
 -- ninguna otra (en particular, ningún DELETE en recepciones: se cancelan con
 -- su estado) y ninguna es `true` ni FOR ALL. El nombre lista las que faltan y
@@ -2373,7 +2457,7 @@ WITH esperadas(tabla, cmd, permiso) AS (
    WHERE p.polcmd = '*' OR p.expresion ~ '\mtrue\M'
       OR NOT EXISTS (SELECT 1 FROM esperadas e WHERE e.tabla = p.tabla AND e.cmd = p.polcmd)
 )
-SELECT pg_temp.expect_true(115,
+SELECT pg_temp.expect_true(118,
   'Líneas de órdenes de compra y recepciones: escribir exige su permiso; las recepciones no se borran'
     || COALESCE(' — faltan: '
                 || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM faltan), '')
@@ -2381,7 +2465,7 @@ SELECT pg_temp.expect_true(115,
                 || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sobran), ''),
   NOT EXISTS (SELECT 1 FROM faltan) AND NOT EXISTS (SELECT 1 FROM sobran));
 
--- 116 ─ sale_orders se borra solo con `sales.order:write` Y en borrador, con
+-- 119 ─ sale_orders se borra solo con `sales.order:write` Y en borrador, con
 -- el estado dentro de la política y ninguna otra condición (ningún `OR`), y
 -- hay una sola política de DELETE. INSERT y UPDATE siguen solo por tenant
 -- (ver 0034, "qué queda fuera"), así que no se exige permiso en ellos.
@@ -2393,7 +2477,7 @@ WITH borrado AS (
    WHERE n.nspname = 'app' AND c.relname = 'sale_orders'
      AND p.polpermissive AND p.polcmd IN ('d', '*')
 )
-SELECT pg_temp.expect_true(116,
+SELECT pg_temp.expect_true(119,
   'sale_orders: DELETE solo con sales.order:write y solo en borrador',
   (SELECT count(*) FROM borrado) = 1
   AND (SELECT count(*) FROM borrado
@@ -2401,9 +2485,9 @@ SELECT pg_temp.expect_true(116,
           AND expresion LIKE '%(status = ''draft''%'
           AND expresion NOT LIKE '% OR %') = 1);
 
--- 117 ─ Un pedido `paid` no vuelve a borrador: sin esto, un UPDATE a `draft`
+-- 120 ─ Un pedido `paid` no vuelve a borrador: sin esto, un UPDATE a `draft`
 -- y un DELETE borraban una venta cobrada y desenganchaban su seña.
-SELECT pg_temp.expect_fail_like(117, 'Pedido paid vuelve a draft',
+SELECT pg_temp.expect_fail_like(120, 'Pedido paid vuelve a draft',
   $$DO $x$
     BEGIN
       INSERT INTO app.sale_orders (id, tenant_id, channel_id, code, status)
@@ -2415,8 +2499,8 @@ SELECT pg_temp.expect_fail_like(117, 'Pedido paid vuelve a draft',
   $$,
   'El pedido 11711711-0000-0000-0000-000000000117 está en paid y no puede volver a draft%');
 
--- 118 ─ Ni uno `cancelled`.
-SELECT pg_temp.expect_fail_like(118, 'Pedido cancelled vuelve a draft',
+-- 121 ─ Ni uno `cancelled`.
+SELECT pg_temp.expect_fail_like(121, 'Pedido cancelled vuelve a draft',
   $$DO $x$
     BEGIN
       INSERT INTO app.sale_orders (id, tenant_id, channel_id, code, status)
@@ -2428,10 +2512,10 @@ SELECT pg_temp.expect_fail_like(118, 'Pedido cancelled vuelve a draft',
   $$,
   'El pedido 11811811-0000-0000-0000-000000000118 está en cancelled y no puede volver a draft%');
 
--- 119 ─ Ni uno `awaiting_payment`, el único estado al que se llega desde
+-- 122 ─ Ni uno `awaiting_payment`, el único estado al que se llega desde
 -- `draft`: no hay un análogo de `pending_approval` de la orden de compra, y
 -- este es el control de que tampoco se vuelve de ahí.
-SELECT pg_temp.expect_fail_like(119, 'Pedido awaiting_payment vuelve a draft',
+SELECT pg_temp.expect_fail_like(122, 'Pedido awaiting_payment vuelve a draft',
   $$DO $x$
     BEGIN
       INSERT INTO app.sale_orders (id, tenant_id, channel_id, code, status)
@@ -2443,11 +2527,11 @@ SELECT pg_temp.expect_fail_like(119, 'Pedido awaiting_payment vuelve a draft',
   $$,
   'El pedido 11911911-0000-0000-0000-000000000119 está en awaiting_payment y no puede volver a draft%');
 
--- 120 ─ Control positivo de 117 a 119: un borrador se edita sin salir de
+-- 123 ─ Control positivo de 120 a 122: un borrador se edita sin salir de
 -- `draft`, y recorre el camino feliz de la máquina de A09 hasta `delivered`
 -- y `refunded`. Sin esto, un trigger que rechazara todo cambio de estado
 -- pasaría los tres anteriores.
-SELECT pg_temp.expect_fail_like(120, 'Pedido draft se edita y avanza por la máquina',
+SELECT pg_temp.expect_fail_like(123, 'Pedido draft se edita y avanza por la máquina',
   $$DO $x$
     BEGIN
       INSERT INTO app.sale_orders (id, tenant_id, channel_id, code, status)

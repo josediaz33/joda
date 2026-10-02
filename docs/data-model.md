@@ -175,7 +175,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 120: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 123: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -311,7 +311,9 @@ Los estados de los que la base impone que no se vuelva (ADR-026). El ADR guarda 
 - **Por qué congela también `is_system`.** Sin eso, bajar la marca y borrar el rol eran dos pasos: el rodeo que la revisión de B11 encontró con `draft`. La política de INSERT exige `NOT is_system`, así que tampoco se fabrican roles imborrables. `seed_roles` corre como dueño de las tablas (elude RLS) y los crea.
 - **Mecanismo.** Lee solo `OLD` y `NEW`: no es `SECURITY DEFINER` y el invariante 29 la admite por nombre. Compara con `IS DISTINCT FROM`. Fija `search_path = app, pg_temp`.
 - **Borrar un tenant** borraría por cascada sus roles de sistema y el trigger lo rechaza: ningún camino de producto lo hace (`staff_users.tenant_id` es `RESTRICT`) y quien lo necesite lo deshabilita a propósito.
-- **Verificación.** Invariantes 105 a 109 (borrar, renombrar por `name` y por `code`, bajar y subir `is_system`) y el control positivo 110, como superusuario. `write_permissions.test.ts` lo prueba como `joda_api` con el dueño, que SÍ tiene `settings.user:write`.
+- **Verificación.** Invariantes 105 a 109 (borrar, renombrar por `name` y por `code`, bajar y subir `is_system`) y el control positivo 110, como superusuario; el 112, que la política de INSERT de `roles` exija `NOT is_system`. `write_permissions.test.ts` lo prueba como `joda_api` con el dueño, que SÍ tiene `settings.user:write`.
+- **Sus permisos tampoco se tocan desde la API (RLS, no trigger).** Las políticas de escritura de `role_permissions` excluyen los roles de sistema (invariante 113), porque sin eso el dueño se vaciaba su propio rol con un `DELETE` y quedaba tan bloqueado como si lo hubiera borrado. Se cambian por el seed. Es solo RLS: el seed y el ETL la eluden.
+- **El catálogo `permissions` no lo escribe `joda_api`** (`REVOKE` de 0033, invariante 111).
 
 ---
 
@@ -382,7 +384,7 @@ Encima, políticas de permiso sobre lo sensible: `journal_entries`, `chart_of_ac
 Qué comandos cubre la política de permiso, en cada una:
 
 - **Lectura (SELECT):** las siete, desde 0010.
-- **Escritura:** `suppliers`, `purchase_orders`, `inventory_lots`, `chart_of_accounts` y `customer_deposits` desde 0030 (WP-B11): INSERT y UPDATE con su permiso de escritura, una política por comando, y DELETE denegado salvo en `purchase_orders` en borrador. `journal_entries` tiene su INSERT desde 0010 y su mapa de estados desde 0020. `sourcing_scenarios` tiene INSERT desde 0010 y UPDATE y DELETE desde 0032 (WP-B11b), los tres con `market.sourcing:write`; es la única de estas tablas donde el DELETE existe sin condición de estado. Las tablas que cuelgan de ellas y el ledger, desde 0034 (WP-B11d): `inventory_movements` (INSERT según `movement_type`, sin UPDATE ni DELETE), `purchase_order_lines`, `goods_receipts` y `goods_receipt_lines` (recepciones sin DELETE) y el DELETE de `sale_orders` (solo en borrador); su SELECT sigue por tenant.
+- **Escritura:** `suppliers`, `purchase_orders`, `inventory_lots`, `chart_of_accounts` y `customer_deposits` desde 0030 (WP-B11): INSERT y UPDATE con su permiso de escritura, una política por comando, y DELETE denegado salvo en `purchase_orders` en borrador. `journal_entries` tiene su INSERT desde 0010 y su mapa de estados desde 0020. `sourcing_scenarios` tiene INSERT desde 0010 y UPDATE y DELETE desde 0032 (WP-B11b), los tres con `market.sourcing:write`, y su tabla hija `sourcing_scenario_lines` tiene los cuatro comandos con permiso desde 0032 (lectura con `market.sourcing:read`, escritura con `:write`); son las únicas de estas tablas donde el DELETE existe sin condición de estado. Las tablas que cuelgan de ellas y el ledger, desde 0034 (WP-B11d): `inventory_movements` (INSERT según `movement_type`, sin UPDATE ni DELETE), `purchase_order_lines`, `goods_receipts` y `goods_receipt_lines` (recepciones sin DELETE) y el DELETE de `sale_orders` (solo en borrador); su SELECT sigue por tenant.
 
 La tabla de permisos por comando y la trampa de la lectura (un rol que escribe sin poder leer) están en `docs/security-spec.md` §3.1.
 
