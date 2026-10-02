@@ -25,6 +25,11 @@ export interface MarketContext extends TenantTxContext {
 }
 
 const NOT_FOUND = appError("NOT_FOUND", 404, "No encontrado.");
+const FORBIDDEN_ACTION = appError(
+  "FORBIDDEN_INSUFFICIENT_PERMISSION",
+  403,
+  "No tenés permiso para realizar esta acción.",
+);
 const invalidCursor = appError(
   "VALIDATION_INVALID_CURSOR",
   400,
@@ -300,7 +305,10 @@ export async function removeOrder(db: PrismaClient, ctx: MarketContext, id: stri
       );
     }
     try {
-      await repo.removeOrder(tx, ctx.tenantId, id);
+      const affectedRows = await repo.removeOrder(tx, ctx.tenantId, id);
+      // RLS puede ocultar la fila al DELETE aunque se haya leído y bloqueado
+      // con :read/:approve. Sin una fila borrada no existe efecto que auditar.
+      if (affectedRows !== 1) throw toTRPCError(FORBIDDEN_ACTION);
     } catch (error) {
       if (hasSqlState(error, "23001")) {
         throw toTRPCError(
@@ -357,8 +365,9 @@ export async function transitionOrder(
     }
     const updated = await repo.updateOrderStatus(tx, ctx.tenantId, input.id, {
       status: result.value,
-      ...(result.value === "approved" && { approved_by: ctx.userId, approved_at: new Date() }),
+      ...(result.value === "approved" && { approval: { actorId: ctx.userId, at: new Date() } }),
     });
+    if (!updated) throw toTRPCError(FORBIDDEN_ACTION);
     await repo.insertTransition(tx, {
       tenant_id: ctx.tenantId,
       purchase_order_id: input.id,

@@ -4,15 +4,22 @@ import Fastify from "fastify";
 import type { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { jodaApiConnectionUrl, startTestDb, type TestDb } from "../../db/testDb.js";
-import { router } from "../../trpc/trpc.js";
+import { purchaseOrderByIdInput } from "@joda/contracts";
+import { withTenantTx } from "../../db/withTenantTx.js";
+import { router, staffProcedure } from "../../trpc/trpc.js";
 import { createMarketRouter } from "./router.js";
 import * as market from "./service.js";
+import * as repo from "./repository.js";
 
 const TENANT = "88888888-8888-4888-a888-888888888881";
 const OTHER_TENANT = "88888888-8888-4888-a888-888888888882";
 const STAFF = "99999999-9999-4999-a999-999999999981";
 const SESSION = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaa81";
 const OTHER_STAFF = "99999999-9999-4999-a999-999999999982";
+const LIMITED_STAFF = "99999999-9999-4999-a999-999999999983";
+const LIMITED_SESSION = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaa83";
+const READ_ONLY_STAFF = "99999999-9999-4999-a999-999999999984";
+const READ_ONLY_SESSION = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaa84";
 const VARIANT = "77777777-7777-4777-a777-777777777781";
 const OTHER_VARIANT = "77777777-7777-4777-a777-777777777782";
 const ctx: market.MarketContext = {
@@ -69,6 +76,30 @@ describe("RF-MKT-01…03 · proveedores y órdenes de compra (RN-EST-01)", () =>
     await testDb.superuserClient.query(
       "INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at) VALUES ($1, $2, $3, now() + interval '1 day')",
       [SESSION, TENANT, STAFF],
+    );
+    await testDb.superuserClient.query(
+      "INSERT INTO app.staff_users (id, tenant_id, auth_subject, email, full_name) VALUES ($1, $2, 'market-limited', 'market-limited@test.local', 'Limited'), ($3, $2, 'market-read-only', 'market-read-only@test.local', 'Read only')",
+      [LIMITED_STAFF, TENANT, READ_ONLY_STAFF],
+    );
+    await testDb.superuserClient.query(
+      "INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at) VALUES ($1, $2, $3, now() + interval '1 day'), ($4, $2, $5, now() + interval '1 day')",
+      [LIMITED_SESSION, TENANT, LIMITED_STAFF, READ_ONLY_SESSION, READ_ONLY_STAFF],
+    );
+    const limitedRole = await testDb.superuserClient.query<{ id: string }>(
+      "INSERT INTO app.roles (tenant_id, code, name) VALUES ($1, 'market_limited_test', 'Market limited test') RETURNING id",
+      [TENANT],
+    );
+    const readOnlyRole = await testDb.superuserClient.query<{ id: string }>(
+      "INSERT INTO app.roles (tenant_id, code, name) VALUES ($1, 'market_read_only_test', 'Market read only test') RETURNING id",
+      [TENANT],
+    );
+    await testDb.superuserClient.query(
+      "INSERT INTO app.role_permissions (tenant_id, role_id, permission_code) VALUES ($1, $2, 'market.purchase_order:read'), ($1, $2, 'market.purchase_order:approve'), ($1, $3, 'market.purchase_order:read')",
+      [TENANT, limitedRole.rows[0]!.id, readOnlyRole.rows[0]!.id],
+    );
+    await testDb.superuserClient.query(
+      "INSERT INTO app.staff_user_roles (tenant_id, staff_user_id, role_id) VALUES ($1, $2, $3), ($1, $4, $5)",
+      [TENANT, LIMITED_STAFF, limitedRole.rows[0]!.id, READ_ONLY_STAFF, readOnlyRole.rows[0]!.id],
     );
     for (const [tenant, variant, suffix] of [
       [TENANT, VARIANT, "a"],
@@ -292,6 +323,177 @@ describe("RF-MKT-01…03 · proveedores y órdenes de compra (RN-EST-01)", () =>
       expect(denied.json().error.data.appCode).toBe("CONFLICT_PURCHASE_ORDER_HISTORY");
       expect(denied.json().error.message).toContain("hay que cancelarla");
       expect((await market.getOrder(db, ctx, order.id)).transitions).toHaveLength(2);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("docs/security-spec.md §3.1 · no confirma ni audita un DELETE que RLS ocultó", async () => {
+    const supplier = await market.createSupplier(db, ctx, {
+      code: "MKT-S-RLS-DELETE",
+      name: "Proveedor RLS",
+      defaultCurrency: "USD",
+      paymentTermsDays: 0,
+    });
+    const order = await market.createOrder(db, ctx, {
+      supplierId: supplier.id,
+      code: "MKT-PO-RLS-DELETE",
+      currency: "USD",
+      lines: [{ variantId: VARIANT, qtyOrdered: "1", uom: "unit", unitPriceMinor: "500" }],
+    });
+    const app = Fastify();
+    app.register(fastifyTRPCPlugin, {
+      prefix: "/trpc",
+      trpcOptions: {
+        router: router({ market: createMarketRouter(db) }),
+        createContext: ({ req, res }: CreateFastifyContextOptions) => ({
+          requestId: req.id,
+          userId: LIMITED_STAFF,
+          tenantId: TENANT,
+          audience: "staff" as const,
+          sessionId: LIMITED_SESSION,
+          mfaStatus: "satisfied" as const,
+          grantedPermissions: new Set(["market.purchase_order:write"]),
+          req,
+          res,
+        }),
+      },
+    });
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/trpc/market.purchaseOrder.remove",
+        payload: { id: order.id },
+      });
+      expect(response.statusCode).toBe(403);
+      expect(response.json().error.data.appCode).toBe("FORBIDDEN_INSUFFICIENT_PERMISSION");
+      expect((await market.getOrder(db, ctx, order.id)).status).toBe("draft");
+      const auditRows = await testDb.superuserClient.query<{ action: string }>(
+        "SELECT action FROM app.audit_log WHERE entity_id = $1 ORDER BY id",
+        [order.id],
+      );
+      expect(auditRows.rows.map((row) => row.action)).toEqual(["market.purchaseOrder.create"]);
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("ADR-026 · traduce a 409 el rechazo real de la guarda de órdenes", async () => {
+    const supplier = await market.createSupplier(db, ctx, {
+      code: "MKT-S-GUARD",
+      name: "Proveedor Guarda",
+      defaultCurrency: "USD",
+      paymentTermsDays: 0,
+    });
+    const order = await market.createOrder(db, ctx, {
+      supplierId: supplier.id,
+      code: "MKT-PO-GUARD",
+      currency: "USD",
+      lines: [{ variantId: VARIANT, qtyOrdered: "1", uom: "unit", unitPriceMinor: "500" }],
+    });
+    await market.transitionOrder(db, ctx, { id: order.id, toStatus: "pending_approval" });
+    await market.transitionOrder(db, ctx, { id: order.id, toStatus: "approved" });
+    const app = Fastify();
+    app.register(fastifyTRPCPlugin, {
+      prefix: "/trpc",
+      trpcOptions: {
+        router: router({
+          guardProbe: staffProcedure
+            .meta({ permission: "market.purchase_order:write" })
+            .input(purchaseOrderByIdInput)
+            .mutation(({ input }) =>
+              withTenantTx(db, ctx, (tx) =>
+                repo.updateOrderStatus(tx, TENANT, input.id, { status: "draft" }),
+              ),
+            ),
+        }),
+        createContext: ({ req, res }: CreateFastifyContextOptions) => ({
+          requestId: req.id,
+          userId: STAFF,
+          tenantId: TENANT,
+          audience: "staff" as const,
+          sessionId: SESSION,
+          mfaStatus: "satisfied" as const,
+          grantedPermissions: new Set(["market.purchase_order:write"]),
+          req,
+          res,
+        }),
+      },
+    });
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/trpc/guardProbe",
+        payload: { id: order.id },
+      });
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.data.appCode).toBe("CONFLICT_CHECK_VIOLATION");
+      expect((await market.getOrder(db, ctx, order.id)).status).toBe("approved");
+    } finally {
+      await app.close();
+    }
+  });
+
+  it("docs/api-conventions.md §4.3 · P2025 por fila oculta responde 404", async () => {
+    const supplier = await market.createSupplier(db, ctx, {
+      code: "MKT-S-P2025",
+      name: "Proveedor P2025",
+      defaultCurrency: "USD",
+      paymentTermsDays: 0,
+    });
+    const order = await market.createOrder(db, ctx, {
+      supplierId: supplier.id,
+      code: "MKT-PO-P2025",
+      currency: "USD",
+      lines: [{ variantId: VARIANT, qtyOrdered: "1", uom: "unit", unitPriceMinor: "500" }],
+    });
+    const app = Fastify();
+    app.register(fastifyTRPCPlugin, {
+      prefix: "/trpc",
+      trpcOptions: {
+        router: router({
+          hiddenUpdateProbe: staffProcedure
+            .meta({ permission: "market.purchase_order:write" })
+            .input(purchaseOrderByIdInput)
+            .mutation(({ input }) =>
+              withTenantTx(
+                db,
+                {
+                  tenantId: TENANT,
+                  userId: READ_ONLY_STAFF,
+                  audience: "staff",
+                  sessionId: READ_ONLY_SESSION,
+                },
+                (tx) =>
+                  tx.purchase_orders.update({
+                    where: { id: input.id, tenant_id: TENANT },
+                    data: { notes: "No permitido" },
+                  }),
+              ),
+            ),
+        }),
+        createContext: ({ req, res }: CreateFastifyContextOptions) => ({
+          requestId: req.id,
+          userId: READ_ONLY_STAFF,
+          tenantId: TENANT,
+          audience: "staff" as const,
+          sessionId: READ_ONLY_SESSION,
+          mfaStatus: "satisfied" as const,
+          grantedPermissions: new Set(["market.purchase_order:write"]),
+          req,
+          res,
+        }),
+      },
+    });
+    try {
+      const response = await app.inject({
+        method: "POST",
+        url: "/trpc/hiddenUpdateProbe",
+        payload: { id: order.id },
+      });
+      expect(response.statusCode).toBe(404);
+      expect(response.json().error.data.appCode).toBe("NOT_FOUND");
+      expect((await market.getOrder(db, ctx, order.id)).notes).toBeNull();
     } finally {
       await app.close();
     }

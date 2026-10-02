@@ -110,6 +110,9 @@ export function hasSqlState(error: unknown, code: string): boolean {
 
 export function mapPrismaError(error: PrismaKnownError): ApiError {
   if (error.code === "P2002") return mapPgError({ code: "23505" });
+  // Prisma usa P2025 cuando UPDATE/DELETE no encuentra una fila, incluso si
+  // RLS la oculta. La API no revela si existe fuera de esta sesión.
+  if (error.code === "P2025") return appError("NOT_FOUND", 404, "No encontrado.");
   if (error.code === "P2010" && typeof error.meta?.code === "string") {
     return mapPgError({ code: error.meta.code });
   }

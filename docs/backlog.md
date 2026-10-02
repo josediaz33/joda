@@ -492,6 +492,8 @@ Otras vías para acotar el default —bajarlo a solo SELECT y conceder la escrit
 
 **Resolución de C14 (2026-10-01).** La API crea cada OC en `draft` sin insertar `null → draft`; la creación queda en `audit_log`. Un borrador sin historial se borra y audita. Si pasó a aprobación y volvió a `draft`, la transición append-only bloquea la cascada con `23001`; la API responde 409 en español e indica cancelarla. Pruebas de integración como `owner` con sesión vigente después de B10/B11/B13.
 
+**Revisión cruzada de C14 (2026-10-02).** Se cerraron tres hallazgos con reproducciones contra Postgres real: el borrado comprueba que `DELETE` afectó exactamente una fila antes de auditar (RLS puede ocultarla si se revocó `:write`), la actualización de estado usa SQL parametrizado para conservar el `23514` del trigger en `P2010.meta.code` y responder 409, y el mapeador global traduce `P2025` a 404 cuando Prisma no encuentra una fila visible. Los tres tests fallaron antes de la corrección y pasaron después. No se cambió `packages/db`.
+
 ---
 
 ## Bloque C — API

@@ -1,4 +1,5 @@
 import type { Prisma } from "@joda/db";
+import type { PoStatus } from "@joda/domain";
 import type { TenantTx } from "../../db/withTenantTx.js";
 
 const ORDER_INCLUDE = {
@@ -79,12 +80,37 @@ export async function createOrder(
 export async function lockOrder(tx: TenantTx, tenantId: string, id: string): Promise<void> {
   await tx.$queryRaw`SELECT id FROM app.purchase_orders WHERE id = ${id}::uuid AND tenant_id = ${tenantId}::uuid FOR UPDATE`;
 }
-export const updateOrderStatus = (
+interface UpdatedOrderStatus {
+  status: PoStatus;
+  approved_by: string | null;
+  approved_at: Date | null;
+}
+
+// El trigger de irreversibilidad (ADR-026) emite SQLSTATE 23514. Prisma
+// oculta ese código en `.update()` de modelo; SQL crudo parametrizado lo
+// conserva en P2010.meta.code para el mapeador global. Cero filas también
+// puede significar que la política RLS de UPDATE ocultó la orden.
+export async function updateOrderStatus(
   tx: TenantTx,
   tenantId: string,
   id: string,
-  data: Prisma.purchase_ordersUncheckedUpdateInput,
-) => tx.purchase_orders.update({ where: { id, tenant_id: tenantId }, data });
+  data: { status: PoStatus; approval?: { actorId: string; at: Date } },
+): Promise<UpdatedOrderStatus | null> {
+  const rows = data.approval
+    ? await tx.$queryRaw<UpdatedOrderStatus[]>`
+        UPDATE app.purchase_orders
+           SET status = ${data.status}::app.po_status,
+               approved_by = ${data.approval.actorId}::uuid,
+               approved_at = ${data.approval.at}::timestamptz
+         WHERE id = ${id}::uuid AND tenant_id = ${tenantId}::uuid
+         RETURNING status, approved_by, approved_at`
+    : await tx.$queryRaw<UpdatedOrderStatus[]>`
+        UPDATE app.purchase_orders
+           SET status = ${data.status}::app.po_status
+         WHERE id = ${id}::uuid AND tenant_id = ${tenantId}::uuid
+         RETURNING status, approved_by, approved_at`;
+  return rows[0] ?? null;
+}
 export const removeOrder = (tx: TenantTx, tenantId: string, id: string) =>
   tx.$executeRaw`DELETE FROM app.purchase_orders WHERE id = ${id}::uuid AND tenant_id = ${tenantId}::uuid`;
 export const insertTransition = (
