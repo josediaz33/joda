@@ -1,6 +1,15 @@
 import { TRPCError } from "@trpc/server";
 import { describe, expect, it } from "vitest";
-import { appError, isApiError, isPgError, mapPgError, toTRPCError } from "./errorMapper.js";
+import {
+  appError,
+  hasSqlState,
+  isApiError,
+  isPgError,
+  isPrismaKnownError,
+  mapPgError,
+  mapPrismaError,
+  toTRPCError,
+} from "./errorMapper.js";
 
 // No hay una RN-XXX que citar: esto es la convención de frontera de
 // docs/api-conventions.md §4 (forma del error, familias de código,
@@ -107,6 +116,33 @@ describe("isPgError — reconoce la forma de DatabaseError de `pg` (api-conventi
   it("rechaza valores que no son objetos", () => {
     expect(isPgError("23514")).toBe(false);
     expect(isPgError(null)).toBe(false);
+  });
+});
+
+describe("WP-C08c · errores Prisma de restricción (api-conventions.md §4.4)", () => {
+  it("P2002 se traduce a 409 CONFLICT_DUPLICATE sin filtrar detalles", () => {
+    const error = {
+      name: "PrismaClientKnownRequestError" as const,
+      code: "P2002",
+      message: "Unique constraint failed",
+    };
+    expect(isPrismaKnownError(error)).toBe(true);
+    expect(isPgError(error)).toBe(false);
+    expect(mapPrismaError(error)).toEqual({
+      code: "CONFLICT_DUPLICATE",
+      httpStatus: 409,
+      message: "Ya existe un registro con esos datos.",
+    });
+  });
+
+  it("P2010 conserva el SQLSTATE del error crudo y detecta 23001", () => {
+    const error = {
+      name: "PrismaClientKnownRequestError" as const,
+      code: "P2010",
+      meta: { code: "23001" },
+    };
+    expect(hasSqlState(error, "23001")).toBe(true);
+    expect(hasSqlState(error, "23505")).toBe(false);
   });
 });
 

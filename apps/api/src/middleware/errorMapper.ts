@@ -1,14 +1,7 @@
-// Traduce errores de PostgreSQL a errores de API en español, con código
-// estable (docs/api-conventions.md §4.4). Nadie más traduce: un handler que
-// atrapa un error de Postgres y arma su propio mensaje es exactamente lo que
-// esta pieza existe para evitar.
-//
-// `PgError` es una forma ESTRUCTURAL, no el tipo `DatabaseError` del driver
-// `pg` — apps/api todavía no tiene una conexión real a Postgres (eso es
-// WP-C02); cuando la tenga, sea vía `pg` o vía Prisma, lo único que hace
-// falta pasar acá es el ERRCODE de cinco caracteres (SQLSTATE) y el mensaje
-// crudo. Decisión deliberada: este archivo no depende de qué cliente de base
-// termine usando C02.
+// Traduce errores de PostgreSQL y Prisma a errores de API en español, con
+// código estable (docs/api-conventions.md §4.4). Los casos que necesitan un
+// mensaje de negocio específico usan el SQLSTATE estructurado, nunca el
+// texto crudo de la base.
 import { TRPCError } from "@trpc/server";
 
 export interface PgError {
@@ -20,7 +13,24 @@ export interface PgError {
 
 const SQLSTATE_PATTERN = /^[0-9A-Z]{5}$/;
 
+interface PrismaKnownError {
+  readonly name: "PrismaClientKnownRequestError";
+  readonly code: string;
+  readonly meta?: { readonly code?: unknown };
+}
+
+export function isPrismaKnownError(error: unknown): error is PrismaKnownError {
+  if (typeof error !== "object" || error === null) return false;
+  const candidate = error as { name?: unknown; code?: unknown };
+  return (
+    candidate.name === "PrismaClientKnownRequestError" &&
+    typeof candidate.code === "string" &&
+    /^P\d{4}$/.test(candidate.code)
+  );
+}
+
 export function isPgError(error: unknown): error is PgError {
+  if (isPrismaKnownError(error)) return false;
   if (typeof error !== "object" || error === null) return false;
   const code = (error as { code?: unknown }).code;
   return typeof code === "string" && SQLSTATE_PATTERN.test(code);
@@ -89,6 +99,24 @@ export function mapPgError(error: PgError): ApiError {
   const mapper = error.code ? PG_ERROR_MAP[error.code] : undefined;
   if (mapper) return mapper(error);
   return appError("INTERNAL", 500, "Ocurrió un error interno. Intentá de nuevo en unos minutos.");
+}
+
+export function hasSqlState(error: unknown, code: string): boolean {
+  if (isPrismaKnownError(error)) {
+    return error.code === "P2010" && error.meta?.code === code;
+  }
+  return isPgError(error) && error.code === code;
+}
+
+export function mapPrismaError(error: PrismaKnownError): ApiError {
+  if (error.code === "P2002") return mapPgError({ code: "23505" });
+  // Prisma usa P2025 cuando UPDATE/DELETE no encuentra una fila, incluso si
+  // RLS la oculta. La API no revela si existe fuera de esta sesión.
+  if (error.code === "P2025") return appError("NOT_FOUND", 404, "No encontrado.");
+  if (error.code === "P2010" && typeof error.meta?.code === "string") {
+    return mapPgError({ code: error.meta.code });
+  }
+  return mapPgError({});
 }
 
 // httpStatus (docs/api-conventions.md §4.2) → código nativo de tRPC. Los

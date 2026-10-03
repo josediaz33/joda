@@ -319,6 +319,17 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     );
     expect(sealed.pricePyg).toBe("2850000");
 
+    const duplicateSku = await mutate("catalog.variant.create", {
+      productId: product.id,
+      sku: "LAYTON-125-SELLADO",
+      variantType: "sealed",
+      uom: "unit",
+      sizeMl: 125,
+      pricePyg: "2850000",
+    });
+    expect(duplicateSku.statusCode).toBe(409);
+    expect(duplicateSku.json().error.data.appCode).toBe("CONFLICT_DUPLICATE");
+
     const bulk = await mutateOk<{ id: string; variantType: string }>("catalog.variant.create", {
       productId: product.id,
       sku: "LAYTON-125-GRANEL",
@@ -376,6 +387,31 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     });
     expect(rejected.statusCode).toBe(409);
     expect(rejected.json().error.data.appCode).toBe("CONFLICT_BOM_REQUIRES_DECANT_VARIANT");
+  });
+
+  it("WP-C08c · dos altas simultáneas de granel dejan una sola variante y una respuesta de conflicto", async () => {
+    const product = await testDb.superuserClient.query<{ id: string }>(
+      "INSERT INTO app.products (tenant_id, kind, slug, name) VALUES ($1, 'perfume', 'bulk-race-c08c', 'Granel concurrente') RETURNING id",
+      [TENANT_ID],
+    );
+    const firstPayload = {
+      productId: product.rows[0]!.id,
+      sku: "BULK-RACE-1",
+      variantType: "bulk",
+      uom: "ml",
+      sizeMl: null,
+      pricePyg: "0",
+    };
+    const [first, second] = await Promise.all([
+      mutate("catalog.variant.create", firstPayload),
+      mutate("catalog.variant.create", { ...firstPayload, sku: "BULK-RACE-2" }),
+    ]);
+    expect([first.statusCode, second.statusCode].sort()).toEqual([200, 409]);
+    const count = await testDb.superuserClient.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM app.product_variants WHERE product_id = $1 AND variant_type = 'bulk'",
+      [product.rows[0]!.id],
+    );
+    expect(count.rows[0]!.n).toBe(1);
   });
 
   it("RF-CAT-01 · update cambia campos y recomputa facets; archive pasa a status archived", async () => {

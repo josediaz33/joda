@@ -9,7 +9,9 @@ import {
   appError,
   isApiError,
   isPgError,
+  isPrismaKnownError,
   mapPgError,
+  mapPrismaError,
   toTRPCError,
 } from "../middleware/errorMapper.js";
 import type { RequestContext } from "./context.js";
@@ -69,12 +71,8 @@ export const t = initTRPC
     },
   });
 
-// Middleware global: si algo debajo de un procedimiento deja escapar un
-// error de Postgres crudo (ERRCODE de cinco caracteres) sin haberlo
-// traducido, lo traduce acá — una sola vez, no en cada repository. Cuando
-// WP-C02 conecte apps/api a Postgres de verdad, cualquier error que ese
-// cliente tire pasa por este mismo camino sin que el módulo que lo lanzó
-// tenga que acordarse de llamar a mapPgError.
+// Traduce SQLSTATE de pg y errores conocidos de Prisma, incluido P2002,
+// una sola vez para todos los módulos.
 //
 // `next()` de tRPC v11 NO relanza el error del resolver como excepción de
 // JS: internamente lo atrapa y lo devuelve como `{ ok: false, error }` (ver
@@ -82,10 +80,12 @@ export const t = initTRPC
 // middleware sin usar control de flujo por excepción. Por eso esto no es un
 // `try/catch` alrededor de `next()` — hay que inspeccionar el resultado. El
 // error original crudo sobrevive en `error.cause` (getTRPCErrorFromUnknown
-// lo adjunta sin envolver si ya es un Error, que es el caso de cualquier
-// error real de `pg`).
-const catchPgErrors = t.middleware(async ({ next }) => {
+// lo adjunta sin envolver si ya es un Error).
+const catchDatabaseErrors = t.middleware(async ({ next }) => {
   const result = await next();
+  if (!result.ok && isPrismaKnownError(result.error.cause)) {
+    throw toTRPCError(mapPrismaError(result.error.cause));
+  }
   if (!result.ok && isPgError(result.error.cause)) {
     throw toTRPCError(mapPgError(result.error.cause));
   }
@@ -181,6 +181,6 @@ export const router = t.router;
 // enterarse de si el módulo que pidió existe o no (404 vs. 403) antes de
 // terminar de autenticarse.
 export const staffProcedure = t.procedure
-  .use(catchPgErrors)
+  .use(catchDatabaseErrors)
   .use(enforceMfaGate)
   .use(enforcePermissionGate);
