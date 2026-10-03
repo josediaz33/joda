@@ -1,44 +1,54 @@
-// Valores por defecto de negocio de las columnas de detalle y de variantes
-// (WP-E05a). El formulario del admin los precarga: si los inventa o los deja
-// en cero, cada perfume nace sin merma ni decantable y cada reloj sin número
-// de serie.
+// Valores por defecto de las columnas de detalle y de variantes (WP-E05a). El
+// formulario del admin los precarga: si los inventa o los deja en cero, cada
+// perfume nace sin merma ni decantable y cada reloj sin número de serie.
 //
-// Cada valor es el DEFAULT de su columna en
-// packages/db/migrations/0003_catalog.sql. El test de paridad
-// apps/api/src/modules/catalog/businessDefaultsParity.integration.test.ts
-// compara ambos contra una base migrada: si uno cambia sin el otro, falla en CI.
+// Cada valor es el DEFAULT efectivo de su columna después de todas las
+// migraciones (sobre todo packages/db/migrations/0003_catalog.sql). El test de
+// paridad apps/api/src/modules/catalog/businessDefaultsParity.integration.test.ts
+// compara ambos y falla si uno cambia sin el otro.
 //
-// Columnas que NO van acá: `kind` (discriminador de la CTI), `position` (orden
-// de presentación), los arreglos de notas (`'{}'`) y las marcas de tiempo.
+// Un valor sin fuente de negocio está marcado "pendiente de confirmar con José":
+// hoy es el DEFAULT de la migración, no una decisión documentada.
+//
+import type { ProductionMode, VatRate } from "./catalog.js";
+
+// No van acá:
+// - Columnas que no tienen sentido de negocio: `kind` (discriminador de la CTI),
+//   `position` (orden de presentación), los arreglos de notas (`'{}'`) y las
+//   marcas de tiempo.
+// - `allocation_policy` e `is_serialized` de product_variants: dependen de la
+//   vertical (un reloj con serie no es FIFO ni tiene las mismas reglas que un
+//   perfume) y la regla que los liga no está escrita en ningún documento. Ver
+//   WP-E05c en docs/backlog.md.
 
 // Merma en tres componentes (RN-FRA-05, ADR-010) y atributos de fraccionamiento.
 export const PERFUME_DEFAULTS = {
   isDecantable: true,
-  // Trasvase: proporcional al volumen, 2 %.
+  // Trasvase: proporcional al volumen, como fracción (0,02 = 2 %). El escenario
+  // de validación de docs/architecture/JODA_Arquitectura_v5_Final.md (nota
+  // sobre el decant de 10 ml) usa 2 %.
   wasteFactor: 0.02,
-  // Fondo no recuperable por frasco, en ml (RN-LOT-04).
+  // Fondo no recuperable por frasco, en ml. RN-LOT-04 lo usa por producto y no
+  // fija un número: pendiente de confirmar con José.
   unusableResidueMl: 2,
-  // Evaporación por año abierto. Placeholder: la fórmula todavía no está
-  // definida (WP-A14, docs/backlog.md). Cero significa "no se aplica".
+  // Evaporación por año abierto. Cero no es una decisión de negocio: la fórmula
+  // no está definida (WP-A14, docs/backlog.md). Pendiente.
   evaporationMlYear: 0,
 } as const;
 
-// Serie y garantía (RN-SER intro).
+// Serie y garantía.
 export const WATCH_DEFAULTS = {
+  // RN-SER: un reloj lleva número de serie (docs/domain-rules.md, RN-SER).
   requiresSerial: true,
+  // Ningún documento fija un plazo de garantía: pendiente de confirmar con José.
   warrantyMonths: 12,
 } as const;
 
-// Política de la variante, sea cual sea su vertical.
+// Política de la variante que no depende de la vertical.
 export const VARIANT_DEFAULTS = {
   // Tasa general de IVA, sobre precio con impuesto incluido.
-  vatRate: "iva_10",
-  // Selección de lote por antigüedad (RN-LOT-05).
-  allocationPolicy: "fifo",
-  productionMode: "stocked",
-  // Default de la columna. Un reloj con número de serie necesita `true`: el
-  // formulario lo decide por vertical, no lo deja pasar en silencio.
-  isSerialized: false,
+  vatRate: "iva_10" satisfies VatRate,
+  productionMode: "stocked" satisfies ProductionMode,
   // Una variante nueva no se publica sola en la tienda.
   onlineVisible: false,
 } as const;

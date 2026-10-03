@@ -8,12 +8,18 @@ import { startTestDb, type TestDb } from "../../db/testDb.js";
 // la base pone si la API no manda el campo). Si divergen, el formulario guarda
 // un valor y la base habría guardado otro: una merma que cambia en silencio al
 // crear un perfume. Mismo caso que WP-M11: es una convención mecánica entre dos
-// archivos, no una regla de negocio, así que cita la fuente que la define
-// (`.claude/rules/testing.md`, excepción de convención mecánica).
+// archivos, no una regla de negocio, así que cita la sección que la define
+// (docs/testing-strategy.md §2.2, excepción de convención mecánica).
+//
+// La paridad no fija ningún valor de negocio: si constante y migración cambian
+// juntas, pasa. Por eso el último bloque escribe los valores literales.
 //
 // Vive en apps/api y no en packages/db por la misma razón que
 // permissionsParity.integration.test.ts: acá conviven `@joda/contracts` y
-// `startTestDb`. Lo corre `pnpm test` y el CI.
+// `startTestDb`. Lo corre `pnpm test` y el CI. `@joda/contracts` se consume por
+// su `dist/`: si se edita catalog-defaults.ts y este archivo se corre suelto,
+// hay que reconstruirlo antes (`pnpm --filter @joda/contracts build`) o compara
+// contra el build viejo. `pnpm test` ya lo reconstruye (turbo `^build`).
 
 type ColumnRef = { table: string; column: string };
 
@@ -33,9 +39,7 @@ const WATCH_COLUMNS = {
 
 const VARIANT_COLUMNS = {
   vatRate: { table: "product_variants", column: "vat_rate" },
-  allocationPolicy: { table: "product_variants", column: "allocation_policy" },
   productionMode: { table: "product_variants", column: "production_mode" },
-  isSerialized: { table: "product_variants", column: "is_serialized" },
   onlineVisible: { table: "product_variants", column: "online_visible" },
 } satisfies Record<keyof typeof VARIANT_DEFAULTS, ColumnRef>;
 
@@ -79,7 +83,7 @@ function parseColumnDefault(raw: string | null): unknown {
   return Number(raw);
 }
 
-describe("paridad entre los defaults de contratos y los DEFAULT de 0003_catalog.sql (WP-E05a)", () => {
+describe("paridad entre los defaults de contratos y los DEFAULT efectivos de la base (WP-E05a; convención mecánica, docs/testing-strategy.md §2.2)", () => {
   let testDb: TestDb;
   // "tabla.columna" -> DEFAULT de la base, ya normalizado.
   let storedDefaults: Map<string, unknown>;
@@ -117,5 +121,50 @@ describe("paridad entre los defaults de contratos y los DEFAULT de 0003_catalog.
 
   it.each(CASES)("$name coincide con el DEFAULT de $source", ({ source, expected }) => {
     expect(storedDefaults.get(source)).toEqual(expected);
+  });
+});
+
+// Valores acordados o pendientes de confirmar (ver catalog-defaults.ts). Cambiar
+// uno exige cambiar también esta tabla, a la vista en el PR, con su justificación
+// (`.claude/rules/testing.md`: cambiar un valor esperado requiere justificación).
+describe("valores por defecto escritos literales (WP-E05a; docs/testing-strategy.md §2.2)", () => {
+  const LITERALS = [
+    {
+      name: "PERFUME_DEFAULTS.isDecantable",
+      actual: PERFUME_DEFAULTS.isDecantable,
+      expected: true,
+    },
+    { name: "PERFUME_DEFAULTS.wasteFactor", actual: PERFUME_DEFAULTS.wasteFactor, expected: 0.02 },
+    {
+      name: "PERFUME_DEFAULTS.unusableResidueMl",
+      actual: PERFUME_DEFAULTS.unusableResidueMl,
+      expected: 2,
+    },
+    {
+      name: "PERFUME_DEFAULTS.evaporationMlYear",
+      actual: PERFUME_DEFAULTS.evaporationMlYear,
+      expected: 0,
+    },
+    {
+      name: "WATCH_DEFAULTS.requiresSerial",
+      actual: WATCH_DEFAULTS.requiresSerial,
+      expected: true,
+    },
+    { name: "WATCH_DEFAULTS.warrantyMonths", actual: WATCH_DEFAULTS.warrantyMonths, expected: 12 },
+    { name: "VARIANT_DEFAULTS.vatRate", actual: VARIANT_DEFAULTS.vatRate, expected: "iva_10" },
+    {
+      name: "VARIANT_DEFAULTS.productionMode",
+      actual: VARIANT_DEFAULTS.productionMode,
+      expected: "stocked",
+    },
+    {
+      name: "VARIANT_DEFAULTS.onlineVisible",
+      actual: VARIANT_DEFAULTS.onlineVisible,
+      expected: false,
+    },
+  ];
+
+  it.each(LITERALS)("$name vale lo acordado", ({ actual, expected }) => {
+    expect(actual).toBe(expected);
   });
 });
