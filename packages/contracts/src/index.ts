@@ -6,6 +6,7 @@ export * from "./shared/index.js";
 export * from "./auth.js";
 export * from "./catalog.js";
 export * from "./catalog-defaults.js";
+export * from "./decant.js";
 export * from "./inventory.js";
 export * from "./media.js";
 export * from "./market.js";
