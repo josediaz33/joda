@@ -9,6 +9,8 @@ import {
   type UseFormReturn,
 } from "react-hook-form";
 import {
+  PERFUME_DEFAULTS,
+  WATCH_DEFAULTS,
   createProductInput,
   updateProductInput,
   type AdminCategory,
@@ -87,19 +89,21 @@ function TextField<T extends CreateProductInput>({
   );
 }
 
+// Vacío es `null`, nunca `0`: un campo numérico sin cargar no puede llegar a la
+// API como cero (la merma de un perfume o la resistencia de un reloj quedarían
+// en cero sin que nadie lo vea). Si el esquema admite `null`, se guarda así; si
+// no, el esquema rechaza el envío y el error se muestra junto al campo.
 function NumberField<T extends CreateProductInput>({
   name,
   label,
-  nullable = false,
   step = "any",
 }: {
   name: FieldPath<T>;
   label: string;
-  nullable?: boolean;
   step?: string;
 }) {
-  const { register, getFieldState, formState } = useFormContext<T>();
-  const invalid = !!getFieldState(name, formState).error;
+  const { field, fieldState } = useController<T>({ name });
+  const invalid = !!fieldState.error;
   return (
     <div>
       <label htmlFor={name} className="mb-1 block text-sm font-semibold">
@@ -111,11 +115,16 @@ function NumberField<T extends CreateProductInput>({
         min="0"
         step={step}
         className={inputClass}
+        value={String(field.value ?? "")}
+        ref={field.ref}
+        name={field.name}
+        onBlur={field.onBlur}
+        onChange={(event) => {
+          const raw = event.target.value;
+          field.onChange(raw === "" ? null : Number(raw));
+        }}
         aria-invalid={invalid}
         aria-describedby={invalid ? `${name}-error` : undefined}
-        {...register(name, {
-          setValueAs: (value: string) => (value === "" && nullable ? null : Number(value)),
-        })}
       />
       <FieldError<T> name={name} />
     </div>
@@ -402,10 +411,12 @@ export function PerfumeForm(props: Props) {
         notesTop: [],
         notesHeart: [],
         notesBase: [],
-        isDecantable: false,
-        wasteFactor: 0,
-        unusableResidueMl: 0,
-        evaporationMlYear: 0,
+        // Merma y decantable: de PERFUME_DEFAULTS, nunca de ceros. Un cero acá
+        // dejaría el perfume sin merma y no decantable sin que nadie lo note.
+        isDecantable: PERFUME_DEFAULTS.isDecantable,
+        wasteFactor: PERFUME_DEFAULTS.wasteFactor,
+        unusableResidueMl: PERFUME_DEFAULTS.unusableResidueMl,
+        evaporationMlYear: PERFUME_DEFAULTS.evaporationMlYear,
       },
     },
   });
@@ -469,8 +480,10 @@ export function WatchForm(props: Props) {
         waterResistanceM: null,
         strapMaterial: null,
         crystal: null,
-        warrantyMonths: 0,
-        requiresSerial: false,
+        // Serie y garantía: de WATCH_DEFAULTS. Un reloj sin serie no registra
+        // unidades (RN-SER).
+        warrantyMonths: WATCH_DEFAULTS.warrantyMonths,
+        requiresSerial: WATCH_DEFAULTS.requiresSerial,
       },
     },
   });
@@ -491,15 +504,10 @@ export function WatchForm(props: Props) {
           ]}
         />
         <TextField<WatchInput> name="watchDetails.caseMaterial" label="Material de caja" />
-        <NumberField<WatchInput>
-          name="watchDetails.caseDiameterMm"
-          label="Diámetro (mm)"
-          nullable
-        />
+        <NumberField<WatchInput> name="watchDetails.caseDiameterMm" label="Diámetro (mm)" />
         <NumberField<WatchInput>
           name="watchDetails.waterResistanceM"
           label="Resistencia al agua (m)"
-          nullable
           step="1"
         />
         <TextField<WatchInput> name="watchDetails.strapMaterial" label="Material de correa" />

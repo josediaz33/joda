@@ -2,6 +2,7 @@ import { useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Controller, useForm } from "react-hook-form";
 import {
+  VARIANT_DEFAULTS,
   createVariantInput,
   updateVariantInput,
   type AdminVariant,
@@ -78,15 +79,18 @@ export function CreateVariantForm({
       sizeMl: null,
       pricePyg: "",
       compareAtPyg: null,
-      vatRate: "iva_10",
-      productionMode: "stocked",
+      vatRate: VARIANT_DEFAULTS.vatRate,
+      productionMode: VARIANT_DEFAULTS.productionMode,
       sourceVariantId: null,
+      // Pendiente (WP-E05c): el DEFAULT de la columna es false, pero un reloj
+      // con serie lo necesita en true. Se decide por vertical, no se precarga.
       isSerialized: false,
       // allocationPolicy, minStockAlert, weightG y position no tienen control
       // en WP-E05: se omiten y C08 aplica sus defaults, sin copiarlos acá.
     },
   });
   const type = form.watch("variantType");
+  const uom = form.watch("uom");
   const mode = form.watch("productionMode");
   return (
     <form
@@ -130,14 +134,13 @@ export function CreateVariantForm({
             onChange={(event) => {
               const value = event.target.value as CreateVariantInput["variantType"];
               form.setValue("variantType", value, { shouldValidate: true });
-              form.setValue("uom", value === "decant" || value === "bulk" ? "ml" : "unit", {
-                shouldValidate: true,
-              });
-              form.setValue(
-                "sizeMl",
-                value === "sealed" || value === "decant" || value === "tester" ? 1 : null,
-                { shouldValidate: true },
-              );
+              const nextUom = value === "decant" || value === "bulk" ? "ml" : "unit";
+              form.setValue("uom", nextUom, { shouldValidate: true });
+              // El tamaño se declara a mano: no hay un volumen de negocio que
+              // precargar (RF-CAT-02). Lo vacío lo rechaza el esquema.
+              form.setValue("sizeMl", null, { shouldValidate: true });
+              // Serie solo en unidades (RN-SER-02): al pasar a ml se apaga.
+              if (nextUom !== "unit") form.setValue("isSerialized", false);
             }}
           >
             <option value="unit">Unidad</option>
@@ -161,7 +164,9 @@ export function CreateVariantForm({
               className={inputClass}
               aria-invalid={!!form.formState.errors.sizeMl}
               aria-describedby={form.formState.errors.sizeMl ? "variant-size-error" : undefined}
-              {...form.register("sizeMl", { valueAsNumber: true })}
+              {...form.register("sizeMl", {
+                setValueAs: (value: string) => (value === "" ? null : Number(value)),
+              })}
             />
             {form.formState.errors.sizeMl && (
               <p id="variant-size-error" role="alert" className="text-error">
@@ -239,9 +244,11 @@ export function CreateVariantForm({
           </div>
         )}
       </div>
-      <label className="flex min-h-11 items-center gap-2 text-sm">
-        <input type="checkbox" {...form.register("isSerialized")} /> Requiere serie
-      </label>
+      {uom === "unit" && (
+        <label className="flex min-h-11 items-center gap-2 text-sm">
+          <input type="checkbox" {...form.register("isSerialized")} /> Requiere serie
+        </label>
+      )}
       {error && (
         <p role="alert" className="text-sm text-error">
           {error}

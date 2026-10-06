@@ -303,3 +303,135 @@ describe("GLOSARIO.md · el granel no se vende directo (WP-E05)", () => {
     expect(vi.mocked(api.updateVariant).mock.calls[0]?.[0]).not.toHaveProperty("onlineVisible");
   });
 });
+
+describe("RN-FRA-05 · el perfume nuevo nace con la merma de negocio (WP-E05a)", () => {
+  it("crea un perfume sin tocar merma ni decantable y envía los valores de PERFUME_DEFAULTS", async () => {
+    vi.mocked(api.listCategories).mockResolvedValue({
+      items: [{ id: categoryA, path: "perfumes", name: "Perfumes" }],
+      nextCursor: null,
+    } as Awaited<ReturnType<typeof api.listCategories>>);
+    vi.mocked(api.createProduct).mockResolvedValue({ id: "saved" } as Awaited<
+      ReturnType<typeof api.createProduct>
+    >);
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ProductEditor kind="perfume" onSaved={vi.fn()} onClose={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    await user.type(await screen.findByLabelText("Nombre *"), "Sauvage");
+    await user.type(screen.getByLabelText("Slug *"), "sauvage");
+    await user.click(screen.getByRole("checkbox", { name: "perfumes" }));
+    await user.click(screen.getByRole("button", { name: "Crear producto" }));
+
+    await waitFor(() =>
+      expect(api.createProduct).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "perfume",
+          perfumeDetails: expect.objectContaining({
+            isDecantable: true,
+            wasteFactor: 0.02,
+            unusableResidueMl: 2,
+            evaporationMlYear: 0,
+          }),
+        }),
+      ),
+    );
+  });
+});
+
+describe("RN-SER · el reloj nuevo lleva serie y garantía de negocio (WP-E05a)", () => {
+  it("crea un reloj sin tocar serie ni garantía y envía los valores de WATCH_DEFAULTS", async () => {
+    vi.mocked(api.listCategories).mockResolvedValue({
+      items: [{ id: categoryA, path: "relojes", name: "Relojes" }],
+      nextCursor: null,
+    } as Awaited<ReturnType<typeof api.listCategories>>);
+    vi.mocked(api.createProduct).mockResolvedValue({ id: "saved" } as Awaited<
+      ReturnType<typeof api.createProduct>
+    >);
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ProductEditor kind="watch" onSaved={vi.fn()} onClose={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    await user.type(await screen.findByLabelText("Nombre *"), "Submariner");
+    await user.type(screen.getByLabelText("Slug *"), "submariner");
+    await user.click(screen.getByRole("checkbox", { name: "relojes" }));
+    await user.click(screen.getByRole("button", { name: "Crear producto" }));
+
+    await waitFor(() =>
+      expect(api.createProduct).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "watch",
+          // Campos numéricos vacíos: null, nunca 0 (sin resistencia medida, no es 0 m).
+          watchDetails: expect.objectContaining({
+            requiresSerial: true,
+            warrantyMonths: 12,
+            caseDiameterMm: null,
+            waterResistanceM: null,
+          }),
+        }),
+      ),
+    );
+  });
+});
+
+describe("RN-SER-02 · solo una variante en unit se serializa (WP-E05)", () => {
+  it("no ofrece 'Requiere serie' al cambiar a granel y no lo envía", async () => {
+    vi.mocked(api.createVariant).mockResolvedValue({ id: "saved" } as Awaited<
+      ReturnType<typeof api.createVariant>
+    >);
+    const user = userEvent.setup();
+    render(
+      <CreateVariantForm productId="22222222-2222-4222-a222-222222222222" onSaved={vi.fn()} />,
+    );
+
+    await user.click(screen.getByRole("checkbox", { name: "Requiere serie" }));
+    await user.selectOptions(screen.getByLabelText("Presentación"), "bulk");
+    expect(screen.queryByRole("checkbox", { name: "Requiere serie" })).toBeNull();
+    await user.type(screen.getByLabelText("SKU *"), "GRANEL-02");
+    await user.type(screen.getByLabelText("Precio (Gs.) *"), "245000");
+    await user.click(screen.getByRole("button", { name: "Crear variante" }));
+
+    await waitFor(() =>
+      expect(api.createVariant).toHaveBeenCalledWith(
+        expect.objectContaining({ variantType: "bulk", isSerialized: false }),
+      ),
+    );
+  });
+});
+
+describe("RF-CAT-02 · el tamaño de un decant se declara, no se precarga (WP-E05)", () => {
+  it("no precarga 1 ml al elegir decant", async () => {
+    const user = userEvent.setup();
+    render(
+      <CreateVariantForm productId="22222222-2222-4222-a222-222222222222" onSaved={vi.fn()} />,
+    );
+
+    await user.selectOptions(screen.getByLabelText("Presentación"), "decant");
+    expect((screen.getByLabelText("Tamaño (ml) *") as HTMLInputElement).value).toBe("");
+  });
+
+  it("no envía 0 ml si el tamaño del decant queda vacío", async () => {
+    vi.mocked(api.createVariant).mockResolvedValue({ id: "saved" } as Awaited<
+      ReturnType<typeof api.createVariant>
+    >);
+    const user = userEvent.setup();
+    render(
+      <CreateVariantForm productId="22222222-2222-4222-a222-222222222222" onSaved={vi.fn()} />,
+    );
+
+    await user.selectOptions(screen.getByLabelText("Presentación"), "decant");
+    await user.type(screen.getByLabelText("SKU *"), "DECANT-EMPTY");
+    await user.type(screen.getByLabelText("Precio (Gs.) *"), "95000");
+    await user.click(screen.getByRole("button", { name: "Crear variante" }));
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("Tamaño (ml) *").getAttribute("aria-invalid")).toBe("true"),
+    );
+    expect(api.createVariant).not.toHaveBeenCalled();
+  });
+});
