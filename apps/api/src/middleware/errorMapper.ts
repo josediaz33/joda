@@ -16,7 +16,11 @@ const SQLSTATE_PATTERN = /^[0-9A-Z]{5}$/;
 interface PrismaKnownError {
   readonly name: "PrismaClientKnownRequestError";
   readonly code: string;
-  readonly meta?: { readonly code?: unknown };
+  // `code` es el SQLSTATE de un P2010 (SQL crudo); `constraint` es el nombre de
+  // la restricción de un P2003 (FK rota con el cliente tipado). Es la forma que
+  // Prisma entrega de verdad: errorMapper.integration.test.ts la comprueba con
+  // un error real, no armado a mano.
+  readonly meta?: { readonly code?: unknown; readonly constraint?: unknown };
 }
 
 export function isPrismaKnownError(error: unknown): error is PrismaKnownError {
@@ -68,6 +72,13 @@ const FOREIGN_KEY_MESSAGES: Record<string, ApiError> = {
     409,
     "No se puede borrar el pedido porque tiene una seña asociada. Desvinculá la seña del pedido y volvé a intentarlo.",
   ),
+  // decant_work_orders.sale_order_id es NO ACTION: un pedido con órdenes de
+  // fraccionamiento (WP-C13) no se borra, y sin esto salía como un error interno.
+  decant_wo_order_fk: appError(
+    "CONFLICT_ORDER_HAS_DECANT_ORDERS",
+    409,
+    "No se puede borrar el pedido porque tiene órdenes de fraccionamiento asociadas.",
+  ),
 };
 
 function mapForeignKeyViolation(error: PgError): ApiError {
@@ -110,6 +121,15 @@ export function hasSqlState(error: unknown, code: string): boolean {
 
 export function mapPrismaError(error: PrismaKnownError): ApiError {
   if (error.code === "P2002") return mapPgError({ code: "23505" });
+  // P2003 es una FK rota con el cliente tipado (por ejemplo, borrar un pedido
+  // que todavía tiene una seña). Sin esta rama caía en `mapPgError({})`: un 500.
+  // Con SQL crudo Prisma da P2010 y deja el nombre de la restricción solo dentro
+  // de `meta.message`, que acá no se lee: sale el 409 genérico.
+  if (error.code === "P2003") {
+    const constraint =
+      typeof error.meta?.constraint === "string" ? error.meta.constraint : undefined;
+    return mapPgError(constraint === undefined ? { code: "23503" } : { code: "23503", constraint });
+  }
   // Prisma usa P2025 cuando UPDATE/DELETE no encuentra una fila, incluso si
   // RLS la oculta. La API no revela si existe fuera de esta sesión.
   if (error.code === "P2025") return appError("NOT_FOUND", 404, "No encontrado.");
