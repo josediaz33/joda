@@ -414,6 +414,144 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(count.rows[0]!.n).toBe(1);
   });
 
+  // WP-E05c, decisión de José sobre #90: las variantes de un reloj heredan
+  // `is_serialized` de `requires_serial` del producto al crearse, no se marcan
+  // aparte. La recepción de una variante serializada exige cargar los seriales
+  // (RN-SER, WP-C15): un reloj sin serie no puede trabarse al recibirlo, y uno con
+  // serie no puede entrar sin registrarla. Solo rige en `createVariant`: la
+  // actualización posterior es WP-C08f.
+  async function createWatchProduct(suffix: string, requiresSerial: boolean) {
+    const category = await mutateOk<{ id: string }>("catalog.category.create", {
+      slug: `relojeria-${suffix}`,
+      name: "Relojería",
+    });
+    return mutateOk<{ id: string }>("catalog.product.create", {
+      kind: "watch",
+      slug: `reloj-${suffix}`,
+      name: `Reloj ${suffix}`,
+      categoryIds: [category.id],
+      primaryCategoryId: category.id,
+      watchDetails: {
+        movement: "automatic",
+        caseMaterial: "acero",
+        caseDiameterMm: 40,
+        waterResistanceM: 100,
+        strapMaterial: "cuero",
+        crystal: "zafiro",
+        warrantyMonths: 24,
+        requiresSerial,
+      },
+    });
+  }
+
+  function unitVariantPayload(productId: string, sku: string, extra: Record<string, unknown>) {
+    return {
+      productId,
+      sku,
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "3500000",
+      ...extra,
+    };
+  }
+
+  it("WP-E05c · la variante de un reloj con requires_serial = true nace serializada (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("serie-e05c", true);
+    const variant = await mutateOk<{ isSerialized: boolean }>(
+      "catalog.variant.create",
+      unitVariantPayload(watch.id, "RELOJ-SERIE-E05C", {}),
+    );
+    expect(variant.isSerialized).toBe(true);
+  });
+
+  it("WP-E05c · la variante de un reloj con requires_serial = false nace sin serie (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("sinserie-e05c", false);
+    const variant = await mutateOk<{ isSerialized: boolean }>(
+      "catalog.variant.create",
+      unitVariantPayload(watch.id, "RELOJ-SINSERIE-E05C", {}),
+    );
+    expect(variant.isSerialized).toBe(false);
+  });
+
+  it("WP-E05c · un isSerialized que contradice al producto se rechaza, en los dos sentidos, y no crea la variante", async () => {
+    const withSerial = await createWatchProduct("contra-con-e05c", true);
+    const withoutSerial = await createWatchProduct("contra-sin-e05c", false);
+
+    const turnedOff = await mutate(
+      "catalog.variant.create",
+      unitVariantPayload(withSerial.id, "RELOJ-CONTRA-1", { isSerialized: false }),
+    );
+    expect(turnedOff.statusCode).toBe(400);
+    expect(turnedOff.json().error.data.appCode).toBe("VALIDATION_SERIALIZED_INHERITED");
+
+    const turnedOn = await mutate(
+      "catalog.variant.create",
+      unitVariantPayload(withoutSerial.id, "RELOJ-CONTRA-2", { isSerialized: true }),
+    );
+    expect(turnedOn.statusCode).toBe(400);
+    expect(turnedOn.json().error.data.appCode).toBe("VALIDATION_SERIALIZED_INHERITED");
+
+    const created = await testDb.superuserClient.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM app.product_variants WHERE product_id = ANY($1::uuid[])",
+      [[withSerial.id, withoutSerial.id]],
+    );
+    expect(created.rows[0]!.n).toBe(0);
+  });
+
+  it("WP-E05c · un isSerialized que coincide con el producto se acepta (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("coincide-e05c", true);
+    const variant = await mutateOk<{ isSerialized: boolean }>(
+      "catalog.variant.create",
+      unitVariantPayload(watch.id, "RELOJ-COINCIDE-E05C", { isSerialized: true }),
+    );
+    expect(variant.isSerialized).toBe(true);
+  });
+
+  // Una variante serializada se mide en unidades enteras (CHECK de 0003). El
+  // refine de `createVariantInput` solo ve lo que manda el cliente, no lo que se
+  // hereda: sin este chequeo un reloj con serie aceptaría una variante en ml y la
+  // base la rechazaría con un conflicto genérico. Es una restricción que antes no
+  // existía: un reloj sin herencia aceptaba variantes en ml.
+  it("WP-E05c · una variante en ml de un reloj con serie se rechaza con un error claro (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("ml-e05c", true);
+    const inMl = await mutate("catalog.variant.create", {
+      productId: watch.id,
+      sku: "RELOJ-ML-E05C",
+      variantType: "bulk",
+      uom: "ml",
+      sizeMl: null,
+      pricePyg: "0",
+    });
+    expect(inMl.statusCode).toBe(400);
+    expect(inMl.json().error.data.appCode).toBe("VALIDATION_SERIALIZED_REQUIRES_UNIT");
+  });
+
+  it("WP-E05c · las variantes de un accesorio no heredan nada: lo que se manda se respeta (RN-SER-02)", async () => {
+    const category = await mutateOk<{ id: string }>("catalog.category.create", {
+      slug: "accesorios-e05c",
+      name: "Accesorios",
+    });
+    const accessory = await mutateOk<{ id: string }>("catalog.product.create", {
+      kind: "accessory",
+      slug: "estuche-e05c",
+      name: "Estuche E05c",
+      categoryIds: [category.id],
+      primaryCategoryId: category.id,
+      accessoryDetails: { material: null, color: null, sizeLabel: null },
+    });
+    const serialized = await mutateOk<{ isSerialized: boolean }>(
+      "catalog.variant.create",
+      unitVariantPayload(accessory.id, "ESTUCHE-E05C-SERIE", { isSerialized: true }),
+    );
+    const plain = await mutateOk<{ isSerialized: boolean }>(
+      "catalog.variant.create",
+      unitVariantPayload(accessory.id, "ESTUCHE-E05C-PLANO", {}),
+    );
+    expect(serialized.isSerialized).toBe(true);
+    expect(plain.isSerialized).toBe(false);
+  });
+
   it("RF-CAT-01 · update cambia campos y recomputa facets; archive pasa a status archived", async () => {
     const category = await mutateOk<{ id: string }>("catalog.category.create", {
       slug: "perfumeria-4",

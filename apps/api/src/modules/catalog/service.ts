@@ -326,6 +326,46 @@ const BULK_VARIANT_EXISTS_ERROR = appError(
   "El producto ya tiene una variante de granel: un producto es un solo líquido.",
 );
 
+// WP-E05c. Las variantes de un reloj heredan `is_serialized` de `requires_serial`
+// del producto: no se marcan aparte. Un reloj sin serie no puede trabarse al
+// recibirlo (la recepción de una variante serializada exige cargar los
+// seriales), y uno con serie no puede entrar sin registrarla. La herencia es al
+// crear: apagarlo después, con unidades ya registradas, es WP-C08d.
+//
+// El refine de `createVariantInput` sobre `isSerialized` solo ve lo que manda el
+// cliente, no lo que se hereda; por eso el CHECK `NOT is_serialized OR uom =
+// 'unit'` de la base se adelanta acá con un mensaje claro, en vez de llegar como
+// un conflicto genérico.
+function resolveIsSerialized(
+  product: repo.ProductRow,
+  input: CreateVariantInput,
+): boolean | undefined {
+  if (product.kind !== "watch") return input.isSerialized;
+  const details = product.watch_details_watch_details_product_id_tenant_idToproducts;
+  if (!details) throw new Error(`producto ${product.id} es kind=watch sin watch_details`);
+
+  const inherited = details.requires_serial;
+  if (input.isSerialized !== undefined && input.isSerialized !== inherited) {
+    throw toTRPCError(
+      appError(
+        "VALIDATION_SERIALIZED_INHERITED",
+        400,
+        `Las variantes de un reloj toman el número de serie de requiresSerial del producto (acá: ${inherited ? "sí" : "no"}); no se marcan aparte.`,
+      ),
+    );
+  }
+  if (inherited && input.uom !== "unit") {
+    throw toTRPCError(
+      appError(
+        "VALIDATION_SERIALIZED_REQUIRES_UNIT",
+        400,
+        "Un reloj con número de serie se mide en unidades enteras (uom = unit).",
+      ),
+    );
+  }
+  return inherited;
+}
+
 export async function createVariant(
   db: PrismaClient,
   ctx: TenantTxContext,
@@ -334,6 +374,7 @@ export async function createVariant(
   return withTenantTx(db, ctx, async (tx) => {
     const product = await repo.findProductRow(tx, { id: input.productId });
     if (!product) throw toTRPCError(NOT_FOUND_ERROR);
+    const isSerialized = resolveIsSerialized(product, input);
 
     // El índice único parcial de 0028 lo impone la base; esto adelanta el
     // mensaje, en vez de dejar que llegue como un error interno.
@@ -354,7 +395,7 @@ export async function createVariant(
       allocationPolicy: input.allocationPolicy,
       productionMode: input.productionMode,
       sourceVariantId: input.sourceVariantId ?? null,
-      isSerialized: input.isSerialized,
+      isSerialized,
       onlineVisible: input.onlineVisible,
       minStockAlert: input.minStockAlert ?? null,
       weightG: input.weightG ?? null,
