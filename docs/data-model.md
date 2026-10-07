@@ -175,7 +175,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 125: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 127: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -296,6 +296,13 @@ Los estados de los que la base impone que no se vuelva (ADR-026). El ADR guarda 
 - **Sigue en el dominio** la matriz del pedido (`packages/domain/src/sales/order.ts`, WP-A08) con sus terminales.
 - **Paridad entre los dos mapas.** Sin prueba que ate la guarda a `SALE_ORDER_TRANSITIONS`: `write_permissions.test.ts` recorre a mano los ocho estados que no son borrador, dos caminos de varios pasos y el camino feliz entero, y si la matriz ganara una arista hacia `draft` ningún test lo detecta. Ningún WP la convierte en prueba.
 - **Verificación.** Invariantes 120 a 122 y el control 123, como superusuario (y el 124 y el 125, la FK de la seña); y las pruebas de `write_permissions.test.ts` como `joda_api`, entre ellas los rodeos de dos y de varios pasos.
+
+**5. Una línea de orden de compra no cambia de orden.** Revisión cruzada de WP-B11d, 2026-10-07. `trg_po_line_no_reparent` (`0035_purchase_order_line_no_reparent.sql`), `BEFORE UPDATE OF purchase_order_id` sobre `purchase_order_lines`: `purchase_order_id` no cambia.
+
+- **Premisa de la que depende.** Las políticas de INSERT y DELETE de las líneas (`0034`) exigen la orden padre en `draft`: sin eso, `:write` vaciaba una orden enviada. La política de UPDATE queda abierta a propósito (la recepción actualiza `qty_received`; el precio y la cantidad pedida los decide WP-C15) y no puede comparar `OLD` con `NEW`, así que un `UPDATE` de `purchase_order_id` hacía lo que el INSERT y el DELETE prohíben: mover una línea de una orden enviada a un borrador la dejaba vacía, y a la inversa le agregaba una.
+- **No es una guarda de estado.** No hay un mapa de estados ni un terminal: es un invariante sobre una columna, como `trg_sealed_open_single_unit` (ADR-026). Vale también para el ETL (`service_role`).
+- **Mecanismo.** Lee solo `OLD` y `NEW`, compara con `IS DISTINCT FROM`, no es `SECURITY DEFINER` (el invariante 29 la admite por nombre) y rechaza con `23514`. No dispara en los `UPDATE` que no nombran `purchase_order_id`.
+- **Verificación.** Invariante 126 (rechaza, como superusuario) y el control 127 (`qty_received`, el precio y reenviar la misma orden pasan); y las pruebas de `write_permissions.test.ts` como `joda_api` con los roles `:write`, `:approve`, `:receive` y el dueño, en las dos direcciones.
 
 **Terminales que siguen en el dominio.** Se evaluaron con la pregunta del criterio y la respuesta fue no, salvo lo que dicen las guardas 3 y 4 para la orden de compra y el pedido de venta: si una de esas órdenes volviera atrás, ningún invariante de la base se desarmaría.
 

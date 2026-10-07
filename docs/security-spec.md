@@ -179,6 +179,8 @@ Quien escribe estas tablas se da permisos: si bastara con el tenant, B11 entero 
 
 **Lo que el WP no cierra.** La asignación del rol de dueño: quien tiene `settings.user:write` puede borrar la fila de `staff_user_roles` del dueño. El rol está protegido como fila y como matriz, pero no su asignación. Es la regla del último dueño —nadie se quita el rol de dueño si es el único que lo tiene en el tenant—, criterio de WP-C24 (`docs/backlog.md`).
 
+**`settings.user:write` equivale a ser dueño.** La inmutabilidad de los roles de sistema protege la matriz del seed, no limita ese permiso: quien lo tiene sin ser dueño puede asignarse el rol de dueño en `staff_user_roles`, o fabricar un rol propio con todos los permisos y asignárselo. La revisión cruzada de B11b/c/d (2026-10-07) lo probó como `joda_api`: pasó de no poder contabilizar a poder. No es un hueco nuevo (arriba ya se dice que quien escribe estas tablas se da permisos), pero conviene dejarlo escrito: **otorgar `settings.user:write` es otorgar todos los permisos**, y la regla del último dueño (C24) no lo cubre. Si el negocio quiere separar «administrar usuarios» de «ser dueño» (por ejemplo, que solo un dueño asigne el rol de dueño), es una decisión nueva y con su WP.
+
 #### El ledger, las líneas de órdenes, las recepciones y el borrado de pedidos (WP-B11d, `0034_write_permissions_children_ledger.sql`)
 
 B11 puso permiso en las cabeceras y dejó sin él a lo que cuelga de ellas y al ledger: como vendedor funcionaban un `UPDATE purchase_order_lines SET unit_price_minor = 1`, un `INSERT` de tipo `adjustment` de +5 sobre un lote y borrar una venta (que desengancha la seña); y las líneas de una orden se leían sin permiso, precios de compra incluidos. Desde 0034, una política por comando (nunca `FOR ALL`). El SELECT sigue por tenant salvo en `purchase_order_lines`, que exige `market.purchase_order:read`.
@@ -228,6 +230,8 @@ Si la API usara `service_role` o el dueño de las tablas, RLS **no se evaluaría
 **Verificado:** conectado como `joda_api`, sin `tenant_id` en contexto → cero filas; con otro tenant → cero filas; `UPDATE` sobre el libro → `permission denied`.
 
 **Provisión de la credencial de runtime (WP-C02).** `apps/api` se conecta exclusivamente con `DATABASE_URL_API` (ver `.env.example`) — nunca con `DATABASE_URL`, que queda reservada a migraciones y ETL (el equivalente local de `service_role`). Sin `DATABASE_URL_API` el proceso no arranca: se valida con Zod al inicio (`apps/api/src/config/env.ts`), sin fallback a ninguna otra variable. Además, antes de aceptar tráfico, `apps/api` corre `SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user` (`apps/api/src/db/client.ts`, `assertRlsNotBypassed`) y aborta el arranque si devuelve `true` — la red que atrapa a `DATABASE_URL_API` apuntando por error al owner de las tablas o a un superusuario. La password de desarrollo la fija `packages/db/seed/0002_seed_joda_api_credential.sql`; en producción sale del gestor de secretos.
+
+**Una línea de orden no cambia de orden (`0035_purchase_order_line_no_reparent.sql`, revisión cruzada de B11d).** El INSERT y el DELETE de líneas exigen la orden padre en `draft`, pero la política de UPDATE queda abierta (la recepción actualiza `qty_received`) y no puede comparar `OLD` con `NEW`: un `UPDATE` de `purchase_order_id` mandaba la línea a otra orden y vaciaba una enviada, o le agregaba una. `trg_po_line_no_reparent` lo rechaza para todo rol (`23514`); el detalle está en `docs/data-model.md` §4.6, guarda 5. Invariantes 126 y 127.
 
 ### 3.2 Capa 2 — Middleware
 
