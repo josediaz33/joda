@@ -157,6 +157,39 @@ describe("Caso borde #2 del catálogo · la merma real supera lo reservado", () 
   });
 });
 
+describe("RN-FRA-03 · caso borde #2 del catálogo · el granel que alcanza justo", () => {
+  // Revisión cruzada de WP-C13: 10 + 0.274 da 10.274000000000001 en punto
+  // flotante, y la comparación exacta rechazaba el último líquido de un frasco.
+  it("ejecuta cuando el granel alcanza justo para el líquido y la merma real (10,274 ml)", () => {
+    const result = executeDecant(
+      executeInput({
+        wasteActual: Quantity.ml(0.274),
+        bulkLot: bulkLot({ available: Quantity.ml(10.274) }),
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("sigue rechazando cuando falta una milésima (10,273 ml para 10,274)", () => {
+    const result = executeDecant(
+      executeInput({
+        wasteActual: Quantity.ml(0.274),
+        bulkLot: bulkLot({ available: Quantity.ml(10.273) }),
+      }),
+    );
+
+    expect(result).toEqual({
+      ok: false,
+      error: {
+        code: "INSUFFICIENT_BULK_FOR_ACTUAL",
+        required: Quantity.ml(10.274),
+        available: Quantity.ml(10.273),
+      },
+    });
+  });
+});
+
 describe("RN-FRA-03 · caso borde #3 del catálogo · falta un insumo obligatorio del BOM", () => {
   it("informa disponibilidad cero en ml cuando falta un componente medido en ml", () => {
     const result = executeDecant(
