@@ -408,14 +408,14 @@ SELECT pg_temp.expect_true(28,
 
 -- 29 ─ Toda función de disparador de app.* es SECURITY DEFINER, salvo las
 -- que no leen ninguna tabla (`guard_po_no_return_to_draft`, WP-B11,
--- `guard_system_roles`, WP-B11c, y `guard_so_no_return_to_draft`, WP-B11d:
--- leen solo OLD y NEW). Una función de
+-- `guard_system_roles`, WP-B11c, `guard_so_no_return_to_draft`, WP-B11d, y
+-- `guard_po_line_no_reparent`, 0035: leen solo OLD y NEW). Una función de
 -- invariante SECURITY INVOKER lee con
 -- los permisos de quien dispara el trigger: si RLS le oculta la fila, decide
 -- sobre un NULL (el defecto de B10 y de B09). Una función nueva que lea
 -- tablas y no esté en esta lista hace fallar esto.
 SELECT pg_temp.expect_true(29,
-  'Toda función de disparador de app.* es SECURITY DEFINER, salvo set_updated_at/guard_append_only/guard_po_no_return_to_draft/guard_system_roles/guard_so_no_return_to_draft',
+  'Toda función de disparador de app.* es SECURITY DEFINER, salvo set_updated_at/guard_append_only/guard_po_no_return_to_draft/guard_system_roles/guard_so_no_return_to_draft/guard_po_line_no_reparent',
   NOT EXISTS (
     SELECT 1
       FROM pg_proc p
@@ -425,7 +425,7 @@ SELECT pg_temp.expect_true(29,
        AND NOT p.prosecdef
        AND p.proname NOT IN ('set_updated_at', 'guard_append_only',
                              'guard_po_no_return_to_draft', 'guard_system_roles',
-                             'guard_so_no_return_to_draft')
+                             'guard_so_no_return_to_draft', 'guard_po_line_no_reparent')
   ));
 
 -- 30 ─ El dueño de toda función SECURITY DEFINER de app.* elude RLS. Una
@@ -2630,6 +2630,65 @@ SELECT pg_temp.expect_fail_like(125, 'Borrar un borrador sin seña, o con la se�
       RETURNING id INTO v_deposit;
       UPDATE app.customer_deposits SET sale_order_id = NULL WHERE id = v_deposit;
       DELETE FROM app.sale_orders WHERE id = '12512512-0000-0000-0000-000000000126';
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+-- 126 ─ Una línea de orden de compra no cambia de orden. Las políticas de
+-- INSERT y DELETE de `purchase_order_lines` (0034) exigen la orden padre en
+-- `draft`; la de UPDATE no mira el estado, y un UPDATE de `purchase_order_id`
+-- hacía lo que ellas prohíben: mover la línea de una orden enviada a un
+-- borrador la dejaba VACÍA, y mover una de un borrador a una orden enviada le
+-- AGREGABA una (revisión cruzada de B11b/c/d, 0035). Una política de UPDATE no
+-- puede comparar OLD con NEW; `trg_po_line_no_reparent` sí. Rechaza como
+-- superusuario: es el trigger, no RLS.
+SELECT pg_temp.expect_fail_like(126, 'Mover una línea de una orden de compra enviada a un borrador',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('12612612-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-126A', 'sent', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency, created_by)
+      VALUES ('12612612-0000-0000-0000-000000000002', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-126B', 'draft', 'USD',
+              '22222222-2222-2222-2222-222222222222');
+      INSERT INTO app.purchase_order_lines
+        (id, tenant_id, purchase_order_id, variant_id, qty_ordered, uom, unit_price_minor)
+      VALUES ('12612612-0000-0000-0000-0000000000a1', '11111111-1111-1111-1111-111111111111',
+              '12612612-0000-0000-0000-000000000001', '55555555-0000-0000-0000-000000000001',
+              2, 'unit', 5000);
+      UPDATE app.purchase_order_lines
+         SET purchase_order_id = '12612612-0000-0000-0000-000000000002'
+       WHERE id = '12612612-0000-0000-0000-0000000000a1';
+    END $x$
+  $$,
+  'La línea 12612612-0000-0000-0000-0000000000a1 pertenece a la orden de compra 12612612-0000-0000-0000-000000000001 y no puede pasar a la orden 12612612-0000-0000-0000-000000000002%');
+
+-- 127 ─ Control positivo de 126: lo que SÍ se edita en una línea de una orden
+-- enviada pasa. La recepción actualiza `qty_received`, el precio y la
+-- cantidad pedida los decide WP-C15, y un UPDATE que reenvía la misma
+-- `purchase_order_id` no es un cambio de orden. Sin esto, un trigger que
+-- rechazara todo UPDATE de líneas pasaría el anterior.
+SELECT pg_temp.expect_fail_like(127, 'Editar una línea de una orden enviada sin cambiarla de orden',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('12712712-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-127', 'sent', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      INSERT INTO app.purchase_order_lines
+        (id, tenant_id, purchase_order_id, variant_id, qty_ordered, uom, unit_price_minor)
+      VALUES ('12712712-0000-0000-0000-0000000000a1', '11111111-1111-1111-1111-111111111111',
+              '12712712-0000-0000-0000-000000000001', '55555555-0000-0000-0000-000000000001',
+              2, 'unit', 5000);
+      UPDATE app.purchase_order_lines SET qty_received = 1, unit_price_minor = 6000
+       WHERE id = '12712712-0000-0000-0000-0000000000a1';
+      UPDATE app.purchase_order_lines SET purchase_order_id = '12712712-0000-0000-0000-000000000001'
+       WHERE id = '12712712-0000-0000-0000-0000000000a1';
       RAISE EXCEPTION 'aceptado';
     END $x$
   $$,

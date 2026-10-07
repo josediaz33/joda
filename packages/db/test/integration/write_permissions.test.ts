@@ -243,6 +243,14 @@ const DELETE_PO_LINE = `DELETE FROM app.purchase_order_lines WHERE id = '${PO_LI
 const SELECT_PO_LINES = `SELECT unit_price_minor FROM app.purchase_order_lines`;
 const UPDATE_SENT_PO_LINE = `UPDATE app.purchase_order_lines SET unit_price_minor = 1
   WHERE id = '${SENT_PO_LINE_ID}'`;
+// Re-parentar: la política de UPDATE no mira `purchase_order_id` y hacía lo que el
+// INSERT y el DELETE de líneas prohíben (revisión cruzada de B11d, 0035).
+const MOVE_SENT_PO_LINE_TO_DRAFT = `UPDATE app.purchase_order_lines SET purchase_order_id = '${DRAFT_PO_ID}'
+  WHERE id = '${SENT_PO_LINE_ID}'`;
+const MOVE_DRAFT_PO_LINE_TO_SENT = `UPDATE app.purchase_order_lines SET purchase_order_id = '${SENT_PO_ID}'
+  WHERE id = '${PO_LINE_ID}'`;
+const UPDATE_SENT_PO_LINE_RECEIVED = `UPDATE app.purchase_order_lines SET qty_received = 1
+  WHERE id = '${SENT_PO_LINE_ID}'`;
 const DELETE_SENT_PO_LINE = `DELETE FROM app.purchase_order_lines WHERE id = '${SENT_PO_LINE_ID}'`;
 const COUNT_SENT_PO_LINES = `SELECT count(*)::int AS n FROM app.purchase_order_lines
   WHERE purchase_order_id = '${SENT_PO_ID}'`;
@@ -1260,6 +1268,66 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
     // la unión de los tres permisos de la orden (la recepción actualiza
     // `qty_received`).
     describe("purchase_order_lines: leer con :read; escribir con los permisos de purchase_orders; agregar y borrar solo con la orden en borrador", () => {
+      // La revisión cruzada de B11b/c/d: como `joda_api` con cualquiera de los roles
+      // que pueden editar líneas, `UPDATE ... SET purchase_order_id` vaciaba una
+      // orden enviada (o le agregaba una línea). `trg_po_line_no_reparent` (0035)
+      // lo frena para todos, en las dos direcciones.
+      it("el owner no mueve una línea de una orden enviada a un borrador (la dejaba vacía)", async () => {
+        await expect(as(owner, MOVE_SENT_PO_LINE_TO_DRAFT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      it("quien escribe y lee compras no mueve una línea de una orden enviada a un borrador", async () => {
+        await expect(as(custom.poWriter, MOVE_SENT_PO_LINE_TO_DRAFT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      it("quien aprueba y lee órdenes, sin :write, no mueve una línea de una orden enviada a un borrador", async () => {
+        await expect(as(custom.approver, MOVE_SENT_PO_LINE_TO_DRAFT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      it("quien recibe y lee órdenes, sin :write, no mueve una línea de una orden enviada a un borrador", async () => {
+        await expect(as(custom.orderReceiver, MOVE_SENT_PO_LINE_TO_DRAFT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      it("el owner no mueve una línea de un borrador a una orden enviada (le agregaba una)", async () => {
+        await expect(as(owner, MOVE_DRAFT_PO_LINE_TO_SENT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      it("quien escribe y lee compras no mueve una línea de un borrador a una orden enviada", async () => {
+        await expect(as(custom.poWriter, MOVE_DRAFT_PO_LINE_TO_SENT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      it("quien aprueba y lee órdenes, sin :write, no mueve una línea de un borrador a una orden enviada", async () => {
+        await expect(as(custom.approver, MOVE_DRAFT_PO_LINE_TO_SENT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      it("quien recibe y lee órdenes, sin :write, no mueve una línea de un borrador a una orden enviada", async () => {
+        await expect(as(custom.orderReceiver, MOVE_DRAFT_PO_LINE_TO_SENT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      // Control positivo: la guarda no es un rechazo general del UPDATE de líneas.
+      it("quien recibe y lee órdenes sí actualiza qty_received de una línea de una orden enviada, y la orden conserva su línea", async () => {
+        const received = await as(custom.orderReceiver, UPDATE_SENT_PO_LINE_RECEIVED);
+        const lines = await countAsOwnerHere(COUNT_SENT_PO_LINES);
+
+        expect({ received: received.rowCount, lines }).toEqual({ received: 1, lines: 1 });
+      });
+
       it("el owner agrega una línea, con RETURNING, cambia su precio y la borra", async () => {
         const created = await as(owner, `${INSERT_PO_LINE} RETURNING id`);
         const edited = await api.query(UPDATE_PO_LINE);
