@@ -181,13 +181,6 @@ export async function lockLotsAscending(tx: TenantTx, lotIds: string[]): Promise
 // ---------------------------------------------------------------------
 // Órdenes.
 // ---------------------------------------------------------------------
-export async function findWorkOrder(
-  tx: TenantTx,
-  workOrderId: string,
-): Promise<DecantWorkOrderRow | null> {
-  return tx.decant_work_orders.findFirst({ where: { id: workOrderId } });
-}
-
 /**
  * Bloquea la orden y la lee. Dos personas que inician (o ejecutan) la misma
  * orden se serializan acá: la segunda espera, lee el estado nuevo y el
