@@ -414,6 +414,111 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(count.rows[0]!.n).toBe(1);
   });
 
+  // WP-E05c, decisión de José sobre #90: las variantes de un reloj heredan
+  // `is_serialized` de `requires_serial` del producto, no se marcan aparte. La
+  // recepción de una variante serializada exige cargar los seriales (RN-SER,
+  // WP-C15): un reloj sin serie no puede trabarse al recibirlo, y uno con serie
+  // no puede entrar sin registrarla.
+  it("WP-E05c · una variante de reloj hereda is_serialized de requires_serial del producto (RN-SER-02)", async () => {
+    const category = await mutateOk<{ id: string }>("catalog.category.create", {
+      slug: "relojeria-e05c",
+      name: "Relojería",
+    });
+    const watchDetails = {
+      movement: "automatic",
+      caseMaterial: "acero",
+      caseDiameterMm: 40,
+      waterResistanceM: 100,
+      strapMaterial: "cuero",
+      crystal: "zafiro",
+      warrantyMonths: 24,
+    };
+    const withSerial = await mutateOk<{ id: string }>("catalog.product.create", {
+      kind: "watch",
+      slug: "reloj-con-serie-e05c",
+      name: "Reloj con serie",
+      categoryIds: [category.id],
+      primaryCategoryId: category.id,
+      watchDetails: { ...watchDetails, requiresSerial: true },
+    });
+    const withoutSerial = await mutateOk<{ id: string }>("catalog.product.create", {
+      kind: "watch",
+      slug: "reloj-sin-serie-e05c",
+      name: "Reloj sin serie",
+      categoryIds: [category.id],
+      primaryCategoryId: category.id,
+      watchDetails: { ...watchDetails, requiresSerial: false },
+    });
+
+    const serializedVariant = await mutateOk<{ isSerialized: boolean }>("catalog.variant.create", {
+      productId: withSerial.id,
+      sku: "RELOJ-SERIE-E05C",
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "3500000",
+    });
+    expect(serializedVariant.isSerialized).toBe(true);
+
+    const plainVariant = await mutateOk<{ isSerialized: boolean }>("catalog.variant.create", {
+      productId: withoutSerial.id,
+      sku: "RELOJ-SIN-SERIE-E05C",
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "3500000",
+    });
+    expect(plainVariant.isSerialized).toBe(false);
+
+    // Lo que el cliente mande no pisa la herencia: marcarla aparte se rechaza.
+    const conflicting = await mutate("catalog.variant.create", {
+      productId: withSerial.id,
+      sku: "RELOJ-SERIE-E05C-OTRA",
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "3500000",
+      isSerialized: false,
+    });
+    expect(conflicting.statusCode).toBe(400);
+    expect(conflicting.json().error.data.appCode).toBe("VALIDATION_SERIALIZED_INHERITED");
+
+    // Una variante serializada se mide en unidades enteras (CHECK de 0003):
+    // el servicio lo dice con un error claro, no con un conflicto genérico.
+    const inMl = await mutate("catalog.variant.create", {
+      productId: withSerial.id,
+      sku: "RELOJ-SERIE-E05C-ML",
+      variantType: "bulk",
+      uom: "ml",
+      sizeMl: null,
+      pricePyg: "0",
+    });
+    expect(inMl.statusCode).toBe(400);
+    expect(inMl.json().error.data.appCode).toBe("VALIDATION_SERIALIZED_REQUIRES_UNIT");
+
+    const created = await testDb.superuserClient.query<{ n: number }>(
+      "SELECT count(*)::int AS n FROM app.product_variants WHERE product_id = $1",
+      [withSerial.id],
+    );
+    expect(created.rows[0]!.n).toBe(1);
+  });
+
+  it("WP-E05c · una variante de un perfume no hereda nada: is_serialized sigue en su DEFAULT (false)", async () => {
+    const product = await testDb.superuserClient.query<{ id: string }>(
+      "INSERT INTO app.products (tenant_id, kind, slug, name) VALUES ($1, 'perfume', 'perfume-e05c', 'Perfume E05c') RETURNING id",
+      [TENANT_ID],
+    );
+    const variant = await mutateOk<{ isSerialized: boolean }>("catalog.variant.create", {
+      productId: product.rows[0]!.id,
+      sku: "PERFUME-E05C-SELLADO",
+      variantType: "sealed",
+      uom: "unit",
+      sizeMl: 100,
+      pricePyg: "1500000",
+    });
+    expect(variant.isSerialized).toBe(false);
+  });
+
   it("RF-CAT-01 · update cambia campos y recomputa facets; archive pasa a status archived", async () => {
     const category = await mutateOk<{ id: string }>("catalog.category.create", {
       slug: "perfumeria-4",

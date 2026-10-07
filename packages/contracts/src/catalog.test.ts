@@ -257,6 +257,53 @@ describe("catalog — createProductInput exige exactamente una categoría primar
   });
 });
 
+// WP-E05a, decisión de José sobre #90: no todos los relojes llevan número de
+// serie, así que `requiresSerial` se decide al crear el reloj y no tiene valor
+// por defecto (ni acá ni en la columna). Convención de frontera de un esquema:
+// cita docs/api-conventions.md y docs/data-model.md (docs/testing-strategy.md
+// §2.2); la regla de negocio de fondo es RN-SER (docs/domain-rules.md).
+describe("catalog — createProductInput exige requiresSerial al crear un reloj, sin valor por defecto (docs/api-conventions.md; RN-SER)", () => {
+  const category = "33333333-3333-4333-a333-333333333331";
+  const watchDetails = {
+    movement: "automatic",
+    caseMaterial: "acero",
+    caseDiameterMm: 40,
+    waterResistanceM: 100,
+    strapMaterial: "cuero",
+    crystal: "zafiro",
+    warrantyMonths: 24,
+  };
+  const watch = {
+    kind: "watch",
+    slug: "reloj-automatico",
+    name: "Reloj Automático",
+    categoryIds: [category],
+    primaryCategoryId: category,
+  };
+
+  it("rechaza un reloj sin requiresSerial", () => {
+    expect(() => createProductInput.parse({ ...watch, watchDetails })).toThrow();
+  });
+
+  it("acepta un reloj con requiresSerial true", () => {
+    expect(() =>
+      createProductInput.parse({
+        ...watch,
+        watchDetails: { ...watchDetails, requiresSerial: true },
+      }),
+    ).not.toThrow();
+  });
+
+  it("acepta un reloj con requiresSerial false", () => {
+    expect(() =>
+      createProductInput.parse({
+        ...watch,
+        watchDetails: { ...watchDetails, requiresSerial: false },
+      }),
+    ).not.toThrow();
+  });
+});
+
 describe("catalog — .strict() en los esquemas administrativos restantes (.claude/rules/contracts.md)", () => {
   it("adminCategorySchema rechaza un campo no declarado", () => {
     expect(() =>
