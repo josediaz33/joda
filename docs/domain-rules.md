@@ -288,7 +288,7 @@ Un reloj de USD 800 no es "cantidad = 1": lleva número de serie, garantía y su
 
 Una unidad se registra contra un lote de una variante con `is_serialized = true`. Registrar una sobre un lote de otra variante (un sellado, un insumo, un granel) se rechaza. Una variante serializada se mide en unidades enteras (`CHECK (NOT is_serialized OR uom = 'unit')`).
 
-**De dónde sale `is_serialized` en un reloj.** No todos los relojes llevan número de serie: `requires_serial` del producto se decide al crear el reloj, sin valor por defecto. Las variantes de un reloj heredan `is_serialized` de él al crearse, no se marcan aparte: `createVariant` lo toma del producto y rechaza un valor que lo contradiga (WP-E05c). Apagarlo después, con unidades ya registradas, es WP-C08d.
+**De dónde sale `is_serialized` en un reloj.** No todos los relojes llevan número de serie: `requires_serial` del producto se decide al crear el reloj, sin valor por defecto. Las variantes de un reloj heredan `is_serialized` de él al crearse, no se marcan aparte: `createVariant` lo toma del producto, sea cual sea el tipo de la variante, y rechaza un valor que lo contradiga (WP-E05c). La herencia rige solo al crear: actualizar después la variante o el producto no la revalida (WP-C08f), y apagarlo con unidades ya registradas es WP-C08d.
 
 ### RN-SER-03 · Las unidades registradas de un lote no superan su `qty_initial`
 

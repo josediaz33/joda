@@ -6,17 +6,24 @@
 --
 -- 1. `waste_factor`: el DEFAULT pasa de 0,02 a 0,05. José pierde entre
 --    0,3 y 0,5 ml por decant de 10 ml (3 a 5 %) y se toma el extremo alto.
---    Este factor solo sirve para RESERVAR líquido (RN-FRA-02, reserva, y
---    RN-FRA-06, disponibilidad): el costo sale siempre de la merma real que
---    se carga en cada orden (RN-FRA-04), no de este número. Equivocarse por
---    arriba reserva de más; equivocarse por debajo promete un decant que el
---    frasco no alcanza.
+--    Este factor sirve para RESERVAR líquido (RN-FRA-02, reserva, y
+--    RN-FRA-06, disponibilidad): el costo sale de la merma real que se carga
+--    en cada orden (RN-FRA-04), no de este número. Equivocarse por arriba
+--    reserva de más; equivocarse por debajo promete un decant que el frasco
+--    no alcanza. Matiz: la pantalla de ejecución precarga la merma real con
+--    la esperada (docs/frontend-spec.md §8.6), que sale de este factor, así
+--    que un operador que acepta la precarga hace que el costo también
+--    dependa de él.
 --
 --    Como todavía no hay datos de producción, también se corrigen las filas
 --    que tengan el 0,02 viejo: ese valor es el DEFAULT anterior, no una
 --    elección de nadie. Sobre datos reales este UPDATE sería incorrecto
 --    (pisaría un 0,02 puesto a propósito); por eso es un paso único de esta
---    migración y no una regla que se repita.
+--    migración y no una regla que se repita. Corre con la credencial de
+--    migraciones (`DATABASE_URL`, `service_role` en CI: eluden RLS,
+--    docs/security-spec.md §3.1). Las tablas de `app` tienen FORCE ROW LEVEL
+--    SECURITY (0010, 0014), así que con una credencial que no eludiera RLS
+--    el UPDATE no vería ninguna fila y no daría error.
 --
 -- 2. `requires_serial`: se QUITA el DEFAULT (`true` en 0003). No todos los
 --    relojes llevan número de serie, y la respuesta correcta ante "depende"

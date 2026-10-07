@@ -20,10 +20,10 @@
 //   registrarla, en silencio. El test de paridad verifica que la columna no
 //   tenga DEFAULT.
 // - `is_serialized` de product_variants: la variante de un reloj lo hereda de
-//   `requires_serial` del producto en el servicio de catálogo (WP-E05c), no se
-//   precarga.
+//   `requires_serial` del producto al crearse, en el servicio de catálogo
+//   (WP-E05c), no se precarga.
 // - `allocation_policy` de product_variants: depende de la vertical y la regla
-//   que la liga a la serie no está decidida. Ver WP-E05c en docs/backlog.md.
+//   que la liga a la serie no está decidida. Ver WP-E05d en docs/backlog.md.
 //
 import type { ProductionMode, VatRate } from "./catalog.js";
 
@@ -32,10 +32,13 @@ export const PERFUME_DEFAULTS = {
   isDecantable: true,
   // Trasvase: proporcional al volumen, como fracción (0,05 = 5 %), no como
   // porcentaje. José pierde entre 0,3 y 0,5 ml por decant de 10 ml (3 a 5 %) y se
-  // toma el extremo alto: el factor solo reserva líquido (RN-FRA-02, RN-FRA-06),
-  // el costo sale de la merma real de cada orden, y es preferible reservar de más
-  // que prometer un decant que no alcance. Los 0,02 de docs/domain-rules.md y del
-  // dataset dorado son el dato explícito de un ejemplo, no este valor.
+  // toma el extremo alto: el factor reserva líquido (RN-FRA-02, RN-FRA-06), el
+  // costo sale de la merma real de cada orden (RN-FRA-04), y es preferible
+  // reservar de más que prometer un decant que no alcance. Matiz: la merma real
+  // se precarga con la esperada, que sale de este factor (docs/frontend-spec.md
+  // §8.6); si el operador acepta la precarga, el costo también depende de él.
+  // Los 0,02 de docs/domain-rules.md y del dataset dorado son el dato explícito
+  // de un ejemplo, no este valor.
   wasteFactor: 0.05,
   // Fondo no recuperable por frasco, en ml (RN-LOT-04, por producto).
   unusableResidueMl: 2,
