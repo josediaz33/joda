@@ -20,6 +20,15 @@ const TENANT_ID = "77777777-7777-4777-a777-777777777713";
 const OTHER_TENANT_ID = "88888888-8888-4888-a888-888888888813";
 const STAFF_OWNER_ID = "99999999-9999-4999-a999-999999999913";
 const STAFF_OWNER_EMAIL = "owner@jodaparfums-c13.com";
+// Usuarios para probar quién NO puede (docs/api-conventions.md §4.3, §8.4): un
+// vendedor del seed (sin `inventory.decant:execute` ni `inventory.stock:read`),
+// un rol personalizado con SOLO `inventory.decant:execute`, y el dueño de otro tenant.
+const STAFF_VENDEDOR_ID = "99999999-9999-4999-a999-999999999914";
+const STAFF_VENDEDOR_EMAIL = "vendedor@jodaparfums-c13.com";
+const STAFF_SOLO_DECANT_ID = "99999999-9999-4999-a999-999999999915";
+const STAFF_SOLO_DECANT_EMAIL = "solo-decant@jodaparfums-c13.com";
+const STAFF_OTHER_OWNER_ID = "99999999-9999-4999-a999-999999999916";
+const STAFF_OTHER_OWNER_EMAIL = "owner@otro-c13.com";
 const STAFF_PASSWORD = "correcta";
 const MFA_ENCRYPTION_KEY = Buffer.from("3".repeat(64), "hex");
 const PLACEHOLDER_MFA_SECRET = "placeholder-nunca-se-descifra-en-este-test";
@@ -48,6 +57,8 @@ interface Scenario {
 }
 
 interface LotSeed {
+  /** Para controlar el orden de `id` (la prueba del orden de bloqueo); si no, lo genera la base. */
+  id?: string;
   qty: number;
   unitCostPyg: number;
   receivedAt?: string;
@@ -90,6 +101,24 @@ describe("fraccionamiento · WP-C13 (RF-FRA-01…06, RN-FRA-01…07, RN-EST-03)"
     });
   }
 
+  /** Una petición como otro usuario (otra cookie): para probar quién NO puede. */
+  function mutateAs(sessionCookie: string, procedure: string, payload: Record<string, unknown>) {
+    return app.inject({
+      method: "POST",
+      url: `/trpc/${procedure}`,
+      headers: { cookie: sessionCookie },
+      payload,
+    });
+  }
+
+  function callAs(sessionCookie: string, procedure: string, input: unknown) {
+    return app.inject({
+      method: "GET",
+      url: `/trpc/${procedure}?input=${encodeURIComponent(JSON.stringify(input))}`,
+      headers: { cookie: sessionCookie },
+    });
+  }
+
   async function mutateOk<T>(procedure: string, payload: Record<string, unknown>): Promise<T> {
     const response = await mutate(procedure, payload);
     if (response.statusCode >= 400) {
@@ -122,6 +151,59 @@ describe("fraccionamiento · WP-C13 (RF-FRA-01…06, RN-FRA-01…07, RN-EST-03)"
       `INSERT INTO app.staff_user_roles (tenant_id, staff_user_id, role_id) VALUES ($1, $2, $3)`,
       [TENANT_ID, STAFF_OWNER_ID, ownerRole.rows[0].id],
     );
+    async function seedStaffUser(id: string, tenantId: string, email: string, roleId: string) {
+      await testDb.superuserClient.query(
+        `INSERT INTO app.staff_users
+           (id, tenant_id, auth_subject, email, full_name, is_active, mfa_enrolled, mfa_secret_encrypted)
+         VALUES ($1, $2, $3, $4, $5, true, true, $6)`,
+        // $4 y $5 llevan el mismo texto pero NO pueden ser el mismo parámetro:
+        // `email` es citext y `full_name` es text, y `pg` no unifica el tipo de
+        // un `$n` reusado en columnas distintas ("inconsistent types deduced").
+        [id, tenantId, `auth|${id}`, email, `Test ${email}`, PLACEHOLDER_MFA_SECRET],
+      );
+      await testDb.superuserClient.query(
+        `INSERT INTO app.staff_user_roles (tenant_id, staff_user_id, role_id) VALUES ($1, $2, $3)`,
+        [tenantId, id, roleId],
+      );
+    }
+    const vendedorRole = await testDb.superuserClient.query(
+      `SELECT id FROM app.roles WHERE tenant_id = $1 AND code = 'vendedor'`,
+      [TENANT_ID],
+    );
+    await seedStaffUser(
+      STAFF_VENDEDOR_ID,
+      TENANT_ID,
+      STAFF_VENDEDOR_EMAIL,
+      vendedorRole.rows[0].id,
+    );
+    const soloDecantRole = await testDb.superuserClient.query(
+      `INSERT INTO app.roles (tenant_id, code, name) VALUES ($1, 'solo_decant', 'Solo fraccionamiento')
+       RETURNING id`,
+      [TENANT_ID],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.role_permissions (tenant_id, role_id, permission_code)
+       VALUES ($1, $2, 'inventory.decant:execute')`,
+      [TENANT_ID, soloDecantRole.rows[0].id],
+    );
+    await seedStaffUser(
+      STAFF_SOLO_DECANT_ID,
+      TENANT_ID,
+      STAFF_SOLO_DECANT_EMAIL,
+      soloDecantRole.rows[0].id,
+    );
+    await testDb.superuserClient.query(`SELECT app.seed_roles($1)`, [OTHER_TENANT_ID]);
+    const otherOwnerRole = await testDb.superuserClient.query(
+      `SELECT id FROM app.roles WHERE tenant_id = $1 AND code = 'owner'`,
+      [OTHER_TENANT_ID],
+    );
+    await seedStaffUser(
+      STAFF_OTHER_OWNER_ID,
+      OTHER_TENANT_ID,
+      STAFF_OTHER_OWNER_EMAIL,
+      otherOwnerRole.rows[0].id,
+    );
+
     // La API de ventas (WP-C19) todavía no existe: el canal y los pedidos se
     // siembran por SQL, como los lotes (la venta es lo que dispara la orden).
     const channel = await testDb.superuserClient.query(
@@ -147,7 +229,21 @@ describe("fraccionamiento · WP-C13 (RF-FRA-01…06, RN-FRA-01…07, RN-EST-03)"
       db,
       redis,
       authProvider: createFakeStaffAuthProvider(
-        new Map([[STAFF_OWNER_EMAIL, { password: STAFF_PASSWORD, authSubject: "auth|owner-c13" }]]),
+        new Map([
+          [STAFF_OWNER_EMAIL, { password: STAFF_PASSWORD, authSubject: "auth|owner-c13" }],
+          [
+            STAFF_VENDEDOR_EMAIL,
+            { password: STAFF_PASSWORD, authSubject: `auth|${STAFF_VENDEDOR_ID}` },
+          ],
+          [
+            STAFF_SOLO_DECANT_EMAIL,
+            { password: STAFF_PASSWORD, authSubject: `auth|${STAFF_SOLO_DECANT_ID}` },
+          ],
+          [
+            STAFF_OTHER_OWNER_EMAIL,
+            { password: STAFF_PASSWORD, authSubject: `auth|${STAFF_OTHER_OWNER_ID}` },
+          ],
+        ]),
       ),
       // Fijo y FUTURO a propósito (WP-B13): la sesión nace con `expires_at` =
       // este reloj + 8 h y `app.has_permission()` la compara contra el `now()`
@@ -157,13 +253,18 @@ describe("fraccionamiento · WP-C13 (RF-FRA-01…06, RN-FRA-01…07, RN-EST-03)"
     };
     app = buildServer(authDeps, "0".repeat(32));
 
+    cookie = await loginAs(STAFF_OWNER_EMAIL);
+    await redis.flushall();
+  });
+
+  /** Inicia sesión como ese usuario (con el segundo factor ya verificado) y devuelve su cookie. */
+  async function loginAs(email: string): Promise<string> {
     const loginResponse = await app.inject({
       method: "POST",
       url: "/trpc/auth.session.login",
-      payload: { email: STAFF_OWNER_EMAIL, password: STAFF_PASSWORD },
+      payload: { email, password: STAFF_PASSWORD },
     });
-    cookie = toRequestCookie(loginResponse.headers["set-cookie"]);
-
+    const sessionCookie = toRequestCookie(loginResponse.headers["set-cookie"]);
     await testDb.superuserClient.query(
       `UPDATE app.staff_sessions SET mfa_verified_at = now()
        WHERE id = (
@@ -172,10 +273,13 @@ describe("fraccionamiento · WP-C13 (RF-FRA-01…06, RN-FRA-01…07, RN-EST-03)"
          WHERE u.email = $1 AND s.revoked_at IS NULL
          ORDER BY s.created_at DESC LIMIT 1
        )`,
-      [STAFF_OWNER_EMAIL],
+      [email],
     );
+    // La sesión ya quedó cacheada en Redis sin el segundo factor: sin vaciarlo,
+    // la compuerta de MFA sigue viendo la versión anterior.
     await redis.flushall();
-  });
+    return sessionCookie;
+  }
 
   afterEach(async () => {
     await app.close();
@@ -303,14 +407,14 @@ describe("fraccionamiento · WP-C13 (RF-FRA-01…06, RN-FRA-01…07, RN-EST-03)"
   async function seedLot(
     variantId: string,
     uom: "unit" | "ml",
-    { qty, unitCostPyg, receivedAt, openedAt, status = "available" }: LotSeed,
+    { id, qty, unitCostPyg, receivedAt, openedAt, status = "available" }: LotSeed,
   ): Promise<string> {
     const lot = await testDb.superuserClient.query(
       `INSERT INTO app.inventory_lots
-         (tenant_id, variant_id, status, qty_initial, uom,
+         (id, tenant_id, variant_id, status, qty_initial, uom,
           unit_cost_minor, currency, fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg,
           received_at, opened_at)
-       VALUES ($1, $2, $3, $4, $5, $6, 'PYG', 1, $7, $8,
+       VALUES (COALESCE($11::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, 'PYG', 1, $7, $8,
                COALESCE($9::timestamptz, now()), $10::timestamptz)
        RETURNING id`,
       [
@@ -324,6 +428,7 @@ describe("fraccionamiento · WP-C13 (RF-FRA-01…06, RN-FRA-01…07, RN-EST-03)"
         unitCostPyg,
         receivedAt ?? null,
         openedAt ?? null,
+        id ?? null,
       ],
     );
     const lotId = lot.rows[0].id;
@@ -484,6 +589,45 @@ describe("fraccionamiento · WP-C13 (RF-FRA-01…06, RN-FRA-01…07, RN-EST-03)"
       return (await pending).statusCode;
     } finally {
       if (!released) await testDb.superuserClient.query("ROLLBACK");
+    }
+  }
+
+  /** Espera a que una petición quede detenida en un bloqueo de fila: sin esto, sondear "antes de que llegue" daría un falso verde. */
+  async function waitUntilABackendIsBlockedOnALock(): Promise<void> {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      // Dentro de una transacción, pg_stat_activity devuelve la foto del primer
+      // acceso (stats_fetch_consistency = cache): sin descartarla nunca se ve el cambio.
+      await testDb.superuserClient.query("SELECT pg_stat_clear_snapshot()");
+      const blocked = await testDb.superuserClient.query(
+        `SELECT count(*)::int AS n FROM pg_stat_activity
+          WHERE wait_event_type = 'Lock' AND pid <> pg_backend_pid()`,
+      );
+      if (blocked.rows[0].n > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error("la petición nunca quedó esperando un bloqueo");
+  }
+
+  /**
+   * Fuerza para `joda_api` el recorrido del heap (sin índice) y lo devuelve a su
+   * estado. Bajo RLS el plan normal recorre `inventory_lots_id_tenant_key` y ya
+   * entrega las filas ordenadas por `id`, así que sin esto un `ORDER BY` de
+   * menos no se nota. `ALTER ROLE ... SET` solo vale para conexiones nuevas: hay
+   * que reconectar el pool, al entrar y al salir.
+   */
+  async function withHeapPlansForApiRole(body: () => Promise<void>): Promise<void> {
+    const settings = ["enable_indexscan", "enable_bitmapscan", "enable_indexonlyscan"];
+    try {
+      for (const setting of settings) {
+        await testDb.superuserClient.query(`ALTER ROLE joda_api SET ${setting} = off`);
+      }
+      await db.$disconnect();
+      await body();
+    } finally {
+      for (const setting of settings) {
+        await testDb.superuserClient.query(`ALTER ROLE joda_api RESET ${setting}`);
+      }
+      await db.$disconnect();
     }
   }
 
@@ -1244,6 +1388,57 @@ describe("fraccionamiento · WP-C13 (RF-FRA-01…06, RN-FRA-01…07, RN-EST-03)"
         ]),
       );
     });
+
+    it("un insumo repartido entre lotes que ninguno cubre solo se rechaza con un mensaje que lo dice, y no se consume nada (WP-C13f lo resuelve)", async () => {
+      const scenario = await createScenario();
+      const bulkLotId = await seedBulkLot(scenario.bulkVariantId, {
+        qty: 114.65,
+        unitCostPyg: 11_972,
+      });
+      await seedSupplyLot(scenario.vialVariantId, { qty: 2, unitCostPyg: 4_500 });
+      await seedSupplyLot(scenario.vialVariantId, { qty: 2, unitCostPyg: 4_500 });
+      await seedSupplyLot(scenario.atomizerVariantId, { qty: 100, unitCostPyg: 2_500 });
+      await seedSupplyLot(scenario.labelVariantId, { qty: 100, unitCostPyg: 300 });
+      const planned = await planOk(scenario, { qtyUnits: 3 });
+      await startOk(planned.order.id);
+
+      const response = await execute(planned.order.id, 0.35);
+
+      expect(response.statusCode).toBe(409);
+      expect(errorCode(response)).toBe("CONFLICT_BOM_COMPONENT_SPLIT_ACROSS_LOTS");
+      expect(response.json().error.message).toContain("repartido entre 2 lotes");
+      expect(response.json().error.data.details).toEqual({
+        componentVariantId: scenario.vialVariantId,
+        required: 3,
+        available: 4,
+        lots: 2,
+      });
+      expect(await onHand(bulkLotId)).toBe("114.650");
+      expect(await onHandOfVariant(scenario.vialVariantId)).toBe("4.000");
+      expect(await movementsOfOrder(planned.order.id)).toEqual([]);
+    });
+
+    it("un insumo OPCIONAL repartido entre lotes tampoco se omite en silencio: hay stock y el COGS no puede quedar sin su costo", async () => {
+      const scenario = await createScenario({ labelOptional: true });
+      const bulkLotId = await seedBulkLot(scenario.bulkVariantId, {
+        qty: 114.65,
+        unitCostPyg: 11_972,
+      });
+      await seedSupplyLot(scenario.vialVariantId, { qty: 100, unitCostPyg: 4_500 });
+      await seedSupplyLot(scenario.atomizerVariantId, { qty: 100, unitCostPyg: 2_500 });
+      await seedSupplyLot(scenario.labelVariantId, { qty: 2, unitCostPyg: 300 });
+      await seedSupplyLot(scenario.labelVariantId, { qty: 2, unitCostPyg: 300 });
+      const planned = await planOk(scenario, { qtyUnits: 3 });
+      await startOk(planned.order.id);
+
+      const response = await execute(planned.order.id, 0.35);
+
+      expect(response.statusCode).toBe(409);
+      expect(errorCode(response)).toBe("CONFLICT_BOM_COMPONENT_SPLIT_ACROSS_LOTS");
+      expect(await onHand(bulkLotId)).toBe("114.650");
+      expect(await onHandOfVariant(scenario.labelVariantId)).toBe("4.000");
+      expect(await movementsOfOrder(planned.order.id)).toEqual([]);
+    });
   });
 
   // -------------------------------------------------------------------
@@ -1280,6 +1475,67 @@ describe("fraccionamiento · WP-C13 (RF-FRA-01…06, RN-FRA-01…07, RN-EST-03)"
       const orderId = await plannedAndStarted(scenario);
 
       const status = await requestWaitsForLotLock(bulkLotId, () => execute(orderId, 0.35));
+
+      expect(status).toBe(200);
+      expect(await onHand(bulkLotId)).toBe("104.300");
+    });
+
+    it("toma los lotes en orden ascendente de id aunque el plan no lo dé: con el heap forzado, el granel de id más alto no queda tomado mientras espera el de id más bajo", async () => {
+      const scenario = await createScenario();
+      // El granel lleva el id MÁS ALTO y se inserta PRIMERO: en un recorrido del
+      // heap sale primero. Sin el `ORDER BY` la ejecución lo tomaría antes que
+      // los insumos y, con otra ejecución en orden inverso, habría interbloqueo.
+      const bulkLotId = await seedBulkLot(scenario.bulkVariantId, {
+        id: "ffffffff-0000-4000-8000-000000000001",
+        qty: 114.65,
+        unitCostPyg: 11_972,
+      });
+      const lowestLotId = await seedSupplyLot(scenario.vialVariantId, {
+        id: "00000000-0000-4000-8000-000000000001",
+        qty: 100,
+        unitCostPyg: 4_500,
+      });
+      await seedSupplyLot(scenario.atomizerVariantId, {
+        id: "00000000-0000-4000-8000-000000000002",
+        qty: 100,
+        unitCostPyg: 2_500,
+      });
+      await seedSupplyLot(scenario.labelVariantId, {
+        id: "00000000-0000-4000-8000-000000000003",
+        qty: 100,
+        unitCostPyg: 300,
+      });
+      const orderId = await plannedAndStarted(scenario);
+      let status = 0;
+
+      await withHeapPlansForApiRole(async () => {
+        await testDb.superuserClient.query("BEGIN");
+        let released = false;
+        let pending: Promise<{ statusCode: number }> | undefined;
+        try {
+          // Otra transacción retiene el lote de id más bajo...
+          await testDb.superuserClient.query(
+            "SELECT id FROM app.inventory_lots WHERE id = $1 FOR NO KEY UPDATE",
+            [lowestLotId],
+          );
+          pending = execute(orderId, 0.35);
+          await waitUntilABackendIsBlockedOnALock();
+          // ...y la ejecución, que espera por él, todavía no tiene el granel: NOWAIT
+          // lo consigue. Con el orden del heap ya lo tendría tomado y esto falla (55P03).
+          await testDb.superuserClient.query(
+            "SELECT id FROM app.inventory_lots WHERE id = $1 FOR UPDATE NOWAIT",
+            [bulkLotId],
+          );
+          await testDb.superuserClient.query("COMMIT");
+          released = true;
+          status = (await pending).statusCode;
+        } finally {
+          if (!released) {
+            await testDb.superuserClient.query("ROLLBACK");
+            await pending?.catch(() => undefined);
+          }
+        }
+      });
 
       expect(status).toBe(200);
       expect(await onHand(bulkLotId)).toBe("104.300");
@@ -1372,6 +1628,92 @@ describe("fraccionamiento · WP-C13 (RF-FRA-01…06, RN-FRA-01…07, RN-EST-03)"
       const queue = await call<{ groups: unknown[] }>("inventory.decant.list", {});
 
       expect(queue.groups).toEqual([]);
+    });
+  });
+
+  // -------------------------------------------------------------------
+  describe("docs/api-conventions.md §4.3 y §8.4 · sin permiso o de otro tenant se responde 404 (WP-C13)", () => {
+    it("un vendedor, sin inventory.decant:execute ni inventory.stock:read, no puede planificar, iniciar, ejecutar ni ver la cola", async () => {
+      const scenario = await createScenario();
+      await seedBulkLot(scenario.bulkVariantId, { qty: 114.65, unitCostPyg: 11_972 });
+      await seedSupplies(scenario);
+      const orderId = await plannedAndStarted(scenario);
+      const vendedor = await loginAs(STAFF_VENDEDOR_EMAIL);
+
+      const planned = await mutateAs(vendedor, "inventory.decant.plan", {
+        saleOrderId: scenario.saleOrderId,
+        targetVariantId: scenario.decantVariantId,
+        qtyUnits: 1,
+      });
+      const started = await mutateAs(vendedor, "inventory.decant.start", { workOrderId: orderId });
+      const executed = await mutateAs(vendedor, "inventory.decant.execute", {
+        workOrderId: orderId,
+        wasteActual: 0.35,
+      });
+      const queue = await callAs(vendedor, "inventory.decant.list", {});
+
+      expect([
+        planned.statusCode,
+        started.statusCode,
+        executed.statusCode,
+        queue.statusCode,
+      ]).toEqual([404, 404, 404, 404]);
+      expect(await movementsOfOrder(orderId)).toEqual([]);
+    });
+
+    it("el dueño de otro tenant no ve ni toca las órdenes de este: start, execute y plan dan 404 y la cola sale vacía", async () => {
+      const scenario = await createScenario();
+      await seedBulkLot(scenario.bulkVariantId, { qty: 114.65, unitCostPyg: 11_972 });
+      await seedSupplies(scenario);
+      const pendingOrder = (await planOk(scenario)).order.id;
+      const inProgressOrder = await plannedAndStarted(scenario);
+      const foreignOwner = await loginAs(STAFF_OTHER_OWNER_EMAIL);
+
+      const started = await mutateAs(foreignOwner, "inventory.decant.start", {
+        workOrderId: pendingOrder,
+      });
+      const executed = await mutateAs(foreignOwner, "inventory.decant.execute", {
+        workOrderId: inProgressOrder,
+        wasteActual: 0.35,
+      });
+      const planned = await mutateAs(foreignOwner, "inventory.decant.plan", {
+        saleOrderId: scenario.saleOrderId,
+        targetVariantId: scenario.decantVariantId,
+        qtyUnits: 1,
+      });
+      const queue = await callAs(foreignOwner, "inventory.decant.list", {});
+
+      expect([started.statusCode, executed.statusCode, planned.statusCode]).toEqual([
+        404, 404, 404,
+      ]);
+      expect(queue.statusCode).toBe(200);
+      expect(queue.json().result.data).toEqual({ groups: [] });
+      expect(await movementsOfOrder(inProgressOrder)).toEqual([]);
+    });
+
+    it("un rol con solo decant:execute no puede leer el lote de origen (lots_read pide stock:read): ejecutar da 404 y no escribe nada, no un 500", async () => {
+      const scenario = await createScenario();
+      const bulkLotId = await seedBulkLot(scenario.bulkVariantId, {
+        qty: 114.65,
+        unitCostPyg: 11_972,
+      });
+      await seedSupplies(scenario);
+      const orderId = await plannedAndStarted(scenario);
+      const onlyDecant = await loginAs(STAFF_SOLO_DECANT_EMAIL);
+
+      const response = await mutateAs(onlyDecant, "inventory.decant.execute", {
+        workOrderId: orderId,
+        wasteActual: 0.35,
+      });
+
+      expect(response.statusCode).toBe(404);
+      expect(await onHand(bulkLotId)).toBe("114.650");
+      expect(await movementsOfOrder(orderId)).toEqual([]);
+      const order = await testDb.superuserClient.query(
+        `SELECT status::text AS status FROM app.decant_work_orders WHERE id = $1`,
+        [orderId],
+      );
+      expect(order.rows[0].status).toBe("in_progress");
     });
   });
 });

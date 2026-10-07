@@ -499,9 +499,14 @@ export async function startWorkOrder(
 /**
  * Elige el lote del que sale un insumo. Un insumo se consume de UN lote
  * (`BomLotSnapshot`): el primero, según la política de la variante (RN-LOT-05),
- * que cubre toda la cantidad. Si ninguno alcanza solo, se pasa el que más
- * ofrece para que el dominio rechace con la cifra real (MISSING_BOM_COMPONENT);
- * partir un insumo entre dos lotes no está en el dominio (WP-A07).
+ * que cubre toda la cantidad. Partirlo entre lotes no está en el dominio
+ * (`BomLotSnapshot` es uno por componente): es WP-C13f, con `allocateFromLots`.
+ *
+ * Si ningún lote lo cubre solo pero la SUMA de los lotes sí alcanza, no es un
+ * faltante: se rechaza con un mensaje que dice que la cantidad está repartida,
+ * y se rechaza TAMBIÉN si el insumo es opcional. Omitirlo sería dar por
+ * "faltante" un insumo que está en stock y dejar el COGS sin su costo.
+ * Solo si el total tampoco alcanza el dominio decide (caso borde 3 o 4).
  */
 function chooseSupplyLot(
   line: BomLine,
@@ -510,6 +515,27 @@ function chooseSupplyLot(
 ): BomLotSnapshot {
   const snapshots = selectLotsByPolicy(supplySnapshotsOf(line, lots), line.allocationPolicy);
   const covering = snapshots.find((lot) => lot.available.compare(required) >= 0);
+  if (!covering) {
+    const total = snapshots.reduce(
+      (sum, lot) => sum.plus(lot.available),
+      Quantity.zero(required.uom),
+    );
+    if (total.compare(required) >= 0) {
+      throw toTRPCError(
+        appError(
+          "CONFLICT_BOM_COMPONENT_SPLIT_ACROSS_LOTS",
+          409,
+          `El insumo ${line.sku} alcanza en total (${total.value}) pero está repartido entre ${snapshots.length} lotes y ninguno cubre solo los ${required.value} que pide la orden. Por ahora un insumo sale de un solo lote: la orden sigue en curso hasta que un lote lo cubra.`,
+          {
+            componentVariantId: line.componentVariantId,
+            required: required.value,
+            available: total.value,
+            lots: snapshots.length,
+          },
+        ),
+      );
+    }
+  }
   const best =
     covering ??
     snapshots.reduce<LotSnapshot | undefined>(
@@ -528,7 +554,10 @@ function chooseSupplyLot(
   }
   // Sin ningún lote consumible el dominio necesita igual el `isOptional` para
   // distinguir el caso borde 4 (opcional: se ejecuta sin él) del 3 (obligatorio:
-  // se rechaza). El `lotId` no se usa nunca: sin saldo no hay movimiento.
+  // se rechaza), y `BomLotSnapshot` exige un `lotId`. Va el id de la VARIANTE
+  // como relleno: no apunta a ningún lote y no se lee nunca, porque sin saldo el
+  // dominio no emite movimiento sobre él (`lotById.get` lo rechazaría si
+  // alguna vez lo hiciera).
   return {
     componentId: line.componentVariantId,
     lotId: line.componentVariantId,
@@ -569,12 +598,24 @@ export async function executeWorkOrder(
     // ascendente de `lot_id` (ver `lockLotsAscending`). Después se relee todo
     // con una sentencia nueva —el saldo que cuenta es el de DESPUÉS del
     // bloqueo— y solo de los lotes bloqueados: lo que aparezca después no se toca.
+    //
+    // Se bloquean TODOS los lotes con saldo de cada insumo, no solo el que se va
+    // a consumir, a propósito: cuál se consume se decide con el saldo ya
+    // bloqueado, y bloquear solo el elegido obligaría a leer, elegir, bloquear
+    // y volver a verificar. El costo es que una ejecución espera a cualquier
+    // otra que toque un lote de esos insumos. Los insumos no se venden (solo los
+    // consumen fraccionamientos y ajustes), así que la contención es entre
+    // ejecuciones, que de todos modos son manuales. Si se mide y importa, se
+    // acota; hoy no está medido.
     const lotIdsToLock = [...new Set([order.source_lot_id, ...bom.supplyLots.map((l) => l.id)])];
     await repo.lockLotsAscending(tx, lotIdsToLock);
     const lockedLots = await repo.findLotsWithVariant(tx, lotIdsToLock);
     const bulkRow = lockedLots.find((lot) => lot.id === order.source_lot_id);
     if (!bulkRow) {
-      throw new Error(`el lote de origen ${order.source_lot_id} de la orden no se pudo releer`);
+      // La FK impide que el lote no exista: si no se lee, RLS lo oculta
+      // (`lots_read` pide `inventory.stock:read`). Es la cara de un permiso
+      // insuficiente, y esa es un 404 (docs/api-conventions.md §4.3), no un 500.
+      throw toTRPCError(NOT_FOUND_ERROR);
     }
     const supplyRows = lockedLots.filter((lot) => lot.id !== order.source_lot_id);
 

@@ -32,9 +32,11 @@ function requireDeps(deps: DecantServiceDeps | null): DecantServiceDeps {
   return deps;
 }
 
-// Planificar, iniciar y ejecutar son lo mismo que `inventory.decant:execute`
-// (docs/security-spec.md §2): es el permiso que la política de escritura de
-// `inventory_movements` (WP-B11d) pide para los movimientos de la ejecución.
+// `execute` exige `inventory.decant:execute` porque es el permiso que la
+// política de escritura de `inventory_movements` (WP-B11d) pide para los
+// movimientos de la ejecución (docs/security-spec.md §3.1). `plan` y `start`
+// no escriben movimientos: llevan el mismo permiso para que planificar, tomar y
+// ejecutar una orden sea trabajo de un mismo rol (el operador de fraccionamiento).
 // La cola solo lee: el mismo permiso que ver saldos y lotes.
 const EXECUTE = { permission: "inventory.decant:execute" } as const;
 const READ = { permission: "inventory.stock:read" } as const;
