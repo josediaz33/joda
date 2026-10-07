@@ -119,9 +119,11 @@ Líquido que se pierde y no se vende. **Tiene tres componentes distintos** y con
 
 | Componente               | Naturaleza                 | Campo                 |
 | ------------------------ | -------------------------- | --------------------- |
-| **Trasvase**             | Proporcional al volumen    | `waste_factor` (%)    |
+| **Trasvase**             | Proporcional al volumen    | `waste_factor`        |
 | **Fondo no recuperable** | Fijo por frasco            | `unusable_residue_ml` |
 | **Evaporación**          | Función del tiempo abierto | `evaporation_ml_year` |
+
+`waste_factor` es una **fracción** (`0,05` = 5 %), no un porcentaje: la base rechaza un valor de `0,5` o más (CHECK de `perfume_details`). El valor por defecto es `0,05`.
 
 ### Merma esperada vs. merma real
 
