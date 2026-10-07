@@ -14,6 +14,10 @@ import { startTestDb, type TestDb } from "../../db/testDb.js";
 // La paridad no fija ningún valor de negocio: si constante y migración cambian
 // juntas, pasa. Por eso el último bloque escribe los valores literales.
 //
+// `requires_serial` es el caso contrario: no hay constante porque no hay valor
+// por defecto (no todos los relojes llevan serie, se decide al crear el reloj).
+// Su prueba verifica que la columna NO tenga DEFAULT en la base.
+//
 // Vive en apps/api y no en packages/db por la misma razón que
 // permissionsParity.integration.test.ts: acá conviven `@joda/contracts` y
 // `startTestDb`. Lo corre `pnpm test` y el CI. `@joda/contracts` se consume por
@@ -33,7 +37,6 @@ const PERFUME_COLUMNS = {
 } satisfies Record<keyof typeof PERFUME_DEFAULTS, ColumnRef>;
 
 const WATCH_COLUMNS = {
-  requiresSerial: { table: "watch_details", column: "requires_serial" },
   warrantyMonths: { table: "watch_details", column: "warranty_months" },
 } satisfies Record<keyof typeof WATCH_DEFAULTS, ColumnRef>;
 
@@ -122,9 +125,19 @@ describe("paridad entre los defaults de contratos y los DEFAULT efectivos de la 
   it.each(CASES)("$name coincide con el DEFAULT de $source", ({ source, expected }) => {
     expect(storedDefaults.get(source)).toEqual(expected);
   });
+
+  // Decisión de José sobre #90: "depende" no se resuelve con un valor por
+  // defecto. Con `true` un reloj sin serie se traba al recibirlo; con `false`,
+  // uno con serie entra sin registrarla, en silencio. `has` es el control
+  // positivo: la columna existe, así que un `undefined` es "sin DEFAULT" y no
+  // "la consulta no la encontró".
+  it("watch_details.requires_serial no tiene valor por defecto: se decide al crear el reloj", () => {
+    expect(storedDefaults.has("watch_details.requires_serial")).toBe(true);
+    expect(storedDefaults.get("watch_details.requires_serial")).toBeUndefined();
+  });
 });
 
-// Valores acordados o pendientes de confirmar (ver catalog-defaults.ts). Cambiar
+// Valores acordados con José (ver catalog-defaults.ts). Cambiar
 // uno exige cambiar también esta tabla, a la vista en el PR, con su justificación
 // (`.claude/rules/testing.md`: cambiar un valor esperado requiere justificación).
 describe("valores por defecto escritos literales (WP-E05a; docs/testing-strategy.md §2.2)", () => {
@@ -134,7 +147,7 @@ describe("valores por defecto escritos literales (WP-E05a; docs/testing-strategy
       actual: PERFUME_DEFAULTS.isDecantable,
       expected: true,
     },
-    { name: "PERFUME_DEFAULTS.wasteFactor", actual: PERFUME_DEFAULTS.wasteFactor, expected: 0.02 },
+    { name: "PERFUME_DEFAULTS.wasteFactor", actual: PERFUME_DEFAULTS.wasteFactor, expected: 0.05 },
     {
       name: "PERFUME_DEFAULTS.unusableResidueMl",
       actual: PERFUME_DEFAULTS.unusableResidueMl,
@@ -144,11 +157,6 @@ describe("valores por defecto escritos literales (WP-E05a; docs/testing-strategy
       name: "PERFUME_DEFAULTS.evaporationMlYear",
       actual: PERFUME_DEFAULTS.evaporationMlYear,
       expected: 0,
-    },
-    {
-      name: "WATCH_DEFAULTS.requiresSerial",
-      actual: WATCH_DEFAULTS.requiresSerial,
-      expected: true,
     },
     { name: "WATCH_DEFAULTS.warrantyMonths", actual: WATCH_DEFAULTS.warrantyMonths, expected: 12 },
     { name: "VARIANT_DEFAULTS.vatRate", actual: VARIANT_DEFAULTS.vatRate, expected: "iva_10" },

@@ -686,7 +686,7 @@ model perfume_details {
   notes_heart                                             String[]              @default([])
   notes_base                                              String[]              @default([])
   is_decantable                                           Boolean               @default(true)
-  waste_factor                                            Decimal               @default(0.02000) @db.Decimal(6, 5)
+  waste_factor                                            Decimal               @default(0.05000) @db.Decimal(6, 5)
   unusable_residue_ml                                     Decimal               @default(2.000) @db.Decimal(8, 3)
   evaporation_ml_year                                     Decimal               @default(0.000) @db.Decimal(8, 3)
   tenant_id                                               String                @db.Uuid
@@ -1421,7 +1421,7 @@ model watch_details {
   strap_material                                        String?
   crystal                                               String?
   warranty_months                                       Int            @default(12)
-  requires_serial                                       Boolean        @default(true)
+  requires_serial                                       Boolean
   tenant_id                                             String         @db.Uuid
   products_watch_details_product_id_tenant_idToproducts products       @relation("watch_details_product_id_tenant_idToproducts", fields: [product_id, tenant_id], references: [id, tenant_id], onDelete: Cascade, onUpdate: NoAction, map: "watch_details_product_id_fkey")
   products_watch_details_product_id_kindToproducts      products       @relation("watch_details_product_id_kindToproducts", fields: [product_id, kind], references: [id, kind], onDelete: NoAction, onUpdate: NoAction)

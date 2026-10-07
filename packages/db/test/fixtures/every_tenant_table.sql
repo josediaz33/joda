@@ -46,9 +46,9 @@ VALUES ('11111111-1111-1111-1111-111111111111', '44444444-4444-4444-4444-4444444
 INSERT INTO products (id, tenant_id, kind, slug, name, status)
 VALUES ('b08b0000-0000-0000-0000-000000000002', '11111111-1111-1111-1111-111111111111',
         'watch', 'reloj-b08b', 'Reloj B08b', 'draft');
-INSERT INTO watch_details (tenant_id, product_id, movement, case_material)
+INSERT INTO watch_details (tenant_id, product_id, movement, case_material, requires_serial)
 VALUES ('11111111-1111-1111-1111-111111111111', 'b08b0000-0000-0000-0000-000000000002',
-        'automatic', 'acero');
+        'automatic', 'acero', true);
 
 INSERT INTO media (id, tenant_id, sha256, bucket, object_key, mime_type, bytes)
 VALUES ('b08b0000-0000-0000-0000-000000000003', '11111111-1111-1111-1111-111111111111',
