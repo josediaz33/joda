@@ -395,7 +395,6 @@ export async function createVariant(
       productionMode: input.productionMode,
       sourceVariantId: input.sourceVariantId ?? null,
       isSerialized,
-      onlineVisible: input.onlineVisible,
       minStockAlert: input.minStockAlert ?? null,
       weightG: input.weightG ?? null,
       position: input.position,

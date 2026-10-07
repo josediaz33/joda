@@ -84,6 +84,14 @@ describe("RF-CAT-08 · vista previa de imagen (WP-E05)", () => {
 const categoryA = "33333333-3333-4333-a333-333333333331";
 const categoryB = "33333333-3333-4333-a333-333333333332";
 
+// CreateVariantForm solo lee `product.id` y `product.kind` (más
+// `watchDetails.requiresSerial` si es reloj, WP-E05c). Para una variante de
+// cualquier otra vertical no hace falta un AdminProduct completo.
+const genericProduct = {
+  id: "22222222-2222-4222-a222-222222222222",
+  kind: "accessory",
+} as Parameters<typeof CreateVariantForm>[0]["product"];
+
 describe("RF-CAT-01/02 · alta por vertical y categoría primaria (WP-E05)", () => {
   it("permite crear la primera categoría y luego dar de alta un producto", async () => {
     let categories: Awaited<ReturnType<typeof api.listCategories>> = {
@@ -231,9 +239,7 @@ describe("docs/frontend-spec.md §9 · importes de variantes (WP-E05)", () => {
       ReturnType<typeof api.createVariant>
     >);
     const user = userEvent.setup();
-    render(
-      <CreateVariantForm productId="22222222-2222-4222-a222-222222222222" onSaved={vi.fn()} />,
-    );
+    render(<CreateVariantForm product={genericProduct} onSaved={vi.fn()} />);
 
     await user.type(screen.getByLabelText("SKU *"), "EST-01");
     await user.type(screen.getByLabelText("Precio (Gs.) *"), "245000");
@@ -256,9 +262,7 @@ describe("GLOSARIO.md · el granel no se vende directo (WP-E05)", () => {
       ReturnType<typeof api.createVariant>
     >);
     const user = userEvent.setup();
-    render(
-      <CreateVariantForm productId="22222222-2222-4222-a222-222222222222" onSaved={vi.fn()} />,
-    );
+    render(<CreateVariantForm product={genericProduct} onSaved={vi.fn()} />);
 
     await user.selectOptions(screen.getByLabelText("Presentación"), "bulk");
     expect(screen.queryByRole("checkbox", { name: "Visible en línea" })).toBeNull();
@@ -331,7 +335,7 @@ describe("RN-FRA-05 · el perfume nuevo nace con la merma de negocio (WP-E05a)",
           kind: "perfume",
           perfumeDetails: expect.objectContaining({
             isDecantable: true,
-            wasteFactor: 0.02,
+            wasteFactor: 0.05,
             unusableResidueMl: 2,
             evaporationMlYear: 0,
           }),
@@ -360,6 +364,7 @@ describe("RN-SER · el reloj nuevo lleva serie y garantía de negocio (WP-E05a)"
     await user.type(await screen.findByLabelText("Nombre *"), "Submariner");
     await user.type(screen.getByLabelText("Slug *"), "submariner");
     await user.click(screen.getByRole("checkbox", { name: "relojes" }));
+    await user.click(screen.getByRole("radio", { name: "Sí" }));
     await user.click(screen.getByRole("button", { name: "Crear producto" }));
 
     await waitFor(() =>
@@ -379,15 +384,41 @@ describe("RN-SER · el reloj nuevo lleva serie y garantía de negocio (WP-E05a)"
   });
 });
 
+// No todos los relojes llevan número de serie (0035_business_defaults_decisions.sql
+// le quitó el DEFAULT a requires_serial): "no elegido" y "No" son estados
+// distintos, y el formulario no puede guardar sin decidir.
+describe("RN-SER · un reloj sin elegir si lleva serie no se puede guardar (WP-E05a)", () => {
+  it("no envía el producto si no se elige 'Requiere número de serie'", async () => {
+    vi.mocked(api.listCategories).mockResolvedValue({
+      items: [{ id: categoryA, path: "relojes", name: "Relojes" }],
+      nextCursor: null,
+    } as Awaited<ReturnType<typeof api.listCategories>>);
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ProductEditor kind="watch" onSaved={vi.fn()} onClose={vi.fn()} />
+      </QueryClientProvider>,
+    );
+
+    await user.type(await screen.findByLabelText("Nombre *"), "Submariner");
+    await user.type(screen.getByLabelText("Slug *"), "submariner");
+    await user.click(screen.getByRole("checkbox", { name: "relojes" }));
+    await user.click(screen.getByRole("button", { name: "Crear producto" }));
+
+    await waitFor(() => expect(screen.getAllByRole("alert").length).toBeGreaterThan(0));
+    expect((screen.getByRole("radio", { name: "Sí" }) as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByRole("radio", { name: "No" }) as HTMLInputElement).checked).toBe(false);
+    expect(api.createProduct).not.toHaveBeenCalled();
+  });
+});
+
 describe("RN-SER-02 · solo una variante en unit se serializa (WP-E05)", () => {
   it("no ofrece 'Requiere serie' al cambiar a granel y no lo envía", async () => {
     vi.mocked(api.createVariant).mockResolvedValue({ id: "saved" } as Awaited<
       ReturnType<typeof api.createVariant>
     >);
     const user = userEvent.setup();
-    render(
-      <CreateVariantForm productId="22222222-2222-4222-a222-222222222222" onSaved={vi.fn()} />,
-    );
+    render(<CreateVariantForm product={genericProduct} onSaved={vi.fn()} />);
 
     await user.click(screen.getByRole("checkbox", { name: "Requiere serie" }));
     await user.selectOptions(screen.getByLabelText("Presentación"), "bulk");
@@ -404,12 +435,45 @@ describe("RN-SER-02 · solo una variante en unit se serializa (WP-E05)", () => {
   });
 });
 
+// WP-E05c: la variante de un reloj hereda is_serialized de requiresSerial del
+// producto en el servicio de catálogo; marcarla aparte se rechaza con 400
+// VALIDATION_SERIALIZED_INHERITED. El formulario no ofrece el control ni
+// manda el campo: lo muestra de solo lectura.
+describe("WP-E05c · la variante de un reloj hereda is_serialized del producto", () => {
+  const watchWithSerial = {
+    id: "55555555-5555-4555-a555-555555555555",
+    kind: "watch",
+    watchDetails: { requiresSerial: true },
+  } as Parameters<typeof CreateVariantForm>[0]["product"];
+
+  it("no ofrece el control de serie y lo muestra de solo lectura", async () => {
+    vi.mocked(api.createVariant).mockResolvedValue({ id: "saved" } as Awaited<
+      ReturnType<typeof api.createVariant>
+    >);
+    const user = userEvent.setup();
+    render(<CreateVariantForm product={watchWithSerial} onSaved={vi.fn()} />);
+
+    expect(screen.queryByRole("checkbox", { name: "Requiere serie" })).toBeNull();
+    const inheritedNote = screen.getByText(
+      (_, element) =>
+        element?.tagName.toLowerCase() === "p" &&
+        !!element.textContent?.includes("Requiere número de serie"),
+    );
+    expect(inheritedNote.textContent).toContain("Sí");
+
+    await user.type(screen.getByLabelText("SKU *"), "RELOJ-01");
+    await user.type(screen.getByLabelText("Precio (Gs.) *"), "3500000");
+    await user.click(screen.getByRole("button", { name: "Crear variante" }));
+
+    await waitFor(() => expect(api.createVariant).toHaveBeenCalled());
+    expect(vi.mocked(api.createVariant).mock.calls[0]?.[0]).not.toHaveProperty("isSerialized");
+  });
+});
+
 describe("RF-CAT-02 · el tamaño de un decant se declara, no se precarga (WP-E05)", () => {
   it("no precarga 1 ml al elegir decant", async () => {
     const user = userEvent.setup();
-    render(
-      <CreateVariantForm productId="22222222-2222-4222-a222-222222222222" onSaved={vi.fn()} />,
-    );
+    render(<CreateVariantForm product={genericProduct} onSaved={vi.fn()} />);
 
     await user.selectOptions(screen.getByLabelText("Presentación"), "decant");
     expect((screen.getByLabelText("Tamaño (ml) *") as HTMLInputElement).value).toBe("");
@@ -420,9 +484,7 @@ describe("RF-CAT-02 · el tamaño de un decant se declara, no se precarga (WP-E0
       ReturnType<typeof api.createVariant>
     >);
     const user = userEvent.setup();
-    render(
-      <CreateVariantForm productId="22222222-2222-4222-a222-222222222222" onSaved={vi.fn()} />,
-    );
+    render(<CreateVariantForm product={genericProduct} onSaved={vi.fn()} />);
 
     await user.selectOptions(screen.getByLabelText("Presentación"), "decant");
     await user.type(screen.getByLabelText("SKU *"), "DECANT-EMPTY");

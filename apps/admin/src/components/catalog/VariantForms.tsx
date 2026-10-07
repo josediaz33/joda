@@ -5,6 +5,7 @@ import {
   VARIANT_DEFAULTS,
   createVariantInput,
   updateVariantInput,
+  type AdminProduct,
   type AdminVariant,
   type CreateVariantInput,
   type UpdateVariantInput,
@@ -60,19 +61,25 @@ function MoneyInput({
 }
 
 export function CreateVariantForm({
-  productId,
+  product,
   onSaved,
 }: {
-  productId: string;
+  product: AdminProduct;
   onSaved: (variant: AdminVariant) => void;
 }) {
+  // WP-E05c: la variante de un reloj hereda is_serialized de requiresSerial
+  // del producto, en el servicio de catálogo. No se marca aparte acá: ni
+  // control, ni valor enviado. Las demás verticales sí lo deciden en la
+  // variante.
+  const inheritedSerial =
+    product.kind === "watch" ? product.watchDetails.requiresSerial : undefined;
   const [error, setError] = useState("");
   const form = useForm<CreateVariantInput>({
     resolver: zodResolver(createVariantInput),
     mode: "onBlur",
     reValidateMode: "onChange",
     defaultValues: {
-      productId,
+      productId: product.id,
       sku: "",
       variantType: "unit",
       uom: "unit",
@@ -82,9 +89,7 @@ export function CreateVariantForm({
       vatRate: VARIANT_DEFAULTS.vatRate,
       productionMode: VARIANT_DEFAULTS.productionMode,
       sourceVariantId: null,
-      // Pendiente (WP-E05c): el DEFAULT de la columna es false, pero un reloj
-      // con serie lo necesita en true. Se decide por vertical, no se precarga.
-      isSerialized: false,
+      ...(inheritedSerial === undefined ? { isSerialized: false } : {}),
       // allocationPolicy, minStockAlert, weightG y position no tienen control
       // en WP-E05: se omiten y C08 aplica sus defaults, sin copiarlos acá.
     },
@@ -140,7 +145,10 @@ export function CreateVariantForm({
               // precargar (RF-CAT-02). Lo vacío lo rechaza el esquema.
               form.setValue("sizeMl", null, { shouldValidate: true });
               // Serie solo en unidades (RN-SER-02): al pasar a ml se apaga.
-              if (nextUom !== "unit") form.setValue("isSerialized", false);
+              // No aplica si la variante la hereda del producto (reloj).
+              if (inheritedSerial === undefined && nextUom !== "unit") {
+                form.setValue("isSerialized", false);
+              }
             }}
           >
             <option value="unit">Unidad</option>
@@ -244,10 +252,17 @@ export function CreateVariantForm({
           </div>
         )}
       </div>
-      {uom === "unit" && (
-        <label className="flex min-h-11 items-center gap-2 text-sm">
-          <input type="checkbox" {...form.register("isSerialized")} /> Requiere serie
-        </label>
+      {inheritedSerial === undefined ? (
+        uom === "unit" && (
+          <label className="flex min-h-11 items-center gap-2 text-sm">
+            <input type="checkbox" {...form.register("isSerialized")} /> Requiere serie
+          </label>
+        )
+      ) : (
+        <p className="text-sm text-text-secondary">
+          Requiere número de serie: <strong>{inheritedSerial ? "Sí" : "No"}</strong> — lo hereda del
+          producto.
+        </p>
       )}
       {error && (
         <p role="alert" className="text-sm text-error">

@@ -181,6 +181,53 @@ function BooleanField<T extends CreateProductInput>({
   );
 }
 
+// Sin opción preseleccionada: "no elegido" y "No" son estados distintos. El
+// reloj no es serializable por defecto, y tampoco lo es por omisión — el
+// operador tiene que marcar Sí o No, o el esquema rechaza el envío (no todos
+// los relojes llevan número de serie).
+function RadioBooleanField<T extends CreateProductInput>({
+  name,
+  label,
+  trueLabel = "Sí",
+  falseLabel = "No",
+}: {
+  name: FieldPath<T>;
+  label: string;
+  trueLabel?: string;
+  falseLabel?: string;
+}) {
+  const { field, fieldState } = useController<T>({ name });
+  const invalid = !!fieldState.error;
+  return (
+    <fieldset>
+      <legend className="mb-1 block text-sm font-semibold">{label} *</legend>
+      <div className="flex gap-4" aria-describedby={invalid ? `${name}-error` : undefined}>
+        <label className="flex min-h-11 items-center gap-2 text-sm">
+          <input
+            type="radio"
+            name={field.name}
+            checked={field.value === true}
+            onChange={() => field.onChange(true)}
+            onBlur={field.onBlur}
+          />
+          {trueLabel}
+        </label>
+        <label className="flex min-h-11 items-center gap-2 text-sm">
+          <input
+            type="radio"
+            name={field.name}
+            checked={field.value === false}
+            onChange={() => field.onChange(false)}
+            onBlur={field.onBlur}
+          />
+          {falseLabel}
+        </label>
+      </div>
+      <FieldError<T> name={name} />
+    </fieldset>
+  );
+}
+
 function ListField<T extends CreateProductInput>({
   name,
   label,
@@ -480,10 +527,12 @@ export function WatchForm(props: Props) {
         waterResistanceM: null,
         strapMaterial: null,
         crystal: null,
-        // Serie y garantía: de WATCH_DEFAULTS. Un reloj sin serie no registra
-        // unidades (RN-SER).
+        // Garantía: de WATCH_DEFAULTS. La serie NO tiene valor por defecto ni
+        // acá ni en la columna (0035_business_defaults_decisions.sql): no
+        // todos los relojes la llevan. Queda sin elegir (`requiresSerial`
+        // ausente) hasta que el operador marque Sí o No; el esquema rechaza
+        // el envío si no lo hizo.
         warrantyMonths: WATCH_DEFAULTS.warrantyMonths,
-        requiresSerial: WATCH_DEFAULTS.requiresSerial,
       },
     },
   });
@@ -518,7 +567,7 @@ export function WatchForm(props: Props) {
           step="1"
         />
       </div>
-      <BooleanField<WatchInput>
+      <RadioBooleanField<WatchInput>
         name="watchDetails.requiresSerial"
         label="Requiere número de serie"
       />

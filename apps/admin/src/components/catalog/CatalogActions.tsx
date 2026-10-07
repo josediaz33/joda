@@ -195,7 +195,7 @@ export function VariantEditor({
         {variant ? (
           <EditVariantForm variant={variant} onSaved={onSaved} />
         ) : (
-          <CreateVariantForm productId={product.id} onSaved={onSaved} />
+          <CreateVariantForm product={product} onSaved={onSaved} />
         )}
       </DialogContent>
     </Dialog>
