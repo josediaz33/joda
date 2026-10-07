@@ -1,6 +1,11 @@
 import { createTRPCUntypedClient, httpBatchLink } from "@trpc/client";
 import {
   listProductsOutput,
+  adminProductSchema,
+  adminVariantSchema,
+  listCategoriesOutput,
+  adminCategorySchema,
+  adminMediaSchema,
   staffSessionCurrentOutput,
   staffSessionProfile,
   mfaEnrollOutput,
@@ -8,6 +13,11 @@ import {
   staffLogoutOutput,
   staffSessionRefreshOutput,
   type ListProductsInput,
+  type CreateProductInput,
+  type UpdateProductInput,
+  type CreateVariantInput,
+  type CreateCategoryInput,
+  type UpdateVariantInput,
   type StaffLoginInput,
 } from "@joda/contracts";
 
@@ -34,4 +44,37 @@ export const api = {
     mfaActionOutput.parse(await trpc.mutation("auth.mfa.verify", { code })),
   listProducts: async (input: ListProductsInput) =>
     listProductsOutput.parse(await trpc.query("catalog.product.list", input)),
+  listCategories: async (cursor?: string) =>
+    listCategoriesOutput.parse(await trpc.query("catalog.category.list", { cursor, limit: 200 })),
+  createCategory: async (input: CreateCategoryInput) =>
+    adminCategorySchema.parse(await trpc.mutation("catalog.category.create", input)),
+  createProduct: async (input: CreateProductInput) =>
+    adminProductSchema.parse(await trpc.mutation("catalog.product.create", input)),
+  updateProduct: async (input: UpdateProductInput) =>
+    adminProductSchema.parse(await trpc.mutation("catalog.product.update", input)),
+  createVariant: async (input: CreateVariantInput) =>
+    adminVariantSchema.parse(await trpc.mutation("catalog.variant.create", input)),
+  updateVariant: async (input: UpdateVariantInput) =>
+    adminVariantSchema.parse(await trpc.mutation("catalog.variant.update", input)),
+  uploadProductMedia: async (input: { productId: string; file: File; altText: string }) => {
+    const body = new FormData();
+    // C09 lee los campos al recibir el archivo: deben preceder a `file`.
+    body.append("productId", input.productId);
+    body.append("altText", input.altText);
+    body.append("file", input.file);
+    const response = await fetch("/media/products", {
+      method: "POST",
+      body,
+      credentials: "include",
+    });
+    const result: unknown = await response.json();
+    if (!response.ok) {
+      const message =
+        typeof result === "object" && result !== null && "message" in result
+          ? String(result.message)
+          : "No se pudo subir la imagen.";
+      throw new Error(message);
+    }
+    return adminMediaSchema.parse(result);
+  },
 };

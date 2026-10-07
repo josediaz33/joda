@@ -11,6 +11,8 @@ import {
   createBomComponentInput,
   createProductInput,
   createVariantInput,
+  updateProductInput,
+  updateVariantInput,
   publicProductSchema,
   publicVariantSchema,
 } from "./catalog.js";
@@ -168,6 +170,44 @@ describe("catalog — detalle admin por vertical (docs/data-model.md §3.1, ADR-
   });
 });
 
+describe("catalog — granel no vendible directamente (GLOSARIO.md)", () => {
+  it("rechaza onlineVisible al crear granel", () => {
+    expect(
+      createVariantInput.safeParse({
+        productId: "44444444-4444-4444-a444-444444444444",
+        sku: "GRANEL-125",
+        variantType: "bulk",
+        uom: "ml",
+        sizeMl: null,
+        pricePyg: "0",
+        onlineVisible: true,
+      }).success,
+    ).toBe(false);
+  });
+});
+
+describe("catalog — visibilidad reservada al permiso de publicación (docs/security-spec.md §2)", () => {
+  it("rechaza onlineVisible en el alta y la edición ordinaria", () => {
+    expect(
+      createVariantInput.safeParse({
+        productId: "44444444-4444-4444-a444-444444444444",
+        sku: "RELOJ-01",
+        variantType: "unit",
+        uom: "unit",
+        sizeMl: null,
+        pricePyg: "245000",
+        onlineVisible: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      updateVariantInput.safeParse({
+        id: "44444444-4444-4444-a444-444444444444",
+        onlineVisible: true,
+      }).success,
+    ).toBe(false);
+  });
+});
+
 describe("catalog — createVariantInput valida los mismos CHECK que product_variants (0003_catalog.sql)", () => {
   const base = {
     productId: "11111111-1111-4111-a111-111111111111",
@@ -301,6 +341,17 @@ describe("catalog — createProductInput exige requiresSerial al crear un reloj,
         watchDetails: { ...watchDetails, requiresSerial: false },
       }),
     ).not.toThrow();
+  });
+});
+
+describe("catalog — separación de permisos de publicación (docs/security-spec.md §2)", () => {
+  it("rechaza cambiar status por catalog.product.update bajo catalog.product:write", () => {
+    expect(
+      updateProductInput.safeParse({
+        id: "44444444-4444-4444-a444-444444444444",
+        status: "active",
+      }).success,
+    ).toBe(false);
   });
 });
 

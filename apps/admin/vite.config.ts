@@ -5,7 +5,9 @@ import { defineConfig } from "vitest/config";
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   resolve: { tsconfigPaths: true },
-  server: { proxy: { "/trpc": "http://localhost:3333" } },
+  server: {
+    proxy: { "/trpc": "http://localhost:3333", "/media/products": "http://localhost:3333" },
+  },
   build: { manifest: true },
   test: { testTimeout: 20_000 },
 });

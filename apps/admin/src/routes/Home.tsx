@@ -20,9 +20,9 @@ export default function Home() {
             className="border border-border-subtle bg-surface-elevated p-6 hover:border-border-strong focus-visible:outline-2 focus-visible:outline-focus"
             to="/vista-catalogo"
           >
-            <span className="font-display text-heading-sm">Vista de catálogo</span>
+            <span className="font-display text-heading-sm">Catálogo</span>
             <span className="mt-2 block text-sm text-text-secondary">
-              Consultar productos registrados.
+              Crear y editar productos, variantes e imágenes.
             </span>
           </Link>
         </Can>

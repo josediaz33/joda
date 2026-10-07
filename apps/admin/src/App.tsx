@@ -67,7 +67,7 @@ function SessionBoundary() {
           <nav aria-label="Principal" className="flex flex-wrap items-center gap-5 text-sm">
             <Link to="/">Inicio</Link>
             <Can perform="catalog.product:read">
-              <Link to="/vista-catalogo">Vista de catálogo</Link>
+              <Link to="/vista-catalogo">Catálogo</Link>
             </Can>
             <Can perform="accounting.journal:read">
               <Link to="/contabilidad">Contabilidad</Link>

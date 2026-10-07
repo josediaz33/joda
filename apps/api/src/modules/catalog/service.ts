@@ -252,7 +252,6 @@ export async function updateProduct(
       name: input.name,
       description: input.description,
       brandId: input.brandId,
-      status: input.status,
       seo: input.seo as Prisma.InputJsonValue | undefined,
       facets: buildProductFacetsFromRow(withUpdatedDetails) as Prisma.InputJsonValue,
     });
@@ -396,7 +395,6 @@ export async function createVariant(
       productionMode: input.productionMode,
       sourceVariantId: input.sourceVariantId ?? null,
       isSerialized,
-      onlineVisible: input.onlineVisible,
       minStockAlert: input.minStockAlert ?? null,
       weightG: input.weightG ?? null,
       position: input.position,
@@ -431,7 +429,8 @@ export async function updateVariant(
       productionMode: input.productionMode,
       sourceVariantId: input.sourceVariantId,
       isSerialized: input.isSerialized,
-      onlineVisible: input.onlineVisible,
+      // Normaliza datos anteriores: un granel nunca es vendible directamente.
+      onlineVisible: existing.variant_type === "bulk" ? false : undefined,
       minStockAlert: input.minStockAlert,
       weightG: input.weightG,
       position: input.position,
