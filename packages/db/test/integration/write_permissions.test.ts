@@ -244,7 +244,7 @@ const SELECT_PO_LINES = `SELECT unit_price_minor FROM app.purchase_order_lines`;
 const UPDATE_SENT_PO_LINE = `UPDATE app.purchase_order_lines SET unit_price_minor = 1
   WHERE id = '${SENT_PO_LINE_ID}'`;
 // Re-parentar: la política de UPDATE no mira `purchase_order_id` y hacía lo que el
-// INSERT y el DELETE de líneas prohíben (revisión cruzada de B11d, 0035).
+// INSERT y el DELETE de líneas prohíben (revisión cruzada de B11d, 0036).
 const MOVE_SENT_PO_LINE_TO_DRAFT = `UPDATE app.purchase_order_lines SET purchase_order_id = '${DRAFT_PO_ID}'
   WHERE id = '${SENT_PO_LINE_ID}'`;
 const MOVE_DRAFT_PO_LINE_TO_SENT = `UPDATE app.purchase_order_lines SET purchase_order_id = '${SENT_PO_ID}'
@@ -1270,7 +1270,7 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
     describe("purchase_order_lines: leer con :read; escribir con los permisos de purchase_orders; agregar y borrar solo con la orden en borrador", () => {
       // La revisión cruzada de B11b/c/d: como `joda_api` con cualquiera de los roles
       // que pueden editar líneas, `UPDATE ... SET purchase_order_id` vaciaba una
-      // orden enviada (o le agregaba una línea). `trg_po_line_no_reparent` (0035)
+      // orden enviada (o le agregaba una línea). `trg_po_line_no_reparent` (0036)
       // lo frena para todos, en las dos direcciones.
       it("el owner no mueve una línea de una orden enviada a un borrador (la dejaba vacía)", async () => {
         await expect(as(owner, MOVE_SENT_PO_LINE_TO_DRAFT)).rejects.toMatchObject({

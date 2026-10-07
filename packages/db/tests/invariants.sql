@@ -409,7 +409,7 @@ SELECT pg_temp.expect_true(28,
 -- 29 ─ Toda función de disparador de app.* es SECURITY DEFINER, salvo las
 -- que no leen ninguna tabla (`guard_po_no_return_to_draft`, WP-B11,
 -- `guard_system_roles`, WP-B11c, `guard_so_no_return_to_draft`, WP-B11d, y
--- `guard_po_line_no_reparent`, 0035: leen solo OLD y NEW). Una función de
+-- `guard_po_line_no_reparent`, 0036: leen solo OLD y NEW). Una función de
 -- invariante SECURITY INVOKER lee con
 -- los permisos de quien dispara el trigger: si RLS le oculta la fila, decide
 -- sobre un NULL (el defecto de B10 y de B09). Una función nueva que lea
@@ -2640,7 +2640,7 @@ SELECT pg_temp.expect_fail_like(125, 'Borrar un borrador sin seña, o con la se�
 -- `draft`; la de UPDATE no mira el estado, y un UPDATE de `purchase_order_id`
 -- hacía lo que ellas prohíben: mover la línea de una orden enviada a un
 -- borrador la dejaba VACÍA, y mover una de un borrador a una orden enviada le
--- AGREGABA una (revisión cruzada de B11b/c/d, 0035). Una política de UPDATE no
+-- AGREGABA una (revisión cruzada de B11b/c/d, 0036). Una política de UPDATE no
 -- puede comparar OLD con NEW; `trg_po_line_no_reparent` sí. Rechaza como
 -- superusuario: es el trigger, no RLS.
 SELECT pg_temp.expect_fail_like(126, 'Mover una línea de una orden de compra enviada a un borrador',

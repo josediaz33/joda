@@ -178,7 +178,7 @@ const REJECTED_BEFORE_THE_FK: Record<string, { code: string; message: RegExp; wh
   "purchase_order_lines.purchase_order_id": {
     code: "23514",
     message: /^La línea .* no puede pasar a la orden/,
-    why: "trg_po_line_no_reparent (BEFORE, 0035): una línea no cambia de orden, ni a la de otro tenant. Tampoco sirve un INSERT: la política de INSERT (0034) exige ver la orden padre en borrador y la del vecino es invisible, así que RLS rechaza antes que la FK",
+    why: "trg_po_line_no_reparent (BEFORE, 0036): una línea no cambia de orden, ni a la de otro tenant. Tampoco sirve un INSERT: la política de INSERT (0034) exige ver la orden padre en borrador y la del vecino es invisible, así que RLS rechaza antes que la FK",
   },
 };
 

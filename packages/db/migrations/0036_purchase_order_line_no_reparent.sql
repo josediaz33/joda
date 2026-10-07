@@ -1,5 +1,5 @@
 -- =====================================================================
--- 0035_purchase_order_line_no_reparent.sql  (revisión cruzada de WP-B11d, ADR-026)
+-- 0036_purchase_order_line_no_reparent.sql  (revisión cruzada de WP-B11d, ADR-026)
 --
 -- DEFECTO. Las políticas de INSERT y DELETE de `purchase_order_lines` (0034)
 -- exigen que la orden padre esté en `draft`: sin eso, quien tiene
