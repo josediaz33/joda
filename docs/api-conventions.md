@@ -46,7 +46,8 @@ Procedimientos tRPC: `<módulo>.<recurso>.<acción>`.
 ```
 catalog.product.list          catalog.product.byId       catalog.product.create
 inventory.stock.available     inventory.lot.open         inventory.adjustment.create
-decant.workOrder.list         decant.workOrder.execute
+inventory.decant.plan         inventory.decant.start     inventory.decant.execute
+inventory.decant.list
 sales.order.confirm           sales.order.cancel
 market.purchaseOrder.receive  market.sourcing.compare
 accounting.journal.list       accounting.period.close
@@ -196,6 +197,8 @@ El cursor es opaco: base64 de `(orden, id)`. El cliente no lo interpreta.
 Cuando el `orderBy` de un procedimiento es fijo del lado del servidor (el caso normal: el cliente nunca elige el orden), alcanza con codificar el `id` — el cursor nativo de Prisma (`cursor: { id }, skip: 1`) ya resuelve la posición correcta dentro de ese orden compuesto sin necesitar el valor de orden viajando aparte. `apps/api/src/db/cursor.ts` (WP-C08) es la referencia de esta simplificación.
 
 Para listados que el usuario necesita contar (reportes), un procedimiento `count` separado. Nunca devolver `total` en cada página: obliga a un `COUNT(*)` costoso en toda consulta.
+
+**Excepción: una cola acotada por su propio estado.** Un listado que solo devuelve el trabajo sin terminar puede ir sin cursor, porque lo que sale de la cola no vuelve y su tamaño lo acota el trabajo pendiente, no el historial. El caso es `inventory.decant.list` (WP-C13): las órdenes de fraccionamiento `pending` e `in_progress`, agrupadas por frasco de origen. La excepción vale solo mientras el procedimiento **no admita estados terminales** (`done`, `cancelled`): su input lo impide, y si alguna vez lista también las terminadas, necesita cursor como cualquier otro listado. Cada excepción se declara en el criterio de su WP.
 
 ---
 

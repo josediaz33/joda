@@ -164,6 +164,8 @@ export class Quantity {
 
 `Quantity.units(1.5)` lanza. Media unidad de reloj no existe.
 
+En `ml`, `plus`, `minus` y `compare` operan en la grilla de milésimas: el resultado de una suma o una resta se lleva a ella y `compare` compara las dos cantidades ya llevadas. Sin eso, `10 + 0,274` daba `10.274000000000001` y un granel que alcanzaba justo se rechazaba (WP-C13, revisión cruzada). Una cantidad que sale de `times` con más de tres decimales se compara en la grilla: el ml no tiene más resolución.
+
 ### 3.3 `Percentage`
 
 ```ts

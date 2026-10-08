@@ -1496,7 +1496,14 @@ Tomá WP-C19 del backlog.
 
 Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
 docs/domain-rules.md (RN-VTA-02, RN-VTA-05, RN-RES-05, RN-COS-04),
-docs/api-conventions.md (sección 8.2, bloqueo), ADR-007, ADR-008.
+docs/api-conventions.md (sección 8.2, bloqueo), ADR-007, ADR-008,
+docs/security-spec.md §3.1 («Planificar un decant sin leer lotes») y la
+resolución de WP-C13 en docs/backlog.md («Decisiones de José sobre H1, H3
+y E07»: permiso inventory.decant:plan, función SECURITY DEFINER acotada,
+plan solo sobre ventas awaiting_payment o paid, una orden por línea de
+venta). El esquema (permiso, función, columna e índice) lo pone WP-B18, que
+va antes de este WP; las cuatro preguntas que había ahí quedaron resueltas
+el 2026-10-08.
 
 Objetivo: confirmación de venta — consumo real de inventario, cálculo y
 persistencia del COGS por línea, con bloqueo de lotes ordenado para
@@ -2056,8 +2063,8 @@ Leé primero: docs/frontend-spec.md §8.6, docs/domain-rules.md, ADR-009,
 Objetivo: agregar la cola de órdenes de fraccionamiento al admin.
 
 Criterio de aceptación: la cola se agrupa por frasco de origen; la merma
-real es obligatoria, aparece precargada con la esperada y puede editarse
-antes de ejecutar la orden.
+esperada se muestra solo como pista y la real es obligatoria, sin precarga
+(decisión de José, 2026-10-07).
 
 TRAMPAS DE ESTA TAREA:
 · No contabilices la merma esperada como real ni ejecutes sin declarar la

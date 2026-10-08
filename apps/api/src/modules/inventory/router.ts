@@ -17,6 +17,7 @@ import {
 import type { PrismaClient } from "@joda/db";
 import { appError, toTRPCError } from "../../middleware/errorMapper.js";
 import { router, staffProcedure } from "../../trpc/trpc.js";
+import { createDecantRouter } from "../decant/router.js";
 import * as inventoryService from "./service.js";
 import type { InventoryServiceDeps } from "./service.js";
 
@@ -101,7 +102,11 @@ export function createInventoryRouter(db: PrismaClient | null, deps: InventorySe
       ),
   });
 
-  return router({ stock, lot, adjustment, serial });
+  // WP-C13. `inventory.decant.*`: el módulo vive en modules/decant/ y se monta
+  // acá porque el fraccionamiento es una transformación de inventario.
+  const decant = createDecantRouter(db, deps);
+
+  return router({ stock, lot, adjustment, serial, decant });
 }
 
 export type InventoryRouter = ReturnType<typeof createInventoryRouter>;

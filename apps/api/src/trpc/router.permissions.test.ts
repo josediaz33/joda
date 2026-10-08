@@ -94,6 +94,10 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
       "example.ping.list",
       "example.ping.requiresPermission",
       "inventory.adjustment.create",
+      "inventory.decant.execute",
+      "inventory.decant.list",
+      "inventory.decant.plan",
+      "inventory.decant.start",
       "inventory.lot.history",
       "inventory.lot.open",
       "inventory.serial.create",
@@ -124,6 +128,27 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
     expect(procedures["inventory.lot.open"]?._def.meta?.permission).toBe(
       "inventory.decant:execute",
     );
+  });
+
+  // WP-C13: planificar, iniciar y ejecutar una orden de fraccionamiento exigen
+  // el permiso que la política de escritura de `inventory_movements` (WP-B11d,
+  // docs/security-spec.md §3.1) pide para los movimientos `decant_consumption`,
+  // `waste` y `bom_consumption`; la cola solo lee. Si alguien cambia un
+  // permiso acá sin cambiar la política, la ejecución deja de coincidir con la
+  // base y falla a mitad de la transacción.
+  it("inventory.decant.* exige inventory.decant:execute para planificar, iniciar y ejecutar, e inventory.stock:read para la cola (RF-FRA-01…06)", () => {
+    const procedures = flattenProcedures(createAppRouter(null));
+
+    expect(procedures["inventory.decant.plan"]?._def.meta?.permission).toBe(
+      "inventory.decant:execute",
+    );
+    expect(procedures["inventory.decant.start"]?._def.meta?.permission).toBe(
+      "inventory.decant:execute",
+    );
+    expect(procedures["inventory.decant.execute"]?._def.meta?.permission).toBe(
+      "inventory.decant:execute",
+    );
+    expect(procedures["inventory.decant.list"]?._def.meta?.permission).toBe("inventory.stock:read");
   });
 
   // WP-C12: el alta suelta de una unidad es un ajuste; leer y trazar exigen

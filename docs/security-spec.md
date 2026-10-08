@@ -60,6 +60,8 @@ Forma: `recurso.subrecurso:acción`.
 | `settings.user:read`            | Ver usuarios y roles                  |
 | `settings.user:write`           | Gestionar usuarios y roles            |
 
+**Permiso decidido, todavía no sembrado: `inventory.decant:plan`** («Planificar órdenes de fraccionamiento»; decisión de José, 2026-10-07 y 2026-10-08; lo agrega WP-B18, de la serie B, antes de WP-C19). No está en la tabla ni en la matriz porque no existe: la tabla tiene los 28 códigos de `permissions.ts` y del seed, y los tres tienen que decir lo mismo. Cuando WP-B18 lo agregue entra en los tres a la vez. Lo reciben el `vendedor` y el `deposito` por seed; `owner` lo recibe porque el seed le da todos los permisos, y `manager` porque recibe todos menos `settings.user:write`. **`inventory.decant.plan` exige exactamente este permiso**, sin lógica de «cualquiera de los dos»: el `deposito`, que hoy planifica por HTTP porque tiene `inventory.decant:execute`, no pierde la planificación porque lo recibe. Diseño en §3.1, «Planificar un decant sin leer lotes».
+
 ### 2.1 Matriz de roles
 
 | Permiso                    | owner | manager | vendedor | deposito |
@@ -84,10 +86,11 @@ Forma: `recurso.subrecurso:acción`.
 | `settings.user:read`       |   ✓   |    ✓    |          |          |
 | `settings.user:write`      |   ✓   |         |          |          |
 
-**Dos decisiones deliberadas:**
+**Tres decisiones deliberadas:**
 
 - **`vendedor` no ve caja ni costos.** Que alguien cargue una venta no implica que vea el flujo financiero del negocio ni lo que cuesta cada frasco. Sí maneja señas, porque es parte de vender: las registra y las aplica al vender, y por eso tiene `accounting.deposit:write` **y** `accounting.deposit:read`. Con RLS, escribir una seña exige poder leerla (§3.1, "La trampa de la lectura"). `accounting.cashbox:read` sigue fuera de su alcance. **Lee todas las señas del tenant, no solo las de su cliente:** la base filtra por tenant, no por vendedor. Decisión aceptada (2026-10-01): acotarlo por cliente no se justifica en un negocio de este tamaño.
 - **`deposito` no ve precios de compra.** Mueve mercadería. `inventory.stock:read` incluye costos de lote y del ledger (los movimientos y sus capas de costo, desde 0037), así que si más adelante hace falta un depósito sin acceso a costos, se separa en `inventory.stock:read` e `inventory.cost:read`.
+- **`vendedor` planifica decants sin leer lotes.** Al vender un decant tiene que poder planificar la orden (WP-C19), y para eso hace falta ver qué granel hay. Darle `inventory.stock:read` está descartado porque expone costos de lote; tendrá `inventory.decant:plan` (como el `deposito`) y los lotes candidatos le llegan por una función acotada que no devuelve costos (§3.1, «Planificar un decant sin leer lotes»).
 
 ---
 
@@ -248,6 +251,37 @@ Si la API usara `service_role` o el dueño de las tablas, RLS **no se evaluaría
 - **Los disparadores no se ven afectados, pero uno hablaba de más.** Los que leen el ledger o sus capas son `SECURITY DEFINER` desde 0018: la verificación de que las capas cuadran con el movimiento no depende de quién escribe. Su mensaje, en cambio, traía el costo del movimiento (`asignado=X declarado=Y`), y como el INSERT de las capas es solo por tenant y la FK no evalúa RLS, el vendedor lo leía en un movimiento ajeno insertando una capa de 1. Desde 0037 los montos van solo con `inventory.stock:read`; el invariante 131 lo verifica. Queda la igualdad (una capa pasa solo si su total es el del movimiento), que cierra B11e.
 - **La trampa de la lectura es real para el vendedor.** Escribe un movimiento `sale` con `sales.order:write` y no puede leerlo, así que su `INSERT … RETURNING` (el que emite el `create` de Prisma) recibe 42501. Lo registra **sin `RETURNING`**, y toma el id para sus capas con `currval(pg_get_serial_sequence('app.inventory_movements', 'id'))` (no `lastval()`: dentro del INSERT de la capa devuelve la identidad de la propia capa). Se descartó dejar que el SELECT admita las filas `sale` de quien puede escribirlas, como sugería la fila de B11f: son las filas que traen el costo de lo que el vendedor vendió. Los otros roles sembrados que escriben movimientos (dueño, encargado, depósito) tienen `inventory.stock:read` y no tienen la trampa; el invariante 129 lo verifica, con la excepción registrada del vendedor, y el 130 que el vendedor siga sin ese permiso.
 - **Lo que no cierra, con su destino en `docs/backlog.md`.** (1) WP-C19 hereda la forma de escribir del vendedor (SQL crudo, sin `RETURNING`) y tiene que decidir con qué sesión elige la capa de costo, porque el vendedor tampoco lee los lotes. (2) WP-B11e: una política de INSERT de las capas que consulte `inventory_movements` corre bajo RLS y no ve el movimiento del vendedor; y es el lugar de atar la capa a un movimiento que quien la escribe creó en esa transacción, que cierra la prueba por igualdad. (3) **WP-B11g, decisión de diseño:** el mismo costo vive en columnas que RLS no esconde y que el vendedor lee: `sale_orders.cogs_pyg`, `sale_order_lines.cogs_pyg` y los snapshots de `audit_log`, `idempotency_keys` y `unposted_events`. (4) **La raíz del costo, pendiente en C15 (decisión de José, 2026-10-08):** `goods_receipt_lines` (precio unitario y flete prorrateado) y `goods_receipts` se leen por tenant, y con ellos se reconstruye el costo de una recepción. No se cierran en este PR sino en la parte de DB de WP-C15, con lectura `market.purchase_order:read` o `:receive`; el vendedor no tiene ninguno. Hasta entonces, «el vendedor no obtiene el costo» vale para el ledger y sus capas de costo, no para sus orígenes. (5) **WP-B11h:** `journal_lines` se lee y se escribe por tenant, a diferencia de `journal_entries`; plazo escrito por José: antes de habilitar cualquier regla de posteo (H01) y siempre antes del cutover. (6) El rechazo del disparador sin cifras vale para toda sesión sin `inventory.stock:read`, también el ETL o un `psql` sin contexto de staff: al depurar un descuadre los montos se consultan en el ledger.
+
+#### Planificar un decant sin leer lotes (H1 de WP-C13; decisión de José, 2026-10-07; la implementa WP-B18)
+
+**El problema.** `lots_read` exige `inventory.stock:read`, que incluye los costos de lote (§2). El `vendedor` no lo tiene, así que bajo RLS no ve ningún lote, y planificar un decant al vender (`createPlannedWorkOrder`, que C19 llama dentro de su transacción de confirmación) necesita leer el granel candidato. Sin una salida, el vendedor recibía un `CONFLICT_NO_BULK_AVAILABLE` que decía «abrí un frasco» aunque el granel existía.
+
+**La decisión.** No se afloja `lots_read` ni se le da `inventory.stock:read` al vendedor. Se agrega el permiso `inventory.decant:plan` (§2) y los lotes candidatos se leen por una función `SECURITY DEFINER` acotada. **Este PR no la implementa:** es el alcance de WP-B18 (serie B, antes de C19; `docs/backlog.md`, «Decisiones de José sobre H1, H3 y E07»).
+
+**Qué tiene que cumplir la función:**
+
+- **`search_path` fijo y nombres calificados**: `SET search_path = app, pg_temp` con todo calificado, el patrón de `0017` y `0018`. En una `SECURITY DEFINER`, `pg_temp` se busca primero si no se lo fija.
+- **El chequeo de permiso va adentro**: `app.has_permission('inventory.decant:plan')` dentro de la función. Que la API llame antes a `requirePermission` (capa 2) no alcanza: la función es la que le abre a `joda_api` una lectura que la política le cierra, y no puede depender de que quien la llame se acuerde.
+- **Falla cerrado.** Sin el permiso, sin sesión de staff o sin tenant en el contexto, rechaza con un error; no devuelve cero filas. Un vacío es indistinguible de «no hay granel», que es el engaño de H1.
+- **Filtra por el tenant de la sesión** (`app.current_tenant_id()`): con `SECURITY DEFINER` la función ve las filas de todos los tenants.
+- **Devuelve solo `lot_id`, la cantidad disponible y la fecha de apertura.** Ningún costo (`unit_landed_cost`, `unit_cost`), proveedor ni fecha de recepción. Entrega candidatos; elegir cuál usa la orden sigue siendo del dominio (`planDecant`).
+- **Se revoca de `PUBLIC` y se concede solo a `joda_api`**, como `find_staff_login_by_email` en `0011`.
+- **La dependencia operativa de B09 (`0018`)**: la función lee `inventory_lots` por encima de `lots_read`, así que su dueño tiene que eludir RLS, y la migración lo declara como lo hacen las de `0018`.
+
+**Lo que esta especificación deja abierto para WP-B18 y C19**, sin decidirlo:
+
+- **El parámetro y los filtros.** La función recibe la variante de origen y aplica lo que hoy hace `listOpenBulkLots` (`repository.ts`): lote de granel en `open_for_decant`, con saldo, por `opened_at` y luego `id`.
+- **El `LotSnapshot` de `plan`.** `planDecant` pide `status`, `variantType`, `uom` y `unitCost`, y la función devuelve solo tres columnas. C19 resuelve cómo `plan` arma el snapshot sin costo (por ejemplo, haciendo del estado y del tipo una garantía de lo que la función devuelve).
+- **Los insumos del BOM.** `plan` también lee sus lotes (`listSupplyLots`), detrás de la misma política: la función los cubre con el mismo contrato, o C19 decide cómo se verifica su disponibilidad sin costos.
+- **El `sourceLotId` del vendedor.** Un lote de origen que RLS oculta es un 404 (WP-C13); C19 decide si el vendedor puede pasar uno.
+
+**Las respuestas tampoco muestran costos.** Ni la respuesta de `plan` ni la lectura de la orden por el vendedor exponen costos, lotes con costo ni totales. Son un esquema propio en `packages/contracts`, distinto del administrativo (la regla de `.claude/rules/contracts.md`, no el mismo con campos opcionales), y un **test de contrato** verifica que no filtra las claves prohibidas (`cost`, `landed`, `supplier`, `margin`, `fx_rate`). Hoy no existe un procedimiento donde el vendedor lea la orden (`inventory.decant.list` exige `inventory.stock:read`), y `adminDecantWorkOrderSchema` no tiene claves de costo: la exigencia vale para la respuesta de `plan` y para el procedimiento de lectura que C19 agregue, si lo agrega.
+
+**Qué no cambia.** `lots_read` sigue exigiendo `inventory.stock:read`; el `vendedor` sigue sin leer `inventory_lots`; ejecutar la orden sigue exigiendo `inventory.decant:execute` (la política de `inventory_movements` de B11d); la función no escribe nada.
+
+**Una orden activa por línea de venta (H3; decisión de José, 2026-10-08).** `decant_work_orders` guarda la línea de venta (`sale_order_line_id`) y un índice único parcial `WHERE status <> 'cancelled'` impide una segunda orden activa para la misma línea; cancelar permite replanificar. La `Idempotency-Key` de `plan` sigue siendo opcional y solo sirve para reintentos: no puede garantizar «una orden por línea», porque la elige el cliente. Es un invariante de la base y lo agrega WP-B18; que `plan` reciba la línea y traduzca la violación a un 409 es de C19.
+
+**Qué prueba WP-B18** (y C19 comprueba por la API), como `joda_api` y no como superusuario: el vendedor, sin `inventory.stock:read`, obtiene `lot_id`, disponible y apertura de su tenant, y nada más; una sesión sin `inventory.decant:plan` recibe el rechazo y no un vacío; el dueño de otro tenant no ve lotes ajenos; un intento de sombra en `pg_temp` no cambia el resultado; la respuesta del vendedor no trae ninguna clave de costo, y el índice rechaza una segunda orden activa para la misma línea y admite una nueva después de cancelar la anterior.
 
 ### 3.2 Capa 2 — Middleware
 

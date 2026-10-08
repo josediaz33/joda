@@ -13,6 +13,20 @@ export type Uom = "unit" | "ml";
 const ML_SCALE = 1000;
 const ML_SCALE_EPSILON = 1e-9;
 
+// Sumar o restar dos valores de la grilla de milésimas en punto flotante puede
+// dejar un residuo (10 + 0.274 da 10.274000000000001), y `compare` es exacta:
+// un granel que alcanza justo se rechazaba como insuficiente (WP-C13, revisión
+// cruzada). Por eso `plus`/`minus` devuelven el resultado en la grilla, y
+// `compare` compara las dos cantidades ya llevadas a ella. `+ 0` convierte el
+// -0 de redondear un residuo negativo en 0.
+function toMlGrid(value: number): number {
+  return Math.round(value * ML_SCALE) / ML_SCALE + 0;
+}
+
+function onGrid(value: number, uom: Uom): number {
+  return uom === "ml" ? toMlGrid(value) : value;
+}
+
 export class Quantity {
   private constructor(
     readonly value: number,
@@ -55,12 +69,12 @@ export class Quantity {
 
   plus(other: Quantity): Quantity {
     this.assertSameUom(other);
-    return new Quantity(this.value + other.value, this.uom);
+    return new Quantity(onGrid(this.value + other.value, this.uom), this.uom);
   }
 
   minus(other: Quantity): Quantity {
     this.assertSameUom(other);
-    return new Quantity(this.value - other.value, this.uom);
+    return new Quantity(onGrid(this.value - other.value, this.uom), this.uom);
   }
 
   times(factor: number): Quantity {
@@ -92,7 +106,9 @@ export class Quantity {
 
   compare(other: Quantity): -1 | 0 | 1 {
     this.assertSameUom(other);
-    if (this.value === other.value) return 0;
-    return this.value < other.value ? -1 : 1;
+    const mine = onGrid(this.value, this.uom);
+    const theirs = onGrid(other.value, other.uom);
+    if (mine === theirs) return 0;
+    return mine < theirs ? -1 : 1;
   }
 }

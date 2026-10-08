@@ -85,6 +85,49 @@ describe("Quantity — aritmética entre la misma unidad (docs/domain-contracts.
   });
 });
 
+// WP-C13, revisión cruzada: `execute` rechazaba un granel que alcanzaba justo
+// (10,274 ml disponibles para 10 ml de líquido y 0,274 ml de merma real) porque
+// 10 + 0.274 da 10.274000000000001 en punto flotante y `compare` era exacta.
+describe("Quantity — la aritmética de ml queda en la grilla de milésimas (docs/domain-contracts.md §3.2, RN-FRA-03)", () => {
+  it("plus no deja residuo de coma flotante: 10 + 0,274 es 10,274", () => {
+    expect(Quantity.ml(10).plus(Quantity.ml(0.274)).value).toBe(10.274);
+  });
+
+  it("plus no deja residuo hacia abajo: 10 + 0,351 es 10,351", () => {
+    expect(Quantity.ml(10).plus(Quantity.ml(0.351)).value).toBe(10.351);
+  });
+
+  it("minus no deja residuo: 1 − 0,059 es 0,941", () => {
+    expect(Quantity.ml(1).minus(Quantity.ml(0.059)).value).toBe(0.941);
+  });
+
+  it("minus que da cero da +0, no -0", () => {
+    const zero = Quantity.ml(0.3).minus(Quantity.ml(0.1)).minus(Quantity.ml(0.2));
+
+    expect(zero.value).toBe(0);
+  });
+
+  it("una suma que alcanza justo compara igual a la cantidad disponible", () => {
+    const required = Quantity.ml(10).plus(Quantity.ml(0.274));
+
+    expect(Quantity.ml(10.274).compare(required)).toBe(0);
+  });
+
+  it("compare no distingue lo que está por debajo de una milésima: el ml no tiene más resolución", () => {
+    expect(Quantity.ml(1).times(0.0004).compare(Quantity.zero("ml"))).toBe(0);
+  });
+
+  it("compare sigue distinguiendo una milésima", () => {
+    expect(Quantity.ml(10.273).compare(Quantity.ml(10.274))).toBe(-1);
+    expect(Quantity.ml(10.275).compare(Quantity.ml(10.274))).toBe(1);
+  });
+
+  it("las unidades enteras no cambian: la suma y la comparación son exactas", () => {
+    expect(Quantity.units(2).plus(Quantity.units(3)).value).toBe(5);
+    expect(Quantity.units(5).compare(Quantity.units(5))).toBe(0);
+  });
+});
+
 describe("Quantity.times — preserva el invariante de 'unit' (docs/domain-contracts.md §3.2)", () => {
   it("rechaza un factor que rompería el entero de 'unit' — media unidad de reloj no existe", () => {
     expect(() => Quantity.units(3).times(0.5)).toThrow(InvalidQuantityError);
