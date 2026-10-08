@@ -15,6 +15,7 @@ Las migraciones son SQL escrito a mano, numeradas consecutivamente.
 - **Nunca** `prisma migrate dev`.
 - **Nunca** editar `schema.prisma` a mano.
 - **Nunca** editar una migración ya aplicada. Siempre una nueva.
+- El número de migración y de invariante se fija **al fusionar**, no al empezar: el trabajo de DB no se paraleliza (`CONTRIBUTING.md` §6, regla de proceso).
 
 Prisma no expresa constraint triggers diferidos, RLS, dominios ni FK compuestas:
 si el esquema lo definiera Prisma, los invariantes desaparecerían.
@@ -56,7 +57,11 @@ también cubre `SELECT` y le abre la lectura a quien solo debía escribir
 (invariante 92). Y `INSERT ... RETURNING` y los `UPDATE`/`DELETE` que leen
 columnas (con `WHERE` o `RETURNING`) evalúan también la política de lectura,
 así que todo permiso de escritura de una tabla sensible viene con el de
-lectura de esa tabla (invariante 94). Al probar una política de escritura,
+lectura de esa tabla (invariante 94). Una excepción deliberada: el vendedor
+escribe movimientos `sale` sin poder leer el ledger (WP-B11f, invariante 129):
+los registra **sin `RETURNING`**. La política de lectura de una tabla de alto
+volumen va como `(SELECT app.has_permission(...))`, para que se evalúe una vez
+por sentencia y no por fila. Al probar una política de escritura,
 probá la operación que emite Prisma, con el rol real conectado como
 `joda_api`; y la denegación de un rol sin lectura, con las formas que no leen
 (`INSERT` sin `RETURNING`, `UPDATE` sin `WHERE`): con las otras ese rol queda

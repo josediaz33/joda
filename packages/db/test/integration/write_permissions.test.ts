@@ -1982,6 +1982,25 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       });
     });
 
+    // El ledger es la tabla de alto volumen: la política de lectura se evalúa una
+    // vez por sentencia (un InitPlan), no una vez por fila. Con `has_permission`
+    // suelta, 100.000 movimientos de un lote tardaban 3,2 s; con la subconsulta,
+    // 84 ms. El plan es lo que no depende de cuánto tarde la máquina.
+    it.each([
+      ["inventory_movements", "lot_id"],
+      ["movement_cost_allocations", "lot_id"],
+    ])(
+      "la política de lectura de %s se evalúa una vez por sentencia (InitPlan), no por fila",
+      async (table, column) => {
+        const { rows } = await as(
+          custom.stockReader,
+          `EXPLAIN SELECT count(*) FROM app.${table} WHERE ${column} = '${LOT_ID}'`,
+        );
+
+        expect(rows.map((row) => row["QUERY PLAN"]).join("\n")).toMatch(/InitPlan/);
+      },
+    );
+
     // La trampa de la lectura: `INSERT ... RETURNING` evalúa también la política
     // de SELECT sobre la fila nueva, y el `create` de Prisma emite RETURNING.
     // Es la consecuencia buscada de no abrirle al vendedor las filas `sale` (son

@@ -123,7 +123,19 @@
 -- `unitLandedCostPyg`) e `idempotency_keys.response` (la respuesta de un
 -- ajuste incluye `totalCostPyg`), que se leen por tenant. Cerrarlos es una
 -- decisión de diseño (qué ve cada rol de una venta; qué permiso lee la
--- auditoría), no de esta migración.
+-- auditoría), no de esta migración (WP-B11g). (4) La raíz del costo:
+-- `goods_receipt_lines` (precio unitario y flete prorrateado) y
+-- `goods_receipts` se leen por tenant, y con ellos se reconstruye el costo de
+-- una recepción: 19000 × 7300 / 100 × qty + flete = 1.496.500, el
+-- `total_cost_pyg` del movimiento 1 del smoke. Qué ve el depósito, que
+-- recibe con `market.purchase_order:receive`, es de WP-C15; hasta que se
+-- cierre, «el vendedor no obtiene el costo por ninguna vía» vale para el
+-- ledger y sus capas, no para sus orígenes. (5) `journal_lines` (asientos de
+-- COGS que dejará el posteo) se lee y se escribe por tenant, a diferencia de
+-- `journal_entries`: WP-B11h. (6) El rechazo sin cifras vale para cualquier
+-- sesión sin `inventory.stock:read`, también para el ETL o un `psql` sin
+-- contexto de staff: al depurar un descuadre, los montos se consultan en el
+-- ledger.
 --
 -- Esta migración cambia políticas; no cambia columnas ni datos.
 -- =====================================================================
@@ -131,11 +143,20 @@ SET search_path = app, public;
 
 -- ---------------------------------------------------------------------
 -- inventory_movements
+--
+-- `(SELECT app.has_permission(...))` y no `app.has_permission(...)` a secas: el
+-- ledger es la tabla de alto volumen, y la función suelta se evalúa FILA POR
+-- FILA (100.000 movimientos de un lote, leídos como depósito: 3,2 s), mientras
+-- que la subconsulta la convierte en un InitPlan que se evalúa una vez por
+-- sentencia (84 ms). Es una consulta de solo lectura, estable dentro de la
+-- sentencia: el resultado es el mismo. Importa en los recorridos del ledger
+-- entero (conciliación, `v_balance_drift`). `lots_read` y `po_lines_read` no se
+-- tocan: son tablas chicas y ya están aplicadas.
 -- ---------------------------------------------------------------------
 DROP POLICY tenant_access_select ON app.inventory_movements;
 
 CREATE POLICY movements_read ON app.inventory_movements
-  FOR SELECT USING (app.has_permission('inventory.stock:read'));
+  FOR SELECT USING ((SELECT app.has_permission('inventory.stock:read')));
 
 -- ---------------------------------------------------------------------
 -- movement_cost_allocations
@@ -143,7 +164,7 @@ CREATE POLICY movements_read ON app.inventory_movements
 DROP POLICY tenant_access ON app.movement_cost_allocations;
 
 CREATE POLICY allocations_read ON app.movement_cost_allocations
-  FOR SELECT USING (app.has_permission('inventory.stock:read'));
+  FOR SELECT USING ((SELECT app.has_permission('inventory.stock:read')));
 CREATE POLICY tenant_access_insert ON app.movement_cost_allocations
   FOR INSERT WITH CHECK (true);
 
