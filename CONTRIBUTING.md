@@ -216,6 +216,7 @@ Reglas duras, ver ADR-018:
 5. **`tenant_id` en toda tabla nueva**, con su política de aislamiento.
 6. Después de migrar: `pnpm db:pull`, y el `schema.prisma` resultante va en el mismo PR.
 7. `ALTER TYPE ... ADD VALUE` va en su propia migración, separada.
+8. **El trabajo de DB no se paraleliza; el número de migración y de invariante se fija al momento del merge.** Dos ramas de DB abiertas a la vez toman el mismo «siguiente» número y chocan al fusionar (le pasó a `0035`, de #91 contra #92, que tuvo que renumerarse a `0036`; y a los invariantes, igual). El número definitivo es el siguiente al último de `main` en el momento de fusionar, no el que se vio al empezar: el segundo PR que llega rebasa sobre `origin/main`, renumera la migración y los invariantes **mientras la migración no esté en `main`** (renumerar una no fusionada no es editar una aplicada), ajusta `EXPECTED_INVARIANT_COUNT` en `packages/db/scripts/lib/invariants.mjs` y vuelve a correr `pnpm db:reset && pnpm db:test`. Por eso un PR de DB no se apila sobre otro sin fusionar.
 
 Verificación obligatoria antes de abrir el PR:
 
