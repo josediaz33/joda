@@ -237,16 +237,24 @@ const INSERT_MOVEMENT_RETURNING = (type: string, qty: number) =>
 // WP-B11f. La capa de costo del movimiento que ESA sesión acaba de insertar. El
 // id sale de `currval` sobre la secuencia del ledger y no de `lastval()`: dentro
 // de este INSERT, `lastval()` devuelve la identidad de la propia capa.
-const INSERT_COST_LAYER_FOR_LAST_MOVEMENT = (cost: number) =>
+const INSERT_COST_LAYER_ON = (movementId: string, cost: number) =>
   `INSERT INTO app.movement_cost_allocations
      (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
-   VALUES ('${REAL_TENANT_ID}',
-           currval(pg_get_serial_sequence('app.inventory_movements', 'id')),
-           '${LOT_ID}', 1, ${cost}, ${cost})`;
+   VALUES ('${REAL_TENANT_ID}', ${movementId}, '${LOT_ID}', 1, ${cost}, ${cost})`;
+const INSERT_COST_LAYER_FOR_LAST_MOVEMENT = (cost: number) =>
+  INSERT_COST_LAYER_ON("currval(pg_get_serial_sequence('app.inventory_movements', 'id'))", cost);
+// El cuadre de las capas es una constraint diferida: esto la fuerza ya.
+const CHECK_COST_LAYERS_NOW = "SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE";
+// El mensaje de un rechazo sin los montos, el que recibe quien no lee el ledger.
+const COST_LAYERS_MISMATCH_WITHOUT_AMOUNTS =
+  /^Capas de costo del movimiento \d+ no cuadran con el costo del movimiento$/;
 // Lo que el beforeAll siembra con la superconexión para las pruebas de lectura:
-// un movimiento `sale` con costo y su capa, ubicables por `note` y por `lot_id`.
+// un movimiento `sale` con costo y su capa, ubicables por `note` y por `lot_id`;
+// y una recepción con costo y SIN capas, la que un vendedor intentaría adivinar.
 const COSTED_MOVEMENT_NOTE = "B11f: movimiento con costo";
 const COSTED_MOVEMENT_COST = 61000;
+const UNLAYERED_MOVEMENT_NOTE = "B11f: movimiento ajeno sin capas";
+const UNLAYERED_MOVEMENT_COST = 77000;
 const SELECT_COSTED_MOVEMENT = `SELECT total_cost_pyg FROM app.inventory_movements
   WHERE note = '${COSTED_MOVEMENT_NOTE}'`;
 const SELECT_COST_LAYERS = `SELECT unit_cost_pyg, total_cost_pyg FROM app.movement_cost_allocations
@@ -350,6 +358,9 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
   let warehouse: Actor;
   let manager: Actor;
   let peerOwner: Actor;
+  // Ids de los movimientos ajenos que siembra el beforeAll (WP-B11f).
+  let costedMovementId: string;
+  let unlayeredMovementId: string;
   const custom = {} as Record<keyof typeof CUSTOM_ROLES, Actor>;
   // Todos los actores por nombre, para las pruebas parametrizadas (it.each) que
   // se escriben antes de que el beforeAll los cree. Lo llena el beforeAll.
@@ -572,7 +583,19 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       VALUES ('${REAL_TENANT_ID}',
               (SELECT id FROM app.inventory_movements WHERE note = '${COSTED_MOVEMENT_NOTE}'),
               '${LOT_ID}', 1, ${COSTED_MOVEMENT_COST}, ${COSTED_MOVEMENT_COST});
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg, note)
+      VALUES ('${REAL_TENANT_ID}', '${LOT_ID}', '${SEALED_VARIANT_ID}', 1, 'unit',
+              'purchase_receipt', ${UNLAYERED_MOVEMENT_COST}, '${UNLAYERED_MOVEMENT_NOTE}');
     `);
+    const seeded = await db.client.query(
+      `SELECT note, id FROM app.inventory_movements WHERE note IN ($1, $2)`,
+      [COSTED_MOVEMENT_NOTE, UNLAYERED_MOVEMENT_NOTE],
+    );
+    for (const row of seeded.rows) {
+      if (row.note === COSTED_MOVEMENT_NOTE) costedMovementId = String(row.id);
+      else unlayeredMovementId = String(row.id);
+    }
 
     Object.assign(actorsByKey, { owner, seller, warehouse, manager, peerOwner, ...custom });
 
@@ -2001,12 +2024,54 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       await as(seller, INSERT_MOVEMENT("sale", -1, "NULL", "61000"));
       await api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(5000));
 
-      await expect(
-        api.query("SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE"),
-      ).rejects.toMatchObject({
+      await expect(api.query(CHECK_COST_LAYERS_NOW)).rejects.toMatchObject({
         code: "23514",
-        message: expect.stringMatching(/asignado=5000 declarado=61000$/),
+        message: expect.stringMatching(COST_LAYERS_MISMATCH_WITHOUT_AMOUNTS),
       });
+    });
+
+    // La ruta de fuga que dejaba 0037 sin la corrección del disparador: la
+    // política de INSERT de las capas es solo por tenant y la FK no evalúa RLS,
+    // así que una capa de 1 sobre un movimiento AJENO, con la verificación
+    // forzada, devolvía `asignado=X declarado=Y` con Y el costo del movimiento.
+    it.each([
+      ["una recepción sin capas", () => unlayeredMovementId],
+      ["un movimiento que ya tiene sus capas", () => costedMovementId],
+    ])(
+      "el vendedor no obtiene el costo de %s por el mensaje de una capa que no cuadra",
+      async (_label, movementId) => {
+        await as(seller, INSERT_COST_LAYER_ON(movementId(), 1));
+
+        await expect(api.query(CHECK_COST_LAYERS_NOW)).rejects.toMatchObject({
+          code: "23514",
+          message: expect.stringMatching(COST_LAYERS_MISMATCH_WITHOUT_AMOUNTS),
+        });
+      },
+    );
+
+    it("quien tiene inventory.stock:read sí ve los montos en el rechazo de una capa que no cuadra (control positivo)", async () => {
+      await as(custom.stockReader, INSERT_COST_LAYER_ON(costedMovementId, 1));
+
+      await expect(api.query(CHECK_COST_LAYERS_NOW)).rejects.toMatchObject({
+        code: "23514",
+        message: expect.stringMatching(
+          new RegExp(
+            `no cuadran: asignado=${COSTED_MOVEMENT_COST + 1} declarado=${COSTED_MOVEMENT_COST}$`,
+          ),
+        ),
+      });
+    });
+
+    // COMPORTAMIENTO CONOCIDO, que cierra WP-B11e (atar la capa a un movimiento
+    // que quien la escribe creó en esa transacción). Sin montos en el mensaje
+    // queda la igualdad: una capa pasa solo si su total es el del movimiento,
+    // así que quien adivina el costo exacto de un movimiento ajeno sin capas lo
+    // confirma. Cuando B11e lo cierre, esta prueba se invierte a propósito.
+    it("comportamiento conocido (WP-B11e): el vendedor confirma por igualdad el costo exacto de un movimiento ajeno sin capas", async () => {
+      await as(seller, INSERT_COST_LAYER_ON(unlayeredMovementId, UNLAYERED_MOVEMENT_COST));
+      const guess = await api.query(CHECK_COST_LAYERS_NOW);
+
+      expect(guess.command).toBe("SET");
     });
 
     // Control positivo de la trampa: quien escribe Y lee el ledger sigue usando

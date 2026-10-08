@@ -51,12 +51,30 @@
 -- así que nada cambia para ellos. `tenant_isolation` (RESTRICTIVE, 0016) sigue
 -- combinándose con AND contra todo: tenant Y permiso.
 --
--- LOS DISPARADORES NO SE VEN AFECTADOS. Los que leen el ledger o sus capas
--- (`assert_cost_allocation_matches`, la proyección de saldos) son SECURITY
--- DEFINER desde 0018: ven el ledger sin importar quién escribe. Por eso un
--- rol que escribe un movimiento sin poder leerlo sigue validado igual.
--- `v_balance_drift` es `security_invoker` y ya exigía `inventory.stock:read`
--- por los lotes: no cambia.
+-- LOS DISPARADORES NO SE VEN AFECTADOS, pero uno hablaba de más. Los que leen
+-- el ledger o sus capas (`assert_cost_allocation_matches`, la proyección de
+-- saldos) son SECURITY DEFINER desde 0018: ven el ledger sin importar quién
+-- escribe. Por eso un rol que escribe un movimiento sin poder leerlo sigue
+-- validado igual. `v_balance_drift` es `security_invoker` y ya exigía
+-- `inventory.stock:read` por los lotes: no cambia.
+--
+-- LA RUTA DE FUGA QUE QUEDABA: el mensaje de ese disparador. Rechaza una capa
+-- que no cuadra con `Capas de costo del movimiento N no cuadran: asignado=X
+-- declarado=Y`, y `Y` es el `total_cost_pyg` del movimiento, leído con los
+-- privilegios del dueño. La política de INSERT de las capas es solo por tenant
+-- (WP-B11e) y la FK a `movement_id` no evalúa RLS, así que el vendedor podía
+-- insertar una capa de 1 sobre CUALQUIER movimiento del tenant (una recepción
+-- de compra, un transfer), forzar la verificación (`SET CONSTRAINTS ...
+-- IMMEDIATE`, o el COMMIT) y leer el costo en el error: 1.496.500, con el
+-- ledger ya cerrado. Reproducido contra 0037 sin esta función.
+--
+-- Se corrige con el mismo criterio: los montos van en el mensaje solo para
+-- quien tiene `inventory.stock:read`; para los demás, el mismo rechazo sin
+-- cifras. Para un movimiento sin capas, el rechazo sigue distinguiendo «el
+-- total coincide» de «no coincide», o sea que quien adivine el total exacto
+-- lo confirma; cerrarlo del todo es atar la capa a un movimiento que quien la
+-- escribe acaba de crear, y eso es el diseño de WP-B11e (queda anotado allí y
+-- fijado como comportamiento conocido en `write_permissions.test.ts`).
 --
 -- LA TRAMPA DE LA LECTURA, y es real para un rol sembrado. `INSERT ...
 -- RETURNING` evalúa también la política de SELECT sobre la fila nueva, y el
@@ -77,7 +95,8 @@
 -- `stock:adjust`, `decant:execute`, `po:receive`; dueño y encargado: todo)
 -- tienen `inventory.stock:read`, así que no tienen la trampa; el invariante
 -- 129 lo verifica para los roles sembrados, con la excepción registrada del
--- vendedor, y el 130 que el vendedor siga sin ese permiso.
+-- vendedor, el 130 que el vendedor siga sin ese permiso y el 131 que el
+-- rechazo de una capa que no cuadra no traiga los montos.
 --
 -- Lo que se descartó, porque no cumple la decisión: dejar que el SELECT admita
 -- las filas `sale` ("el que puede escribir el movimiento lo lee", como sugería
@@ -94,7 +113,10 @@
 -- WP-C13. (2) WP-B11e, el INSERT de las capas de costo por permiso del
 -- movimiento: si su política consulta `inventory_movements` para saber el
 -- `movement_type` de `movement_id`, esa consulta corre bajo RLS y el vendedor
--- no ve el movimiento que acaba de insertar; hay que resolverlo allá. (3) El
+-- no ve el movimiento que acaba de insertar; hay que resolverlo allá. Y es el
+-- lugar de cerrar la prueba por igualdad de arriba: que una capa solo se
+-- pueda atar a un movimiento que quien la escribe creó en esa transacción.
+-- (3) El
 -- mismo costo vive en otras columnas que RLS no esconde: `sale_orders.cogs_pyg`
 -- y `sale_order_lines.cogs_pyg` (el vendedor lee sus ventas), y en los
 -- snapshots de `audit_log` (la apertura de un frasco guarda
@@ -124,3 +146,69 @@ CREATE POLICY allocations_read ON app.movement_cost_allocations
   FOR SELECT USING (app.has_permission('inventory.stock:read'));
 CREATE POLICY tenant_access_insert ON app.movement_cost_allocations
   FOR INSERT WITH CHECK (true);
+
+-- ---------------------------------------------------------------------
+-- El mensaje del disparador de las capas no dice el costo a quien no lo lee
+--
+-- Mismo cuerpo que 0018 (SECURITY DEFINER, falla cerrado, filtra por tenant,
+-- `search_path` fijo); solo cambia el mensaje del último rechazo. CREATE OR
+-- REPLACE conserva el disparador `trg_cost_allocation_matches` que la usa.
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION app.assert_cost_allocation_matches() RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = app, pg_temp AS $$
+DECLARE
+  v_declared app.pyg;
+  v_alloc    numeric;
+BEGIN
+  PERFORM 1
+     FROM app.inventory_lots l
+    WHERE l.id = NEW.lot_id
+      AND l.tenant_id = NEW.tenant_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION
+      'Lote % no encontrado en el tenant de la capa de costo: no se puede verificar la capa',
+      NEW.lot_id
+      USING ERRCODE = 'foreign_key_violation';
+  END IF;
+
+  SELECT m.total_cost_pyg INTO v_declared
+    FROM app.inventory_movements m
+   WHERE m.id = NEW.movement_id
+     AND m.tenant_id = NEW.tenant_id;
+
+  IF NOT FOUND THEN
+    RAISE EXCEPTION
+      'Movimiento % no encontrado en el tenant de la capa de costo: no se puede verificar la capa',
+      NEW.movement_id
+      USING ERRCODE = 'foreign_key_violation';
+  END IF;
+
+  -- Solo las capas del mismo tenant: una capa de otro tenant colgada de
+  -- este movimiento la rechaza su propio disparo de este trigger.
+  SELECT COALESCE(sum(a.total_cost_pyg), 0) INTO v_alloc
+    FROM app.movement_cost_allocations a
+   WHERE a.movement_id = NEW.movement_id
+     AND a.tenant_id = NEW.tenant_id;
+
+  -- `total_cost_pyg` del movimiento es nullable por diseño (un movimiento
+  -- sin costo declarado); el NULL acá es un dato, no falta de visibilidad:
+  -- el movimiento ya se encontró arriba. Sin costo declarado, cualquier
+  -- capa con costo descuadra.
+  IF v_alloc <> COALESCE(abs(v_declared), 0) THEN
+    -- Los montos son el costo del movimiento: solo para quien lo puede leer.
+    -- Esta función ve el ledger con los privilegios del dueño; el mensaje
+    -- no puede devolver lo que RLS le oculta a quien escribe.
+    IF app.has_permission('inventory.stock:read') THEN
+      RAISE EXCEPTION
+        'Capas de costo del movimiento % no cuadran: asignado=% declarado=%',
+        NEW.movement_id, v_alloc, COALESCE(abs(v_declared), 0)
+        USING ERRCODE = 'check_violation';
+    END IF;
+    RAISE EXCEPTION
+      'Capas de costo del movimiento % no cuadran con el costo del movimiento',
+      NEW.movement_id
+      USING ERRCODE = 'check_violation';
+  END IF;
+  RETURN NULL;
+END $$;

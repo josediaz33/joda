@@ -854,8 +854,10 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
         api.query("SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE"),
       ).rejects.toMatchObject({
         code: "23514",
+        // Sin los montos: el vendedor no lee el costo (0037); con permiso de
+        // lectura el mensaje los trae (write_permissions.test.ts).
         message: expect.stringMatching(
-          /^Capas de costo del movimiento \d+ no cuadran: asignado=5000 declarado=11972$/,
+          /^Capas de costo del movimiento \d+ no cuadran con el costo del movimiento$/,
         ),
       });
       await api.query("ROLLBACK");

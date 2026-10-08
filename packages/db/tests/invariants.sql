@@ -2785,6 +2785,35 @@ SELECT pg_temp.expect_true(130,
                     JOIN vendedores v ON v.id = rp.role_id
                    WHERE rp.permission_code = 'inventory.stock:read'));
 
+-- 131 ─ El mensaje del disparador de las capas de costo no dice el costo a
+-- quien no puede leerlo. Rechaza una capa que no cuadra con `Capas de costo del
+-- movimiento N no cuadran: asignado=X declarado=Y`, y Y es el costo del
+-- movimiento: con una capa de 1 sobre un movimiento ajeno, el vendedor lo leía
+-- en el error aunque ya no pudiera leer el ledger (0037). Acá no hay sesión de
+-- staff (`has_permission` da falso), así que el rechazo tiene que ser el sin
+-- cifras, y con ese texto exacto: sin `%` al final, un mensaje con montos
+-- agregados no coincide. El control con permiso, que sí los trae, lo prueba
+-- write_permissions.test.ts.
+SELECT pg_temp.expect_fail_like(131, 'Capa que no cuadra, sin permiso de lectura: el rechazo no trae los montos',
+  $$DO $x$
+    DECLARE
+      v_mov bigint;
+    BEGIN
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000002', 1, 'ml', 'adjustment', 5000)
+      RETURNING id INTO v_mov;
+      INSERT INTO app.movement_cost_allocations
+        (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+      VALUES ('11111111-1111-1111-1111-111111111111', v_mov,
+              '99999999-0000-0000-0000-000000000002', 1, 1, 1);
+      SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE;
+    END $x$
+  $$,
+  'Capas de costo del movimiento % no cuadran con el costo del movimiento');
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'
