@@ -34,9 +34,10 @@ export const PERFUME_DEFAULTS = {
   // porcentaje. José pierde entre 0,3 y 0,5 ml por decant de 10 ml (3 a 5 %) y se
   // toma el extremo alto: el factor reserva líquido (RN-FRA-02, RN-FRA-06), el
   // costo sale de la merma real de cada orden (RN-FRA-04), y es preferible
-  // reservar de más que prometer un decant que no alcance. Matiz: la merma real
-  // se precarga con la esperada, que sale de este factor (docs/frontend-spec.md
-  // §8.6); si el operador acepta la precarga, el costo también depende de él.
+  // reservar de más que prometer un decant que no alcance. La merma esperada,
+  // que sale de este factor, se muestra como pista y NO se precarga en la merma
+  // real (decisión de José para WP-E07, 2026-10-07; docs/frontend-spec.md §8.6):
+  // el costo no depende de este factor.
   // Los 0,02 de docs/domain-rules.md y del dataset dorado son el dato explícito
   // de un ejemplo, no este valor.
   wasteFactor: 0.05,

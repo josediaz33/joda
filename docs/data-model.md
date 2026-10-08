@@ -133,6 +133,8 @@ No hay una columna que diga cuál es cuál: el tipo de la variante del hijo lo d
 
 **`reference_type` de los movimientos de la apertura** (WP-C11): `lot_separation` en los dos movimientos de la separación (`reference_id` = el lote de una unidad que nace) y `lot_opening` en los dos de la apertura (`reference_id` = el lote sellado que se abre, también en la entrada al granel, no el id del granel).
 
+**`reference_type` de los movimientos de una ejecución de fraccionamiento** (WP-C13): `decant_work_order` en los `decant_consumption`, `waste` y `bom_consumption` de una orden, con `reference_id` = la orden. `decant_work_orders` no guarda el costo: el COGS del decant es la suma de los movimientos que la referencian (RN-FRA-04). Una merma real de 0 no genera movimiento (el ledger no admite `qty = 0`), y la nota de un insumo opcional que faltó (caso borde 4) va en el movimiento `decant_consumption`, porque la orden no tiene columna de nota.
+
 ### 3.4 Flujo de compra
 
 ```

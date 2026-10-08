@@ -424,7 +424,7 @@ Cuando la reserva vence y el ítem ya no está (RN-RES-05), el mensaje explica q
 
 ### 8.6 Admin: cola de fraccionamiento
 
-La pantalla que más se va a usar. Órdenes pendientes **agrupadas por frasco de origen**, para llenar todos los decants del mismo Layton de una vez en lugar de abrir y cerrar cuatro veces. El campo de merma real es obligatorio y viene precargado con lo esperado, editable.
+La pantalla que más se va a usar. Órdenes pendientes **agrupadas por frasco de origen**, para llenar todos los decants del mismo Layton de una vez en lugar de abrir y cerrar cuatro veces. La merma esperada se muestra como pista, al lado del campo; el campo de merma real es obligatorio y **no se precarga**: quien llena el vial la escribe (decisión de José, 2026-10-07).
 
 ### 8.7 Admin: recepción con prorrateo
 
