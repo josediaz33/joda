@@ -217,6 +217,10 @@ Reglas duras, ver ADR-018:
 6. Después de migrar: `pnpm db:pull`, y el `schema.prisma` resultante va en el mismo PR.
 7. `ALTER TYPE ... ADD VALUE` va en su propia migración, separada.
 
+No es una regla de ADR-018 sino de proceso, y se aplica a todo PR que toque `packages/db`:
+
+**El trabajo de DB no se paraleliza; el número de migración y de invariante se fija al momento del merge.** Dos ramas de DB abiertas a la vez toman el mismo «siguiente» número y chocan al fusionar: le pasó a `0035` (#91 contra #92, que tuvo que renumerarse a `0036`) y, al apilar B11d sobre B11c, a los invariantes (+3). El número definitivo es el siguiente al último de `main` en el momento de fusionar, no el que se vio al empezar: el segundo PR que llega rebasa sobre `origin/main`, renumera la migración y los invariantes **mientras la migración no esté en `main`** (renumerar una no fusionada no es editar una aplicada) y actualiza, en el mismo PR, todo lugar donde figura el número: el nombre del archivo y las menciones textuales de la migración y de los invariantes, `EXPECTED_INVARIANT_COUNT` en `packages/db/scripts/lib/invariants.mjs` y los conteos de `docs/data-model.md` §4 y de `packages/db/README.md`. Después vuelve a correr `pnpm db:reset && pnpm db:test`. Por eso un PR de DB no se apila sobre otro sin fusionar. (Hoy es solo prosa: nada falla si dos invariantes repiten un número; ver la fila WP-M12 de `docs/backlog.md`.)
+
 Verificación obligatoria antes de abrir el PR:
 
 ```bash

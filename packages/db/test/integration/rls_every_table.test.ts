@@ -118,6 +118,8 @@ const TRIGGER_COVERAGE: Record<string, string> = {
   "payments.trg_payments_updated": "este archivo: set_updated_at",
   "product_variants.trg_variants_updated": "este archivo: set_updated_at",
   "products.trg_products_updated": "este archivo: set_updated_at",
+  "purchase_order_lines.trg_po_line_no_reparent":
+    "write_permissions.test.ts (revisión cruzada de WP-B11d)",
   "purchase_order_transitions.trg_po_transitions_immutable": "este archivo: guard_append_only",
   "purchase_orders.trg_po_no_return_to_draft": "write_permissions.test.ts (WP-B11)",
   "purchase_orders.trg_po_updated": "este archivo: set_updated_at",

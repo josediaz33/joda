@@ -144,6 +144,44 @@ describe("WP-C08c · errores Prisma de restricción (api-conventions.md §4.4)",
     expect(hasSqlState(error, "23001")).toBe(true);
     expect(hasSqlState(error, "23505")).toBe(false);
   });
+
+  // La forma `{ code: "P2003", meta: { constraint } }` es la que Prisma entrega
+  // de verdad: errorMapper.integration.test.ts la comprueba borrando un pedido
+  // con seña contra Postgres real. Estas pruebas cubren el resto de las
+  // restricciones sin una base.
+  it("P2003 sin nombre de restricción es el 409 genérico de una FK rota, no un 500", () => {
+    const error = { name: "PrismaClientKnownRequestError" as const, code: "P2003", meta: {} };
+
+    expect(mapPrismaError(error)).toEqual({
+      code: "CONFLICT_FOREIGN_KEY",
+      httpStatus: 409,
+      message: "El registro referenciado no existe o fue eliminado.",
+    });
+  });
+
+  it("P2003 sobre otra restricción es el 409 genérico", () => {
+    const error = {
+      name: "PrismaClientKnownRequestError" as const,
+      code: "P2003",
+      meta: { constraint: "sale_order_lines_variant_id_fkey" },
+    };
+
+    expect(mapPrismaError(error).code).toBe("CONFLICT_FOREIGN_KEY");
+  });
+
+  it("P2003 sobre decant_wo_order_fk dice que el pedido tiene órdenes de fraccionamiento", () => {
+    const error = {
+      name: "PrismaClientKnownRequestError" as const,
+      code: "P2003",
+      meta: { constraint: "decant_wo_order_fk" },
+    };
+
+    expect(mapPrismaError(error)).toEqual({
+      code: "CONFLICT_ORDER_HAS_DECANT_ORDERS",
+      httpStatus: 409,
+      message: "No se puede borrar el pedido porque tiene órdenes de fraccionamiento asociadas.",
+    });
+  });
 });
 
 describe("appError / isApiError — forma del ApiError (api-conventions.md §4.1)", () => {

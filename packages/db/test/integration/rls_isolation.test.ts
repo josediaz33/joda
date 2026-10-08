@@ -810,19 +810,24 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       expect(rows).toEqual([{ tenant_id: REAL_TENANT_ID, on_hand: "0.000" }]);
     });
 
+    // WP-B11f (0037): el vendedor no lee el ledger (`inventory.stock:read`), así
+    // que registra el movimiento SIN `RETURNING` (con él, la política de SELECT
+    // sobre la fila nueva lo rechaza) y toma el id con `currval`. Las pruebas
+    // de qué lee y qué no, en write_permissions.test.ts.
     it("las capas de costo que registra el vendedor se verifican contra el movimiento: si cuadran, pasan", async () => {
       await api.query("BEGIN");
       await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
       await api.query(
-        `WITH m AS (
-           INSERT INTO app.inventory_movements
-             (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg)
-           VALUES ($1, $2, $3, -1, 'ml', 'sale', 11972)
-           RETURNING id)
-         INSERT INTO app.movement_cost_allocations
-           (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
-         SELECT $1, m.id, $2, 1, 11972, 11972 FROM m`,
+        `INSERT INTO app.inventory_movements
+           (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg)
+         VALUES ($1, $2, $3, -1, 'ml', 'sale', 11972)`,
         [REAL_TENANT_ID, BULK_LOT_ID, BULK_VARIANT_ID],
+      );
+      await api.query(
+        `INSERT INTO app.movement_cost_allocations
+           (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+         VALUES ($1, currval(pg_get_serial_sequence('app.inventory_movements', 'id')), $2, 1, 11972, 11972)`,
+        [REAL_TENANT_ID, BULK_LOT_ID],
       );
       const check = await api.query("SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE");
       await api.query("ROLLBACK");
@@ -834,22 +839,25 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       await api.query("BEGIN");
       await actAs(REAL_SELLER_ID, REAL_TENANT_ID);
       await api.query(
-        `WITH m AS (
-           INSERT INTO app.inventory_movements
-             (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg)
-           VALUES ($1, $2, $3, -1, 'ml', 'sale', 11972)
-           RETURNING id)
-         INSERT INTO app.movement_cost_allocations
-           (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
-         SELECT $1, m.id, $2, 1, 5000, 5000 FROM m`,
+        `INSERT INTO app.inventory_movements
+           (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg)
+         VALUES ($1, $2, $3, -1, 'ml', 'sale', 11972)`,
         [REAL_TENANT_ID, BULK_LOT_ID, BULK_VARIANT_ID],
+      );
+      await api.query(
+        `INSERT INTO app.movement_cost_allocations
+           (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+         VALUES ($1, currval(pg_get_serial_sequence('app.inventory_movements', 'id')), $2, 1, 5000, 5000)`,
+        [REAL_TENANT_ID, BULK_LOT_ID],
       );
       await expect(
         api.query("SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE"),
       ).rejects.toMatchObject({
         code: "23514",
+        // Sin los montos: el vendedor no lee el costo (0037); con permiso de
+        // lectura el mensaje los trae (write_permissions.test.ts).
         message: expect.stringMatching(
-          /^Capas de costo del movimiento \d+ no cuadran: asignado=5000 declarado=11972$/,
+          /^Capas de costo del movimiento \d+ no cuadran con el costo del movimiento$/,
         ),
       });
       await api.query("ROLLBACK");

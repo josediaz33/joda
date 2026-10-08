@@ -175,7 +175,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 125: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 131: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -297,6 +297,13 @@ Los estados de los que la base impone que no se vuelva (ADR-026). El ADR guarda 
 - **Paridad entre los dos mapas.** Sin prueba que ate la guarda a `SALE_ORDER_TRANSITIONS`: `write_permissions.test.ts` recorre a mano los ocho estados que no son borrador, dos caminos de varios pasos y el camino feliz entero, y si la matriz ganara una arista hacia `draft` ningún test lo detecta. Ningún WP la convierte en prueba.
 - **Verificación.** Invariantes 120 a 122 y el control 123, como superusuario (y el 124 y el 125, la FK de la seña); y las pruebas de `write_permissions.test.ts` como `joda_api`, entre ellas los rodeos de dos y de varios pasos.
 
+**5. Una línea de orden de compra no cambia de orden.** Revisión cruzada de WP-B11d, 2026-10-07. `trg_po_line_no_reparent` (`0036_purchase_order_line_no_reparent.sql`), `BEFORE UPDATE OF purchase_order_id` sobre `purchase_order_lines`: `purchase_order_id` no cambia.
+
+- **Premisa de la que depende.** Las políticas de INSERT y DELETE de las líneas (`0034`) exigen la orden padre en `draft`: sin eso, `:write` vaciaba una orden enviada. La política de UPDATE queda abierta a propósito (la recepción actualiza `qty_received`; el precio y la cantidad pedida los decide WP-C15) y no puede comparar `OLD` con `NEW`, así que un `UPDATE` de `purchase_order_id` hacía lo que el INSERT y el DELETE prohíben: mover una línea de una orden enviada a un borrador la dejaba vacía, y a la inversa le agregaba una.
+- **No es una guarda de estado.** No hay un mapa de estados ni un terminal: es un invariante sobre una columna, como `trg_sealed_open_single_unit` (ADR-026). Vale también para el ETL (`service_role`).
+- **Mecanismo.** Lee solo `OLD` y `NEW`, compara con `IS DISTINCT FROM`, no es `SECURITY DEFINER` (el invariante 29 la admite por nombre) y rechaza con `23514`. No dispara en los `UPDATE` que no nombran `purchase_order_id`.
+- **Verificación.** Invariante 126 (rechaza, como superusuario) y el control 127 (`qty_received`, el precio y reenviar la misma orden pasan); y las pruebas de `write_permissions.test.ts` como `joda_api` con los roles `:write`, `:approve`, `:receive` y el dueño, en las dos direcciones.
+
 **Terminales que siguen en el dominio.** Se evaluaron con la pregunta del criterio y la respuesta fue no, salvo lo que dicen las guardas 3 y 4 para la orden de compra y el pedido de venta: si una de esas órdenes volviera atrás, ningún invariante de la base se desarmaría.
 
 - **Orden de compra:** `received` y `cancelled`, salvo la entrada a `draft` y a `pending_approval`, que es la guarda 3. Esa guarda no los hace terminales: solo les impide volver a los dos estados previos a la aprobación.
@@ -385,6 +392,7 @@ Qué comandos cubre la política de permiso, en cada una:
 
 - **Lectura (SELECT):** las siete, desde 0010.
 - **Escritura:** `suppliers`, `purchase_orders`, `inventory_lots`, `chart_of_accounts` y `customer_deposits` desde 0030 (WP-B11): INSERT y UPDATE con su permiso de escritura, una política por comando, y DELETE denegado salvo en `purchase_orders` en borrador. `journal_entries` tiene su INSERT desde 0010 y su mapa de estados desde 0020. `sourcing_scenarios` tiene INSERT desde 0010 y UPDATE y DELETE desde 0032 (WP-B11b), los tres con `market.sourcing:write`, y su tabla hija `sourcing_scenario_lines` tiene los cuatro comandos con permiso desde 0032 (lectura con `market.sourcing:read`, escritura con `:write`); son las únicas de estas tablas donde el DELETE existe sin condición de estado. Las tablas que cuelgan de ellas y el ledger, desde 0034 (WP-B11d): `inventory_movements` (INSERT según `movement_type`, sin UPDATE ni DELETE), `purchase_order_lines` (la lectura exige `market.purchase_order:read`; agregar y quitar líneas, la orden padre en borrador), `goods_receipts` y `goods_receipt_lines` (recepciones sin DELETE) y el DELETE de `sale_orders` (solo en borrador); el SELECT de las demás sigue por tenant. `customer_deposits.sale_order_id` pasa a `ON DELETE RESTRICT`.
+- **El costo del ledger (0037, WP-B11f):** `inventory_movements` y `movement_cost_allocations` se leen con `inventory.stock:read`, como `inventory_lots`. El vendedor no obtiene `inventory_movements.total_cost_pyg` por ninguna vía. RLS decide por fila, no por columna: se cierra la tabla entera, y las capas de costo también, porque su suma por `movement_id` es ese mismo total. En `movement_cost_allocations` la `tenant_access` `FOR ALL` pasó a una política por comando: el INSERT sigue solo por tenant (WP-B11e), UPDATE y DELETE no tienen política.
 
 La tabla de permisos por comando y la trampa de la lectura (un rol que escribe sin poder leer) están en `docs/security-spec.md` §3.1.
 

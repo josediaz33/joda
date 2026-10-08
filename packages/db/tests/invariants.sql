@@ -408,14 +408,14 @@ SELECT pg_temp.expect_true(28,
 
 -- 29 ─ Toda función de disparador de app.* es SECURITY DEFINER, salvo las
 -- que no leen ninguna tabla (`guard_po_no_return_to_draft`, WP-B11,
--- `guard_system_roles`, WP-B11c, y `guard_so_no_return_to_draft`, WP-B11d:
--- leen solo OLD y NEW). Una función de
+-- `guard_system_roles`, WP-B11c, `guard_so_no_return_to_draft`, WP-B11d, y
+-- `guard_po_line_no_reparent`, 0036: leen solo OLD y NEW). Una función de
 -- invariante SECURITY INVOKER lee con
 -- los permisos de quien dispara el trigger: si RLS le oculta la fila, decide
 -- sobre un NULL (el defecto de B10 y de B09). Una función nueva que lea
 -- tablas y no esté en esta lista hace fallar esto.
 SELECT pg_temp.expect_true(29,
-  'Toda función de disparador de app.* es SECURITY DEFINER, salvo set_updated_at/guard_append_only/guard_po_no_return_to_draft/guard_system_roles/guard_so_no_return_to_draft',
+  'Toda función de disparador de app.* es SECURITY DEFINER, salvo set_updated_at/guard_append_only/guard_po_no_return_to_draft/guard_system_roles/guard_so_no_return_to_draft/guard_po_line_no_reparent',
   NOT EXISTS (
     SELECT 1
       FROM pg_proc p
@@ -425,7 +425,7 @@ SELECT pg_temp.expect_true(29,
        AND NOT p.prosecdef
        AND p.proname NOT IN ('set_updated_at', 'guard_append_only',
                              'guard_po_no_return_to_draft', 'guard_system_roles',
-                             'guard_so_no_return_to_draft')
+                             'guard_so_no_return_to_draft', 'guard_po_line_no_reparent')
   ));
 
 -- 30 ─ El dueño de toda función SECURITY DEFINER de app.* elude RLS. Una
@@ -2634,6 +2634,185 @@ SELECT pg_temp.expect_fail_like(125, 'Borrar un borrador sin seña, o con la se�
     END $x$
   $$,
   'aceptado');
+
+-- 126 ─ Una línea de orden de compra no cambia de orden. Las políticas de
+-- INSERT y DELETE de `purchase_order_lines` (0034) exigen la orden padre en
+-- `draft`; la de UPDATE no mira el estado, y un UPDATE de `purchase_order_id`
+-- hacía lo que ellas prohíben: mover la línea de una orden enviada a un
+-- borrador la dejaba VACÍA, y mover una de un borrador a una orden enviada le
+-- AGREGABA una (revisión cruzada de B11b/c/d, 0036). Una política de UPDATE no
+-- puede comparar OLD con NEW; `trg_po_line_no_reparent` sí. Rechaza como
+-- superusuario: es el trigger, no RLS.
+SELECT pg_temp.expect_fail_like(126, 'Mover una línea de una orden de compra enviada a un borrador',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('12612612-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-126A', 'sent', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency, created_by)
+      VALUES ('12612612-0000-0000-0000-000000000002', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-126B', 'draft', 'USD',
+              '22222222-2222-2222-2222-222222222222');
+      INSERT INTO app.purchase_order_lines
+        (id, tenant_id, purchase_order_id, variant_id, qty_ordered, uom, unit_price_minor)
+      VALUES ('12612612-0000-0000-0000-0000000000a1', '11111111-1111-1111-1111-111111111111',
+              '12612612-0000-0000-0000-000000000001', '55555555-0000-0000-0000-000000000001',
+              2, 'unit', 5000);
+      UPDATE app.purchase_order_lines
+         SET purchase_order_id = '12612612-0000-0000-0000-000000000002'
+       WHERE id = '12612612-0000-0000-0000-0000000000a1';
+    END $x$
+  $$,
+  'La línea 12612612-0000-0000-0000-0000000000a1 pertenece a la orden de compra 12612612-0000-0000-0000-000000000001 y no puede pasar a la orden 12612612-0000-0000-0000-000000000002%');
+
+-- 127 ─ Control positivo de 126: lo que SÍ se edita en una línea de una orden
+-- enviada pasa. La recepción actualiza `qty_received`, el precio y la
+-- cantidad pedida los decide WP-C15, y un UPDATE que reenvía la misma
+-- `purchase_order_id` no es un cambio de orden. Sin esto, un trigger que
+-- rechazara todo UPDATE de líneas pasaría el anterior.
+SELECT pg_temp.expect_fail_like(127, 'Editar una línea de una orden enviada sin cambiarla de orden',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.purchase_orders (id, tenant_id, supplier_id, code, status, currency,
+                                       created_by, approved_by, approved_at)
+      VALUES ('12712712-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111',
+              '66666666-6666-6666-6666-666666666666', 'OC-INV-127', 'sent', 'USD',
+              '22222222-2222-2222-2222-222222222222', '22222222-2222-2222-2222-222222222222', now());
+      INSERT INTO app.purchase_order_lines
+        (id, tenant_id, purchase_order_id, variant_id, qty_ordered, uom, unit_price_minor)
+      VALUES ('12712712-0000-0000-0000-0000000000a1', '11111111-1111-1111-1111-111111111111',
+              '12712712-0000-0000-0000-000000000001', '55555555-0000-0000-0000-000000000001',
+              2, 'unit', 5000);
+      UPDATE app.purchase_order_lines SET qty_received = 1, unit_price_minor = 6000
+       WHERE id = '12712712-0000-0000-0000-0000000000a1';
+      UPDATE app.purchase_order_lines SET purchase_order_id = '12712712-0000-0000-0000-000000000001'
+       WHERE id = '12712712-0000-0000-0000-0000000000a1';
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+-- WP-B11f (0037_read_permission_ledger_costs.sql): leer el ledger y sus capas de
+-- costo exige `inventory.stock:read`, como los lotes. Los invariantes 128 y 129
+-- leen el TEXTO de las políticas y la matriz sembrada, con el límite de siempre:
+-- no prueban que la política haga lo que dice. Eso lo prueba, conectado como
+-- joda_api con cada rol, write_permissions.test.ts.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 128 ─ Cada política permisiva que cubre el SELECT de `inventory_movements` y
+-- de `movement_cost_allocations` exige `inventory.stock:read`, sin `true` y sin
+-- una rama `OR` que la abra (por ejemplo, a las filas `sale`, como sugería la
+-- fila de WP-B11f: son las que traen el costo de lo que el vendedor vendió), y
+-- ninguna es FOR ALL; y cada tabla tiene al menos una. Con la `tenant_access`
+-- de 0014 o la `tenant_access_select` de 0034, el vendedor leía el costo de
+-- cada movimiento y, sumando las capas, el mismo total. El nombre lista las
+-- culpables y las tablas sin política de lectura.
+WITH ledger(tabla) AS (
+  VALUES ('inventory_movements'), ('movement_cost_allocations')
+), lectura AS (
+  SELECT c.relname AS tabla, p.polname, p.polcmd,
+         COALESCE(pg_get_expr(p.polqual, p.polrelid), '') AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN ledger l ON l.tabla = c.relname
+   WHERE n.nspname = 'app' AND p.polpermissive AND p.polcmd IN ('r', '*')
+), sin_permiso AS (
+  SELECT tabla || '.' || polname AS descripcion
+    FROM lectura
+   WHERE polcmd = '*'
+      OR expresion NOT LIKE '%has_permission(''inventory.stock:read''%'
+      OR expresion ~ '\mtrue\M'
+      OR expresion LIKE '% OR %'
+), sin_politica AS (
+  SELECT l.tabla || ' (sin política de SELECT)' AS descripcion
+    FROM ledger l
+   WHERE NOT EXISTS (SELECT 1 FROM lectura x WHERE x.tabla = l.tabla)
+)
+SELECT pg_temp.expect_true(128,
+  'Leer el ledger y sus capas de costo exige inventory.stock:read, sin true ni rama OR'
+    || COALESCE(' — sin permiso: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sin_permiso), '')
+    || COALESCE(' — sin política: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sin_politica), ''),
+  NOT EXISTS (SELECT 1 FROM sin_permiso) AND NOT EXISTS (SELECT 1 FROM sin_politica));
+
+-- 129 ─ La trampa de la lectura del ledger. En los roles sembrados
+-- (`is_system`, de cualquier tenant), todo permiso que escribe un movimiento
+-- viene con `inventory.stock:read`: `INSERT ... RETURNING` evalúa también la
+-- política de lectura, y un rol que escribe sin leer recibe 42501 en el
+-- `create` de Prisma. Única excepción, registrada para WP-C19: el vendedor
+-- escribe el movimiento `sale` (`sales.order:write`) sin poder leerlo, a
+-- propósito (es el costo de lo que vendió); lo registra SIN `RETURNING`. Si
+-- C19 la resuelve de otro modo, se quita de acá. Los roles que crea un
+-- administrador no entran: validar el par al crearlos es de WP-C24. Los seis
+-- permisos son los de la política de INSERT (invariante 114).
+WITH escribe(permiso) AS (
+  VALUES ('sales.order:write'), ('inventory.stock:adjust'), ('inventory.decant:execute'),
+         ('market.purchase_order:receive'), ('sales.order:refund'),
+         ('market.purchase_order:write')
+), roles_sembrados AS (
+  SELECT id, code, tenant_id FROM app.roles WHERE is_system
+), escribe_sin_leer AS (
+  SELECT r.code || ' (' || left(r.tenant_id::text, 8) || ') → ' || e.permiso AS descripcion
+    FROM roles_sembrados r
+    JOIN app.role_permissions w ON w.role_id = r.id
+    JOIN escribe e ON e.permiso = w.permission_code
+   WHERE NOT EXISTS (SELECT 1 FROM app.role_permissions l
+                      WHERE l.role_id = r.id AND l.permission_code = 'inventory.stock:read')
+     AND NOT (r.code = 'vendedor' AND e.permiso = 'sales.order:write')
+)
+SELECT pg_temp.expect_true(129,
+  'Ningún rol sembrado escribe un movimiento sin poder leerlo (salvo el vendedor con sale, WP-C19)'
+    || COALESCE(' — escriben sin leer: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM escribe_sin_leer), ''),
+  (SELECT count(*) FROM roles_sembrados) >= 4 AND NOT EXISTS (SELECT 1 FROM escribe_sin_leer));
+
+-- 130 ─ El vendedor sembrado no tiene `inventory.stock:read`. Es lo que hace
+-- que la decisión de José (el vendedor no obtiene el costo de un movimiento ni
+-- de un lote) sea cierta: con ese permiso, 128 se cumpliría y el vendedor
+-- leería igual el ledger, los lotes y las capas. Si el negocio decide darle
+-- otra vista del stock, es un permiso nuevo, no este.
+WITH vendedores AS (
+  SELECT id FROM app.roles WHERE is_system AND code = 'vendedor'
+)
+SELECT pg_temp.expect_true(130,
+  'El vendedor sembrado no tiene inventory.stock:read: no lee costos de lotes ni del ledger',
+  (SELECT count(*) FROM vendedores) >= 1
+  AND NOT EXISTS (SELECT 1 FROM app.role_permissions rp
+                    JOIN vendedores v ON v.id = rp.role_id
+                   WHERE rp.permission_code = 'inventory.stock:read'));
+
+-- 131 ─ El mensaje del disparador de las capas de costo no dice el costo a
+-- quien no puede leerlo. Rechaza una capa que no cuadra con `Capas de costo del
+-- movimiento N no cuadran: asignado=X declarado=Y`, y Y es el costo del
+-- movimiento: con una capa de 1 sobre un movimiento ajeno, el vendedor lo leía
+-- en el error aunque ya no pudiera leer el ledger (0037). Acá no hay sesión de
+-- staff (`has_permission` da falso), así que el rechazo tiene que ser el sin
+-- cifras, y con ese texto exacto: sin `%` al final, un mensaje con montos
+-- agregados no coincide. El control con permiso, que sí los trae, lo prueba
+-- write_permissions.test.ts.
+SELECT pg_temp.expect_fail_like(131, 'Capa que no cuadra, sin permiso de lectura: el rechazo no trae los montos',
+  $$DO $x$
+    DECLARE
+      v_mov bigint;
+    BEGIN
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000002', 1, 'ml', 'adjustment', 5000)
+      RETURNING id INTO v_mov;
+      INSERT INTO app.movement_cost_allocations
+        (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+      VALUES ('11111111-1111-1111-1111-111111111111', v_mov,
+              '99999999-0000-0000-0000-000000000002', 1, 1, 1);
+      SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE;
+    END $x$
+  $$,
+  'Capas de costo del movimiento % no cuadran con el costo del movimiento');
 
 \echo ''
 \echo '=============================================================='

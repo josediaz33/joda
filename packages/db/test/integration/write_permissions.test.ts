@@ -221,15 +221,44 @@ const COUNT_DEPOSITO_PERMISSIONS = `SELECT count(*)::int AS n FROM app.role_perm
 const COUNT_ROLE = (where: string) => `SELECT count(*)::int AS n FROM app.roles WHERE ${where}`;
 
 // WP-B11d. Un movimiento del ledger sobre `LOT_ID`, un lote sellado de
-// unidades con saldo (lo siembra el beforeAll con un ajuste). El INSERT lleva
-// RETURNING, como el de Prisma: el SELECT del ledger es por tenant, así que no
-// hay trampa de la lectura. `reference` es SQL literal: `NULL` o `'lot_opening'`.
-const INSERT_MOVEMENT = (type: string, qty: number, reference = "NULL") =>
+// unidades con saldo (lo siembra el beforeAll con un ajuste). SIN `RETURNING`:
+// desde 0037 (WP-B11f) el SELECT del ledger exige `inventory.stock:read`, y un
+// INSERT con `RETURNING` evalúa también esa política (la trampa de la lectura).
+// Así estas pruebas miran solo la política de INSERT, con la forma que el
+// vendedor sí puede usar; la forma de Prisma está en `INSERT_MOVEMENT_RETURNING`.
+// `reference` es SQL literal: `NULL` o `'lot_opening'`; `cost`, `NULL` o un número.
+const INSERT_MOVEMENT = (type: string, qty: number, reference = "NULL", cost = "NULL") =>
   `INSERT INTO app.inventory_movements
-     (tenant_id, lot_id, variant_id, qty, uom, movement_type, reference_type)
+     (tenant_id, lot_id, variant_id, qty, uom, movement_type, reference_type, total_cost_pyg)
    VALUES ('${REAL_TENANT_ID}', '${LOT_ID}', '${SEALED_VARIANT_ID}', ${qty}, 'unit', '${type}',
-           ${reference})
-   RETURNING id`;
+           ${reference}, ${cost})`;
+const INSERT_MOVEMENT_RETURNING = (type: string, qty: number) =>
+  `${INSERT_MOVEMENT(type, qty)} RETURNING id`;
+// WP-B11f. La capa de costo del movimiento que ESA sesión acaba de insertar. El
+// id sale de `currval` sobre la secuencia del ledger y no de `lastval()`: dentro
+// de este INSERT, `lastval()` devuelve la identidad de la propia capa.
+const INSERT_COST_LAYER_ON = (movementId: string, cost: number) =>
+  `INSERT INTO app.movement_cost_allocations
+     (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+   VALUES ('${REAL_TENANT_ID}', ${movementId}, '${LOT_ID}', 1, ${cost}, ${cost})`;
+const INSERT_COST_LAYER_FOR_LAST_MOVEMENT = (cost: number) =>
+  INSERT_COST_LAYER_ON("currval(pg_get_serial_sequence('app.inventory_movements', 'id'))", cost);
+// El cuadre de las capas es una constraint diferida: esto la fuerza ya.
+const CHECK_COST_LAYERS_NOW = "SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE";
+// El mensaje de un rechazo sin los montos, el que recibe quien no lee el ledger.
+const COST_LAYERS_MISMATCH_WITHOUT_AMOUNTS =
+  /^Capas de costo del movimiento \d+ no cuadran con el costo del movimiento$/;
+// Lo que el beforeAll siembra con la superconexión para las pruebas de lectura:
+// un movimiento `sale` con costo y su capa, ubicables por `note` y por `lot_id`;
+// y una recepción con costo y SIN capas, la que un vendedor intentaría adivinar.
+const COSTED_MOVEMENT_NOTE = "B11f: movimiento con costo";
+const COSTED_MOVEMENT_COST = 61000;
+const UNLAYERED_MOVEMENT_NOTE = "B11f: movimiento ajeno sin capas";
+const UNLAYERED_MOVEMENT_COST = 77000;
+const SELECT_COSTED_MOVEMENT = `SELECT total_cost_pyg FROM app.inventory_movements
+  WHERE note = '${COSTED_MOVEMENT_NOTE}'`;
+const SELECT_COST_LAYERS = `SELECT unit_cost_pyg, total_cost_pyg FROM app.movement_cost_allocations
+  WHERE lot_id = '${LOT_ID}'`;
 
 // Las líneas se agregan y se borran solo con la orden padre en borrador.
 const INSERT_PO_LINE_INTO = (orderId: string) => `INSERT INTO app.purchase_order_lines
@@ -242,6 +271,14 @@ const UPDATE_ALL_PO_LINES = `UPDATE app.purchase_order_lines SET unit_price_mino
 const DELETE_PO_LINE = `DELETE FROM app.purchase_order_lines WHERE id = '${PO_LINE_ID}'`;
 const SELECT_PO_LINES = `SELECT unit_price_minor FROM app.purchase_order_lines`;
 const UPDATE_SENT_PO_LINE = `UPDATE app.purchase_order_lines SET unit_price_minor = 1
+  WHERE id = '${SENT_PO_LINE_ID}'`;
+// Re-parentar: la política de UPDATE no mira `purchase_order_id` y hacía lo que el
+// INSERT y el DELETE de líneas prohíben (revisión cruzada de B11d, 0036).
+const MOVE_SENT_PO_LINE_TO_DRAFT = `UPDATE app.purchase_order_lines SET purchase_order_id = '${DRAFT_PO_ID}'
+  WHERE id = '${SENT_PO_LINE_ID}'`;
+const MOVE_DRAFT_PO_LINE_TO_SENT = `UPDATE app.purchase_order_lines SET purchase_order_id = '${SENT_PO_ID}'
+  WHERE id = '${PO_LINE_ID}'`;
+const UPDATE_SENT_PO_LINE_RECEIVED = `UPDATE app.purchase_order_lines SET qty_received = 1
   WHERE id = '${SENT_PO_LINE_ID}'`;
 const DELETE_SENT_PO_LINE = `DELETE FROM app.purchase_order_lines WHERE id = '${SENT_PO_LINE_ID}'`;
 const COUNT_SENT_PO_LINES = `SELECT count(*)::int AS n FROM app.purchase_order_lines
@@ -321,6 +358,9 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
   let warehouse: Actor;
   let manager: Actor;
   let peerOwner: Actor;
+  // Ids de los movimientos ajenos que siembra el beforeAll (WP-B11f).
+  let costedMovementId: string;
+  let unlayeredMovementId: string;
   const custom = {} as Record<keyof typeof CUSTOM_ROLES, Actor>;
   // Todos los actores por nombre, para las pruebas parametrizadas (it.each) que
   // se escriben antes de que el beforeAll los cree. Lo llena el beforeAll.
@@ -526,6 +566,36 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       VALUES ('${DEPOSIT_ON_DRAFT_ID}', '${REAL_TENANT_ID}', '${CUSTOMER_ID}', 50000,
               '${DRAFT_ORDER_WITH_DEPOSIT_ID}');
     `);
+
+    // WP-B11f: un movimiento `sale` con costo y la capa de costo que lo
+    // respalda (la suma de las capas es el costo del movimiento, trigger de
+    // 0009), para las pruebas de quién lee el costo del ledger. Dos sentencias,
+    // dos commits: la verificación de las capas es diferida.
+    await db.client.query(`
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg, note)
+      VALUES ('${REAL_TENANT_ID}', '${LOT_ID}', '${SEALED_VARIANT_ID}', -1, 'unit', 'sale',
+              ${COSTED_MOVEMENT_COST}, '${COSTED_MOVEMENT_NOTE}');
+    `);
+    await db.client.query(`
+      INSERT INTO app.movement_cost_allocations
+        (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+      VALUES ('${REAL_TENANT_ID}',
+              (SELECT id FROM app.inventory_movements WHERE note = '${COSTED_MOVEMENT_NOTE}'),
+              '${LOT_ID}', 1, ${COSTED_MOVEMENT_COST}, ${COSTED_MOVEMENT_COST});
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg, note)
+      VALUES ('${REAL_TENANT_ID}', '${LOT_ID}', '${SEALED_VARIANT_ID}', 1, 'unit',
+              'purchase_receipt', ${UNLAYERED_MOVEMENT_COST}, '${UNLAYERED_MOVEMENT_NOTE}');
+    `);
+    const seeded = await db.client.query(
+      `SELECT note, id FROM app.inventory_movements WHERE note IN ($1, $2)`,
+      [COSTED_MOVEMENT_NOTE, UNLAYERED_MOVEMENT_NOTE],
+    );
+    for (const row of seeded.rows) {
+      if (row.note === COSTED_MOVEMENT_NOTE) costedMovementId = String(row.id);
+      else unlayeredMovementId = String(row.id);
+    }
 
     Object.assign(actorsByKey, { owner, seller, warehouse, manager, peerOwner, ...custom });
 
@@ -1147,10 +1217,13 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
     });
   });
 
-  // WP-B11d. El SELECT de todas estas tablas es por tenant: ni `INSERT ...
-  // RETURNING` ni `UPDATE ... WHERE` dependen de otro permiso, así que no hay
-  // trampa de la lectura y los rechazos se prueban con la forma natural de
-  // cada operación.
+  // WP-B11d. El SELECT de `goods_receipts`, `goods_receipt_lines` y `sale_orders`
+  // es por tenant: ni `INSERT ... RETURNING` ni `UPDATE ... WHERE` dependen de
+  // otro permiso, así que no hay trampa de la lectura y los rechazos se prueban
+  // con la forma natural de cada operación. El de `purchase_order_lines` exige
+  // `market.purchase_order:read` y el de `inventory_movements` (desde 0037,
+  // WP-B11f) `inventory.stock:read`: ahí sí la hay, y los INSERT del ledger de
+  // abajo van sin `RETURNING` para probar solo la política de escritura.
   describe("el ledger, las líneas de órdenes, las recepciones y el borrado de pedidos exigen permiso (WP-B11d)", () => {
     // Un actor del beforeAll por nombre (las tablas de abajo se escriben antes
     // de que exista).
@@ -1260,6 +1333,66 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
     // la unión de los tres permisos de la orden (la recepción actualiza
     // `qty_received`).
     describe("purchase_order_lines: leer con :read; escribir con los permisos de purchase_orders; agregar y borrar solo con la orden en borrador", () => {
+      // La revisión cruzada de B11b/c/d: como `joda_api` con cualquiera de los roles
+      // que pueden editar líneas, `UPDATE ... SET purchase_order_id` vaciaba una
+      // orden enviada (o le agregaba una línea). `trg_po_line_no_reparent` (0036)
+      // lo frena para todos, en las dos direcciones.
+      it("el owner no mueve una línea de una orden enviada a un borrador (la dejaba vacía)", async () => {
+        await expect(as(owner, MOVE_SENT_PO_LINE_TO_DRAFT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      it("quien escribe y lee compras no mueve una línea de una orden enviada a un borrador", async () => {
+        await expect(as(custom.poWriter, MOVE_SENT_PO_LINE_TO_DRAFT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      it("quien aprueba y lee órdenes, sin :write, no mueve una línea de una orden enviada a un borrador", async () => {
+        await expect(as(custom.approver, MOVE_SENT_PO_LINE_TO_DRAFT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      it("quien recibe y lee órdenes, sin :write, no mueve una línea de una orden enviada a un borrador", async () => {
+        await expect(as(custom.orderReceiver, MOVE_SENT_PO_LINE_TO_DRAFT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      it("el owner no mueve una línea de un borrador a una orden enviada (le agregaba una)", async () => {
+        await expect(as(owner, MOVE_DRAFT_PO_LINE_TO_SENT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      it("quien escribe y lee compras no mueve una línea de un borrador a una orden enviada", async () => {
+        await expect(as(custom.poWriter, MOVE_DRAFT_PO_LINE_TO_SENT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      it("quien aprueba y lee órdenes, sin :write, no mueve una línea de un borrador a una orden enviada", async () => {
+        await expect(as(custom.approver, MOVE_DRAFT_PO_LINE_TO_SENT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      it("quien recibe y lee órdenes, sin :write, no mueve una línea de un borrador a una orden enviada", async () => {
+        await expect(as(custom.orderReceiver, MOVE_DRAFT_PO_LINE_TO_SENT)).rejects.toMatchObject({
+          code: "23514",
+        });
+      });
+
+      // Control positivo: la guarda no es un rechazo general del UPDATE de líneas.
+      it("quien recibe y lee órdenes sí actualiza qty_received de una línea de una orden enviada, y la orden conserva su línea", async () => {
+        const received = await as(custom.orderReceiver, UPDATE_SENT_PO_LINE_RECEIVED);
+        const lines = await countAsOwnerHere(COUNT_SENT_PO_LINES);
+
+        expect({ received: received.rowCount, lines }).toEqual({ received: 1, lines: 1 });
+      });
+
       it("el owner agrega una línea, con RETURNING, cambia su precio y la borra", async () => {
         const created = await as(owner, `${INSERT_PO_LINE} RETURNING id`);
         const edited = await api.query(UPDATE_PO_LINE);
@@ -1744,6 +1877,234 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
           ]).toEqual([1, 1, 1, 1, 1, 1, 1]);
         });
       });
+    });
+  });
+
+  // WP-B11f (0037). El costo de lo que se mueve estaba por tenant en el ledger y
+  // en sus capas de costo, mientras que en los lotes y en las líneas de OC ya
+  // exigía permiso: el vendedor lo leía. Decisión de José (2026-10-07): el
+  // vendedor no obtiene `inventory_movements.total_cost_pyg` por ninguna vía. RLS
+  // decide por fila, así que se cierra la tabla entera y también las capas, cuya
+  // suma por movimiento es ese mismo total.
+  describe("inventory_movements y movement_cost_allocations: leer exige inventory.stock:read; el vendedor no obtiene el costo (WP-B11f)", () => {
+    function actorNamed(key: string): Actor {
+      const actor = actorsByKey[key];
+      if (!actor) throw new Error(`no hay un actor "${key}" en el beforeAll`);
+      return actor;
+    }
+
+    // Las formas con que se intentaría sacar el costo, cada una contra el
+    // movimiento y la capa que sembró el beforeAll. Las mismas sentencias se
+    // corren como vendedor (cero filas) y como quien lee stock (al menos una):
+    // sin el control positivo, una consulta mal escrita pasaría la negativa.
+    const LEDGER_COST_READS: [string, string][] = [
+      ["el costo de un movimiento", SELECT_COSTED_MOVEMENT],
+      [
+        "todas las columnas de los movimientos con costo",
+        "SELECT * FROM app.inventory_movements WHERE total_cost_pyg IS NOT NULL",
+      ],
+      ["las capas de costo", "SELECT * FROM app.movement_cost_allocations"],
+      [
+        "las capas unidas a su movimiento (el rodeo para sumar el costo)",
+        `SELECT m.id, a.total_cost_pyg FROM app.movement_cost_allocations a
+           JOIN app.inventory_movements m ON m.id = a.movement_id`,
+      ],
+    ];
+
+    it.each(LEDGER_COST_READS)("el vendedor no lee %s", async (_label, sql) => {
+      const { rows } = await as(seller, sql);
+
+      expect(rows).toEqual([]);
+    });
+
+    it.each(LEDGER_COST_READS)(
+      "quien tiene inventory.stock:read sí lee %s (control positivo)",
+      async (_label, sql) => {
+        const { rowCount } = await as(custom.stockReader, sql);
+
+        expect(rowCount).toBeGreaterThan(0);
+      },
+    );
+
+    it("el vendedor no obtiene el costo ni agregado: la suma del ledger y de las capas es NULL", async () => {
+      const movements = await as(
+        seller,
+        "SELECT sum(total_cost_pyg) AS total FROM app.inventory_movements",
+      );
+      const layers = await api.query(
+        "SELECT sum(total_cost_pyg) AS total FROM app.movement_cost_allocations",
+      );
+
+      expect({ movements: movements.rows, layers: layers.rows }).toEqual({
+        movements: [{ total: null }],
+        layers: [{ total: null }],
+      });
+    });
+
+    it.each(["owner", "manager", "warehouse", "stockReader"])(
+      "%s, que tiene inventory.stock:read, lee el costo exacto del movimiento y de su capa",
+      async (key) => {
+        const movement = await as(actorNamed(key), SELECT_COSTED_MOVEMENT);
+        const layers = await api.query(SELECT_COST_LAYERS);
+
+        expect({ movement: movement.rows, layers: layers.rows }).toEqual({
+          movement: [{ total_cost_pyg: String(COSTED_MOVEMENT_COST) }],
+          layers: [
+            {
+              unit_cost_pyg: String(COSTED_MOVEMENT_COST),
+              total_cost_pyg: String(COSTED_MOVEMENT_COST),
+            },
+          ],
+        });
+      },
+    );
+
+    it.each(["seller", "poWriter", "orderReceiver", "accountant", "approver"])(
+      "%s, sin inventory.stock:read, no lee el costo del movimiento ni de su capa",
+      async (key) => {
+        const movement = await as(actorNamed(key), SELECT_COSTED_MOVEMENT);
+        const layers = await api.query(SELECT_COST_LAYERS);
+
+        expect({ movement: movement.rows, layers: layers.rows }).toEqual({
+          movement: [],
+          layers: [],
+        });
+      },
+    );
+
+    it("el owner de otro tenant, con todos los permisos, no lee el ledger del tenant real", async () => {
+      const movement = await as(peerOwner, SELECT_COSTED_MOVEMENT, PEER_TENANT_ID);
+      const layers = await api.query(SELECT_COST_LAYERS);
+
+      expect({ movement: movement.rows, layers: layers.rows }).toEqual({
+        movement: [],
+        layers: [],
+      });
+    });
+
+    // El ledger es la tabla de alto volumen: la política de lectura se evalúa una
+    // vez por sentencia (un InitPlan), no una vez por fila. Con `has_permission`
+    // suelta, 100.000 movimientos de un lote tardaban 3,2 s; con la subconsulta,
+    // 84 ms. El plan es lo que no depende de cuánto tarde la máquina.
+    it.each([
+      ["inventory_movements", "lot_id"],
+      ["movement_cost_allocations", "lot_id"],
+    ])(
+      "la política de lectura de %s se evalúa una vez por sentencia (InitPlan), no por fila",
+      async (table, column) => {
+        const { rows } = await as(
+          custom.stockReader,
+          `EXPLAIN SELECT count(*) FROM app.${table} WHERE ${column} = '${LOT_ID}'`,
+        );
+
+        expect(rows.map((row) => row["QUERY PLAN"]).join("\n")).toMatch(/InitPlan/);
+      },
+    );
+
+    // La trampa de la lectura: `INSERT ... RETURNING` evalúa también la política
+    // de SELECT sobre la fila nueva, y el `create` de Prisma emite RETURNING.
+    // Es la consecuencia buscada de no abrirle al vendedor las filas `sale` (son
+    // las que traen el costo de lo que vendió), y obliga a WP-C19 a registrar el
+    // movimiento sin RETURNING.
+    it("el vendedor no inserta un movimiento sale con RETURNING (42501): no puede leer lo que escribió", async () => {
+      await expect(
+        as(seller, `${INSERT_MOVEMENT("sale", -1, "NULL", "61000")} RETURNING id`),
+      ).rejects.toMatchObject({ code: "42501" });
+    });
+
+    it("quien escribe un movimiento sin poder leerlo (return_out con solo compras): sin RETURNING entra, con RETURNING 42501", async () => {
+      const without = await as(custom.poWriter, INSERT_MOVEMENT("return_out", -1));
+      expect(without.rowCount).toBe(1);
+      await api.query("ROLLBACK");
+
+      await expect(
+        as(custom.poWriter, INSERT_MOVEMENT_RETURNING("return_out", -1)),
+      ).rejects.toMatchObject({ code: "42501" });
+    });
+
+    it("el vendedor sigue registrando una venta: el movimiento sale sin RETURNING, su capa con currval, y la capa cuadra al cierre", async () => {
+      const movement = await as(seller, INSERT_MOVEMENT("sale", -1, "NULL", "61000"));
+      const layer = await api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(61000));
+      const check = await api.query("SET CONSTRAINTS app.trg_cost_allocation_matches IMMEDIATE");
+      const seen = await api.query(
+        `SELECT (SELECT count(*) FROM app.inventory_movements)::int AS movements,
+                (SELECT count(*) FROM app.movement_cost_allocations)::int AS layers`,
+      );
+
+      expect({
+        movement: movement.rowCount,
+        layer: layer.rowCount,
+        check: check.command,
+        seen: seen.rows,
+      }).toEqual({ movement: 1, layer: 1, check: "SET", seen: [{ movements: 0, layers: 0 }] });
+    });
+
+    it("una capa que no cuadra se rechaza aunque quien la escribe no vea el movimiento: la verificación no depende de su lectura", async () => {
+      await as(seller, INSERT_MOVEMENT("sale", -1, "NULL", "61000"));
+      await api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(5000));
+
+      await expect(api.query(CHECK_COST_LAYERS_NOW)).rejects.toMatchObject({
+        code: "23514",
+        message: expect.stringMatching(COST_LAYERS_MISMATCH_WITHOUT_AMOUNTS),
+      });
+    });
+
+    // La ruta de fuga que dejaba 0037 sin la corrección del disparador: la
+    // política de INSERT de las capas es solo por tenant y la FK no evalúa RLS,
+    // así que una capa de 1 sobre un movimiento AJENO, con la verificación
+    // forzada, devolvía `asignado=X declarado=Y` con Y el costo del movimiento.
+    it.each([
+      ["una recepción sin capas", () => unlayeredMovementId],
+      ["un movimiento que ya tiene sus capas", () => costedMovementId],
+    ])(
+      "el vendedor no obtiene el costo de %s por el mensaje de una capa que no cuadra",
+      async (_label, movementId) => {
+        await as(seller, INSERT_COST_LAYER_ON(movementId(), 1));
+
+        await expect(api.query(CHECK_COST_LAYERS_NOW)).rejects.toMatchObject({
+          code: "23514",
+          message: expect.stringMatching(COST_LAYERS_MISMATCH_WITHOUT_AMOUNTS),
+        });
+      },
+    );
+
+    it("quien tiene inventory.stock:read sí ve los montos en el rechazo de una capa que no cuadra (control positivo)", async () => {
+      await as(custom.stockReader, INSERT_COST_LAYER_ON(costedMovementId, 1));
+
+      await expect(api.query(CHECK_COST_LAYERS_NOW)).rejects.toMatchObject({
+        code: "23514",
+        message: expect.stringMatching(
+          new RegExp(
+            `no cuadran: asignado=${COSTED_MOVEMENT_COST + 1} declarado=${COSTED_MOVEMENT_COST}$`,
+          ),
+        ),
+      });
+    });
+
+    // COMPORTAMIENTO CONOCIDO, que cierra WP-B11e (atar la capa a un movimiento
+    // que quien la escribe creó en esa transacción). Sin montos en el mensaje
+    // queda la igualdad: una capa pasa solo si su total es el del movimiento,
+    // así que quien adivina el costo exacto de un movimiento ajeno sin capas lo
+    // confirma. Cuando B11e lo cierre, esta prueba se invierte a propósito.
+    it("comportamiento conocido (WP-B11e): el vendedor confirma por igualdad el costo exacto de un movimiento ajeno sin capas", async () => {
+      await as(seller, INSERT_COST_LAYER_ON(unlayeredMovementId, UNLAYERED_MOVEMENT_COST));
+      const guess = await api.query(CHECK_COST_LAYERS_NOW);
+
+      expect(guess.command).toBe("SET");
+    });
+
+    // Control positivo de la trampa: quien escribe Y lee el ledger sigue usando
+    // la forma de Prisma (INSERT ... RETURNING).
+    it.each([
+      ["adjustment", 5, "warehouse"],
+      ["decant_consumption", -1, "decants"],
+      ["purchase_receipt", 1, "receives"],
+      ["return_in", 1, "refunds"],
+      ["sale", -1, "owner"],
+    ])("%s: el rol que escribe y lee el ledger inserta con RETURNING", async (type, qty, key) => {
+      const { rowCount, rows } = await as(actorNamed(key), INSERT_MOVEMENT_RETURNING(type, qty));
+
+      expect({ rowCount, hasId: rows[0].id !== undefined }).toEqual({ rowCount: 1, hasId: true });
     });
   });
 
