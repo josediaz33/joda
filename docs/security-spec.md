@@ -87,7 +87,7 @@ Forma: `recurso.subrecurso:acción`.
 **Dos decisiones deliberadas:**
 
 - **`vendedor` no ve caja ni costos.** Que alguien cargue una venta no implica que vea el flujo financiero del negocio ni lo que cuesta cada frasco. Sí maneja señas, porque es parte de vender: las registra y las aplica al vender, y por eso tiene `accounting.deposit:write` **y** `accounting.deposit:read`. Con RLS, escribir una seña exige poder leerla (§3.1, "La trampa de la lectura"). `accounting.cashbox:read` sigue fuera de su alcance. **Lee todas las señas del tenant, no solo las de su cliente:** la base filtra por tenant, no por vendedor. Decisión aceptada (2026-10-01): acotarlo por cliente no se justifica en un negocio de este tamaño.
-- **`deposito` no ve precios de compra.** Mueve mercadería. `inventory.stock:read` incluye costos de lote, así que si más adelante hace falta un depósito sin acceso a costos, se separa en `inventory.stock:read` e `inventory.cost:read`.
+- **`deposito` no ve precios de compra.** Mueve mercadería. `inventory.stock:read` incluye costos de lote y del ledger (los movimientos y sus capas de costo, desde 0037), así que si más adelante hace falta un depósito sin acceso a costos, se separa en `inventory.stock:read` e `inventory.cost:read`.
 
 ---
 
@@ -126,6 +126,9 @@ CREATE POLICY accounting_read ON app.journal_entries
   FOR SELECT USING (app.has_permission('accounting.journal:read'));
 
 CREATE POLICY lots_read ON app.inventory_lots
+  FOR SELECT USING (app.has_permission('inventory.stock:read'));
+
+CREATE POLICY movements_read ON app.inventory_movements
   FOR SELECT USING (app.has_permission('inventory.stock:read'));
 ```
 
@@ -187,7 +190,7 @@ B11 puso permiso en las cabeceras y dejó sin él a lo que cuelga de ellas y al 
 
 | Tabla                  | SELECT                       | INSERT                                                         | UPDATE                                                 | DELETE                                                         |
 | ---------------------- | ---------------------------- | -------------------------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------- |
-| `inventory_movements`  | tenant                       | según `movement_type`, ver abajo                               | nadie (ledger append-only)                             | nadie (ledger append-only)                                     |
+| `inventory_movements`  | `inventory.stock:read`       | según `movement_type`, ver abajo                               | nadie (ledger append-only)                             | nadie (ledger append-only)                                     |
 | `purchase_order_lines` | `market.purchase_order:read` | `market.purchase_order:write`, y la orden padre en **`draft`** | `market.purchase_order:write`, `:approve` o `:receive` | `market.purchase_order:write`, y la orden padre en **`draft`** |
 | `goods_receipts`       | tenant                       | `market.purchase_order:receive`                                | `market.purchase_order:receive`                        | nadie (se cancela con su estado)                               |
 | `goods_receipt_lines`  | tenant                       | `market.purchase_order:receive`                                | `market.purchase_order:receive`                        | nadie                                                          |
@@ -213,7 +216,7 @@ Decisiones de José (2026-10-01): `return_out` va con compras, no con ventas; y 
 
 **Una seña enganchada a un pedido impide borrarlo.** `customer_deposits.sale_order_id` pasa de `ON DELETE SET NULL` a `RESTRICT` (decisión de José, 2026-10-02): una seña existe antes del cobro, así que un borrador puede tener una enganchada, y borrarlo la desenganchaba en silencio. Con RESTRICT hay que desvincularla a propósito, y la API traduce el `23503` a un mensaje que lo dice (`CONFLICT_ORDER_HAS_DEPOSIT`, `errorMapper.ts`).
 
-**La trampa de la lectura.** No aplica a las tablas cuyo SELECT es por tenant: ni `INSERT ... RETURNING` ni `UPDATE ... WHERE` dependen de otro permiso. **Sí aplica a `purchase_order_lines`**, cuya lectura exige `market.purchase_order:read`: quien escribe líneas sin poder leerlas recibe 42501 en el `INSERT` (el `EXISTS` lee la orden) y cero filas en un `UPDATE` o `DELETE` con `WHERE`. El invariante 94 la verifica para los roles sembrados, con la excepción registrada del depósito (`:receive` sin `:read`): desde 0034 ya no ve las líneas de la orden que recibe, y cómo recibe sin ver precios es de WP-C15.
+**La trampa de la lectura.** No aplica a las tablas cuyo SELECT es por tenant: ni `INSERT ... RETURNING` ni `UPDATE ... WHERE` dependen de otro permiso. **Sí aplica a `purchase_order_lines`**, cuya lectura exige `market.purchase_order:read`: quien escribe líneas sin poder leerlas recibe 42501 en el `INSERT` (el `EXISTS` lee la orden) y cero filas en un `UPDATE` o `DELETE` con `WHERE`. El invariante 94 la verifica para los roles sembrados, con la excepción registrada del depósito (`:receive` sin `:read`): desde 0034 ya no ve las líneas de la orden que recibe, y cómo recibe sin ver precios es de WP-C15. **Desde 0037 aplica también a `inventory_movements`** (ver «El costo del ledger», abajo): el SELECT del ledger ya no es por tenant.
 
 **Lo que el WP no cierra, cada uno con su destino en `docs/backlog.md`.** (1) INSERT y UPDATE de `sale_orders` y las demás tablas de la venta (`sale_order_lines`, `payments`, ...) siguen solo por tenant, y un contexto `system` (el webhook que confirma un pago) no inserta los movimientos `sale` de esa confirmación, porque `has_permission` exige staff: necesita el camino definido de WP-G13. (2) `movement_cost_allocations`, las capas de costo de cada salida, sigue solo por tenant en INSERT: WP-B11e. (3) La lectura de `goods_receipt_lines` (precio unitario y flete prorrateado) sigue por tenant: WP-C15.
 
@@ -232,6 +235,19 @@ Si la API usara `service_role` o el dueño de las tablas, RLS **no se evaluaría
 **Provisión de la credencial de runtime (WP-C02).** `apps/api` se conecta exclusivamente con `DATABASE_URL_API` (ver `.env.example`) — nunca con `DATABASE_URL`, que queda reservada a migraciones y ETL (el equivalente local de `service_role`). Sin `DATABASE_URL_API` el proceso no arranca: se valida con Zod al inicio (`apps/api/src/config/env.ts`), sin fallback a ninguna otra variable. Además, antes de aceptar tráfico, `apps/api` corre `SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user` (`apps/api/src/db/client.ts`, `assertRlsNotBypassed`) y aborta el arranque si devuelve `true` — la red que atrapa a `DATABASE_URL_API` apuntando por error al owner de las tablas o a un superusuario. La password de desarrollo la fija `packages/db/seed/0002_seed_joda_api_credential.sql`; en producción sale del gestor de secretos.
 
 **Una línea de orden no cambia de orden (`0036_purchase_order_line_no_reparent.sql`, revisión cruzada de B11d).** El INSERT y el DELETE de líneas exigen la orden padre en `draft`, pero la política de UPDATE queda abierta (la recepción actualiza `qty_received`) y no puede comparar `OLD` con `NEW`: un `UPDATE` de `purchase_order_id` mandaba la línea a otra orden y vaciaba una enviada, o le agregaba una. `trg_po_line_no_reparent` lo rechaza para todo rol (`23514`); el detalle está en `docs/data-model.md` §4.6, guarda 5. Invariantes 126 y 127.
+
+**El costo del ledger (`0037_read_permission_ledger_costs.sql`, WP-B11f).** Decisión de José (2026-10-07): el vendedor no obtiene `inventory_movements.total_cost_pyg` por ninguna vía, ni por la API ni leyendo la base. Hasta 0036 el costo de un lote (`inventory_lots`) y el de una línea de OC (`purchase_order_lines`) exigían permiso, pero el ledger y sus capas de costo se leían por tenant: como vendedor, `SELECT total_cost_pyg FROM app.inventory_movements` devolvía el costo de cada movimiento (el de un frasco, 1.496.500, en la base del smoke). Mismo mecanismo que las otras dos, sin inventar otro:
+
+| Tabla                       | SELECT                 | INSERT                        | UPDATE y DELETE            |
+| --------------------------- | ---------------------- | ----------------------------- | -------------------------- |
+| `inventory_movements`       | `inventory.stock:read` | según `movement_type` (0034)  | nadie (ledger append-only) |
+| `movement_cost_allocations` | `inventory.stock:read` | solo tenant (permiso en B11e) | nadie (ledger append-only) |
+
+- **Las capas también.** La suma de `movement_cost_allocations.total_cost_pyg` por movimiento es el `total_cost_pyg` del movimiento (trigger de 0009): dejarlas por tenant era el rodeo. Traen además `unit_cost_pyg`, el costo unitario de cada lote consumido.
+- **La tabla entera, no la columna.** RLS decide por fila, y `joda_api` es un solo rol para todas las sesiones de la API: un `REVOKE SELECT (total_cost_pyg)` dejaría ciego también a quien debe verlo. Si el vendedor necesita cantidades de un movimiento, se le expone una proyección de la API sin `totalCostPyg`; hoy ningún procedimiento la pide (el kardex, `lot.history` y `serial.history`, exige `inventory.stock:read`).
+- **Los disparadores no se ven afectados.** Los que leen el ledger o sus capas son `SECURITY DEFINER` desde 0018: la verificación de que las capas cuadran con el movimiento no depende de quién escribe.
+- **La trampa de la lectura es real para el vendedor.** Escribe un movimiento `sale` con `sales.order:write` y no puede leerlo, así que su `INSERT … RETURNING` (el que emite el `create` de Prisma) recibe 42501. Lo registra **sin `RETURNING`**, y toma el id para sus capas con `currval(pg_get_serial_sequence('app.inventory_movements', 'id'))` (no `lastval()`: dentro del INSERT de la capa devuelve la identidad de la propia capa). Se descartó dejar que el SELECT admita las filas `sale` de quien puede escribirlas, como sugería la fila de B11f: son las filas que traen el costo de lo que el vendedor vendió. Los otros roles sembrados que escriben movimientos (dueño, encargado, depósito) tienen `inventory.stock:read` y no tienen la trampa; el invariante 129 lo verifica, con la excepción registrada del vendedor, y el 130 que el vendedor siga sin ese permiso.
+- **Lo que no cierra, con su destino en `docs/backlog.md`.** (1) WP-C19 hereda la forma de escribir del vendedor (SQL crudo, sin `RETURNING`) y tiene que decidir con qué sesión elige la capa de costo, porque el vendedor tampoco lee los lotes. (2) WP-B11e: una política de INSERT de las capas que consulte `inventory_movements` corre bajo RLS y no ve el movimiento del vendedor. (3) **WP-B11g, decisión de diseño:** el mismo costo vive en columnas que RLS no esconde y que el vendedor lee: `sale_orders.cogs_pyg`, `sale_order_lines.cogs_pyg` y los snapshots de `audit_log`, `idempotency_keys` y `unposted_events`.
 
 ### 3.2 Capa 2 — Middleware
 
