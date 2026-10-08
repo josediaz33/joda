@@ -2694,6 +2694,97 @@ SELECT pg_temp.expect_fail_like(127, 'Editar una línea de una orden enviada sin
   $$,
   'aceptado');
 
+-- WP-B11f (0037_read_permission_ledger_costs.sql): leer el ledger y sus capas de
+-- costo exige `inventory.stock:read`, como los lotes. Los invariantes 128 y 129
+-- leen el TEXTO de las políticas y la matriz sembrada, con el límite de siempre:
+-- no prueban que la política haga lo que dice. Eso lo prueba, conectado como
+-- joda_api con cada rol, write_permissions.test.ts.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 128 ─ Cada política permisiva que cubre el SELECT de `inventory_movements` y
+-- de `movement_cost_allocations` exige `inventory.stock:read`, sin `true` y sin
+-- una rama `OR` que la abra (por ejemplo, a las filas `sale`, como sugería la
+-- fila de WP-B11f: son las que traen el costo de lo que el vendedor vendió), y
+-- ninguna es FOR ALL; y cada tabla tiene al menos una. Con la `tenant_access`
+-- de 0014 o la `tenant_access_select` de 0034, el vendedor leía el costo de
+-- cada movimiento y, sumando las capas, el mismo total. El nombre lista las
+-- culpables y las tablas sin política de lectura.
+WITH ledger(tabla) AS (
+  VALUES ('inventory_movements'), ('movement_cost_allocations')
+), lectura AS (
+  SELECT c.relname AS tabla, p.polname, p.polcmd,
+         COALESCE(pg_get_expr(p.polqual, p.polrelid), '') AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+    JOIN ledger l ON l.tabla = c.relname
+   WHERE n.nspname = 'app' AND p.polpermissive AND p.polcmd IN ('r', '*')
+), sin_permiso AS (
+  SELECT tabla || '.' || polname AS descripcion
+    FROM lectura
+   WHERE polcmd = '*'
+      OR expresion NOT LIKE '%has_permission(''inventory.stock:read''%'
+      OR expresion ~ '\mtrue\M'
+      OR expresion LIKE '% OR %'
+), sin_politica AS (
+  SELECT l.tabla || ' (sin política de SELECT)' AS descripcion
+    FROM ledger l
+   WHERE NOT EXISTS (SELECT 1 FROM lectura x WHERE x.tabla = l.tabla)
+)
+SELECT pg_temp.expect_true(128,
+  'Leer el ledger y sus capas de costo exige inventory.stock:read, sin true ni rama OR'
+    || COALESCE(' — sin permiso: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sin_permiso), '')
+    || COALESCE(' — sin política: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sin_politica), ''),
+  NOT EXISTS (SELECT 1 FROM sin_permiso) AND NOT EXISTS (SELECT 1 FROM sin_politica));
+
+-- 129 ─ La trampa de la lectura del ledger. En los roles sembrados
+-- (`is_system`, de cualquier tenant), todo permiso que escribe un movimiento
+-- viene con `inventory.stock:read`: `INSERT ... RETURNING` evalúa también la
+-- política de lectura, y un rol que escribe sin leer recibe 42501 en el
+-- `create` de Prisma. Única excepción, registrada para WP-C19: el vendedor
+-- escribe el movimiento `sale` (`sales.order:write`) sin poder leerlo, a
+-- propósito (es el costo de lo que vendió); lo registra SIN `RETURNING`. Si
+-- C19 la resuelve de otro modo, se quita de acá. Los roles que crea un
+-- administrador no entran: validar el par al crearlos es de WP-C24. Los seis
+-- permisos son los de la política de INSERT (invariante 114).
+WITH escribe(permiso) AS (
+  VALUES ('sales.order:write'), ('inventory.stock:adjust'), ('inventory.decant:execute'),
+         ('market.purchase_order:receive'), ('sales.order:refund'),
+         ('market.purchase_order:write')
+), roles_sembrados AS (
+  SELECT id, code, tenant_id FROM app.roles WHERE is_system
+), escribe_sin_leer AS (
+  SELECT r.code || ' (' || left(r.tenant_id::text, 8) || ') → ' || e.permiso AS descripcion
+    FROM roles_sembrados r
+    JOIN app.role_permissions w ON w.role_id = r.id
+    JOIN escribe e ON e.permiso = w.permission_code
+   WHERE NOT EXISTS (SELECT 1 FROM app.role_permissions l
+                      WHERE l.role_id = r.id AND l.permission_code = 'inventory.stock:read')
+     AND NOT (r.code = 'vendedor' AND e.permiso = 'sales.order:write')
+)
+SELECT pg_temp.expect_true(129,
+  'Ningún rol sembrado escribe un movimiento sin poder leerlo (salvo el vendedor con sale, WP-C19)'
+    || COALESCE(' — escriben sin leer: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM escribe_sin_leer), ''),
+  (SELECT count(*) FROM roles_sembrados) >= 4 AND NOT EXISTS (SELECT 1 FROM escribe_sin_leer));
+
+-- 130 ─ El vendedor sembrado no tiene `inventory.stock:read`. Es lo que hace
+-- que la decisión de José (el vendedor no obtiene el costo de un movimiento ni
+-- de un lote) sea cierta: con ese permiso, 128 se cumpliría y el vendedor
+-- leería igual el ledger, los lotes y las capas. Si el negocio decide darle
+-- otra vista del stock, es un permiso nuevo, no este.
+WITH vendedores AS (
+  SELECT id FROM app.roles WHERE is_system AND code = 'vendedor'
+)
+SELECT pg_temp.expect_true(130,
+  'El vendedor sembrado no tiene inventory.stock:read: no lee costos de lotes ni del ledger',
+  (SELECT count(*) FROM vendedores) >= 1
+  AND NOT EXISTS (SELECT 1 FROM app.role_permissions rp
+                    JOIN vendedores v ON v.id = rp.role_id
+                   WHERE rp.permission_code = 'inventory.stock:read'));
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'
