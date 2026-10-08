@@ -127,12 +127,14 @@
 -- `goods_receipt_lines` (precio unitario y flete prorrateado) y
 -- `goods_receipts` se leen por tenant, y con ellos se reconstruye el costo de
 -- una recepción: 19000 × 7300 / 100 × qty + flete = 1.496.500, el
--- `total_cost_pyg` del movimiento 1 del smoke. Qué ve el depósito, que
--- recibe con `market.purchase_order:receive`, es de WP-C15; hasta que se
--- cierre, «el vendedor no obtiene el costo por ninguna vía» vale para el
--- ledger y sus capas, no para sus orígenes. (5) `journal_lines` (asientos de
--- COGS que dejará el posteo) se lee y se escribe por tenant, a diferencia de
--- `journal_entries`: WP-B11h. (6) El rechazo sin cifras vale para cualquier
+-- `total_cost_pyg` del movimiento 1 del smoke. Decisión de José
+-- (2026-10-08): el alcance de B11f es el ledger y sus capas de costo; las
+-- recepciones se cierran en la parte de DB de WP-C15, con lectura
+-- `market.purchase_order:read` o `:receive` (el vendedor no tiene ninguno).
+-- (5) `journal_lines` (asientos de COGS que dejará el posteo) se lee y se
+-- escribe por tenant, a diferencia de `journal_entries`: WP-B11h, con plazo
+-- escrito por José: antes de habilitar cualquier regla de posteo (H01) y
+-- siempre antes del cutover. (6) El rechazo sin cifras vale para cualquier
 -- sesión sin `inventory.stock:read`, también para el ETL o un `psql` sin
 -- contexto de staff: al depurar un descuadre, los montos se consultan en el
 -- ledger.
