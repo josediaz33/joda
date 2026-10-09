@@ -328,7 +328,7 @@ Los estados de los que la base impone que no se vuelva (ADR-026). El ADR guarda 
 
 `product_variants_online_visible_type_check`: `CHECK (NOT online_visible OR variant_type IN ('sealed', 'decant', 'unit'))`. Una variante `tester`, `supply` o `bulk` no puede tener `online_visible = true` (RN-CAT-02), ni al insertarla ni al actualizarla.
 
-- **Por qué un `CHECK` y no un trigger.** Lee solo columnas de su propia fila, y los triggers son solo para invariantes que un `CHECK` no puede expresar (`AGENTS.md`, `.claude/rules/database.md`). Tampoco se puede deshabilitar con `DISABLE TRIGGER` ni con `session_replication_role`.
+- **Por qué un `CHECK` y no un trigger.** Lee solo columnas de su propia fila. `AGENTS.md` y `.claude/rules/database.md` reservan los triggers para invariantes; este es de una sola fila, y un `CHECK` declarativo no falla abierto ni se deshabilita con `DISABLE TRIGGER` ni con `session_replication_role` (mismo criterio que las FK compuestas de 0023).
 - **Lista blanca.** Enumera lo que se puede publicar, no lo que no: un valor nuevo de `variant_type` queda sin poder publicarse hasta que alguien lo agregue acá, en vez de publicarse por omisión.
 - **Datos anteriores.** La migración apaga el flag en las filas que ya lo violan antes de agregar el `CHECK` (con un `NOTICE` que lista tenant y SKU de las apagadas, que `db:migrate` imprime). La dirección es la segura: apagarlo saca la variante de `v_catalog_variants`. Ningún camino de la API las produce.
 - **Reemplaza una normalización de la API.** Hasta 0038 `updateVariant` apagaba `online_visible` en un granel; ya no hace falta, y se quitó.

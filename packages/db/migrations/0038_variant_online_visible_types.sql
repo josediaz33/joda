@@ -11,12 +11,14 @@
 --
 -- CORRECCIÓN. La regla de José (RN-CAT-02): `online_visible` solo en
 -- `sealed`, `decant` y `unit`. Es un CHECK sobre el contenido de una fila de
--- una sola tabla, sin lectura de otra: declarativo, no un trigger (los triggers
--- son solo para invariantes que un CHECK no puede expresar: AGENTS.md y
--- .claude/rules/database.md). Se escribe como lista blanca de lo que se puede publicar, no
--- como lista negra de lo que no: un tipo que se agregue al enum `variant_type`
--- queda sin poder publicarse hasta que alguien decida lo contrario. Es el
--- mismo criterio de falla cerrada de los triggers de invariante.
+-- una sola tabla, sin lectura de otra: declarativo, no un trigger. AGENTS.md y
+-- .claude/rules/database.md reservan los triggers para invariantes; este es de
+-- una sola fila, y un CHECK no falla abierto ni se deshabilita (ni con
+-- `DISABLE TRIGGER` ni con `session_replication_role`). Se escribe como lista
+-- blanca de lo que se puede publicar, no como lista negra de lo que no: un tipo
+-- que se agregue al enum `variant_type` queda sin poder publicarse hasta que
+-- alguien decida lo contrario. Es el mismo criterio de falla cerrada de los
+-- triggers de invariante.
 --
 -- DATOS ANTERIORES. Antes de agregar el CHECK se apaga el flag en las filas
 -- que ya lo violan; si no, `ADD CONSTRAINT` falla y la migración no aplica.
