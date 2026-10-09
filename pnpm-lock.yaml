@@ -113,6 +113,9 @@ importers:
       '@joda/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@joda/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       '@joda/ui':
         specifier: workspace:*
         version: link:../../packages/ui

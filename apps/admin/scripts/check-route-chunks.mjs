@@ -16,7 +16,15 @@ function walk(key) {
 }
 walk(entry);
 
-for (const route of ["Login", "Enroll", "Verify", "Home", "CatalogPreview", "Accounting"]) {
+for (const route of [
+  "Login",
+  "Enroll",
+  "Verify",
+  "Home",
+  "CatalogPreview",
+  "Accounting",
+  "Sourcing",
+]) {
   const key = `src/routes/${route}.tsx`;
   if (
     !manifest[key]?.file ||
