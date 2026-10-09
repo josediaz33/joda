@@ -2814,6 +2814,72 @@ SELECT pg_temp.expect_fail_like(131, 'Capa que no cuadra, sin permiso de lectura
   $$,
   'Capas de costo del movimiento % no cuadran con el costo del movimiento');
 
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-B17 (0038_variant_online_visible_types.sql, RN-CAT-02): solo `sealed`,
+-- `decant` y `unit` se publican en la tienda. El CHECK es una lista blanca;
+-- el motivo del rechazo se pide por nombre de constraint, porque estas filas
+-- cumplen los demás CHECK de la tabla (tamaño, unidad de medida): lo único
+-- que las puede rechazar es la visibilidad.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 132 ─ Un tester no se publica. Frasco de exhibición, con su `size_ml`.
+SELECT pg_temp.expect_fail_like(132, 'Variante tester con online_visible = true',
+  $$INSERT INTO app.product_variants
+      (tenant_id, product_id, sku, variant_type, uom, size_ml, price_pyg, online_visible)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '44444444-4444-4444-4444-444444444444', 'INV-132-TESTER', 'tester', 'unit', 125, 0, true)$$,
+  '%product_variants_online_visible_type_check%');
+
+-- 133 ─ Un insumo no se publica.
+SELECT pg_temp.expect_fail_like(133, 'Variante supply con online_visible = true',
+  $$INSERT INTO app.product_variants
+      (tenant_id, product_id, sku, variant_type, uom, price_pyg, online_visible)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '44444444-0000-0000-0000-00000000aaaa', 'INV-133-SUPPLY', 'supply', 'unit', 0, true)$$,
+  '%product_variants_online_visible_type_check%');
+
+-- 134 ─ Un granel no se publica. Se prueba en un producto sin granel
+-- (`44444444-0000-0000-0000-00000000aaaa`): en el de Layton el índice único
+-- del 84 también lo rechazaría, y un rechazo por otro motivo no prueba el CHECK.
+SELECT pg_temp.expect_fail_like(134, 'Variante bulk con online_visible = true',
+  $$INSERT INTO app.product_variants
+      (tenant_id, product_id, sku, variant_type, uom, price_pyg, online_visible)
+    VALUES ('11111111-1111-1111-1111-111111111111',
+            '44444444-0000-0000-0000-00000000aaaa', 'INV-134-BULK', 'bulk', 'ml', 0, true)$$,
+  '%product_variants_online_visible_type_check%');
+
+-- 135 ─ Encender el flag de una variante que ya existe también se rechaza: el
+-- CHECK vale en el UPDATE, no solo al insertar. Es el caso que antes cubría la
+-- normalización de `updateVariant` (el granel de Layton, que el smoke dejó en
+-- `false`), y el que reabre cualquier UPDATE directo o el procedimiento de
+-- publicación de WP-C08g.
+SELECT pg_temp.expect_fail_like(135, 'UPDATE online_visible = true sobre el granel existente',
+  $$UPDATE app.product_variants SET online_visible = true
+     WHERE id = '55555555-0000-0000-0000-000000000002'$$,
+  '%product_variants_online_visible_type_check%');
+
+-- 136 ─ Control positivo de 132 a 135: las tres variantes que sí se publican
+-- aceptan el flag. Sin él, un CHECK que rechazara todo `online_visible = true`
+-- pasaría las cuatro pruebas de arriba.
+SELECT pg_temp.expect_fail_like(136, 'Sellado, decant y unit aceptan online_visible = true',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.product_variants
+        (tenant_id, product_id, sku, variant_type, uom, size_ml, price_pyg, online_visible)
+      VALUES
+        ('11111111-1111-1111-1111-111111111111',
+         '44444444-4444-4444-4444-444444444444', 'INV-136-SEALED', 'sealed', 'unit', 50, 0, true),
+        ('11111111-1111-1111-1111-111111111111',
+         '44444444-4444-4444-4444-444444444444', 'INV-136-DECANT', 'decant', 'ml', 5, 0, true);
+      INSERT INTO app.product_variants
+        (tenant_id, product_id, sku, variant_type, uom, price_pyg, online_visible)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '44444444-0000-0000-0000-00000000aaaa', 'INV-136-UNIT', 'unit', 'unit', 0, true);
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'
