@@ -324,6 +324,17 @@ Los estados de los que la base impone que no se vuelva (ADR-026). El ADR guarda 
 - **Sus permisos tampoco se tocan desde la API (RLS, no trigger).** Las políticas de escritura de `role_permissions` excluyen los roles de sistema (invariante 113), porque sin eso el dueño se vaciaba su propio rol con un `DELETE` y quedaba tan bloqueado como si lo hubiera borrado. Se cambian por el seed. Es solo RLS: el seed y el ETL la eluden.
 - **El catálogo `permissions` no lo escribe `joda_api`** (`REVOKE` de 0033, invariante 111).
 
+### 4.8 Solo `sealed`, `decant` y `unit` se publican (WP-B17, `0038_variant_online_visible_types.sql`)
+
+`product_variants_online_visible_type_check`: `CHECK (NOT online_visible OR variant_type IN ('sealed', 'decant', 'unit'))`. Una variante `tester`, `supply` o `bulk` no puede tener `online_visible = true` (RN-CAT-02), ni al insertarla ni al actualizarla.
+
+- **Por qué un `CHECK` y no un trigger.** Lee solo columnas de su propia fila. Los triggers de invariante (§4.2) son para lo que un `CHECK` no puede ver.
+- **Lista blanca.** Enumera lo que se puede publicar, no lo que no: un valor nuevo de `variant_type` queda sin poder publicarse hasta que alguien lo agregue acá, en vez de publicarse por omisión.
+- **Datos anteriores.** La migración apaga el flag en las filas que ya lo violan antes de agregar el `CHECK` (con un `NOTICE` con el conteo). La dirección es la segura: apagarlo saca la variante de `v_catalog_variants`. Ningún camino de la API las produce.
+- **Reemplaza una normalización de la API.** Hasta 0038 `updateVariant` apagaba `online_visible` en un granel; ya no hace falta, y se quitó.
+- **El ETL tiene que respetarlo.** Una variante `tester`, `supply` o `bulk` del v2 se carga con `online_visible = false`.
+- **Verificación.** Invariantes 132 a 134 (tester, insumo y granel con el flag encendido), 135 (el `UPDATE` sobre una variante que ya existe) y el control positivo 136 (sellado, decant y unit lo aceptan).
+
 ---
 
 ## 5. Vistas

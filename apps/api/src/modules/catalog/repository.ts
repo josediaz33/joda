@@ -403,7 +403,6 @@ export interface UpdateVariantPatch {
   readonly productionMode?: string;
   readonly sourceVariantId?: string | null;
   readonly isSerialized?: boolean;
-  readonly onlineVisible?: boolean;
   readonly minStockAlert?: number | null;
   readonly weightG?: number | null;
   readonly position?: number;
@@ -427,7 +426,6 @@ export async function updateVariantRow(
         Prisma.product_variantsUpdateInput["production_mode"] | undefined,
       source_variant_id: patch.sourceVariantId,
       is_serialized: patch.isSerialized,
-      online_visible: patch.onlineVisible,
       min_stock_alert: patch.minStockAlert,
       weight_g: patch.weightG,
       position: patch.position,

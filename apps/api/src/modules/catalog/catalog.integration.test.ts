@@ -344,15 +344,19 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       onlineVisible: true,
     });
     expect(forbiddenBulkVisibility.statusCode).toBe(400);
-    await testDb.superuserClient.query(
-      `UPDATE app.product_variants SET online_visible = true WHERE id = $1`,
-      [bulk.id],
-    );
-    const repairedBulk = await mutateOk<{ onlineVisible: boolean }>("catalog.variant.update", {
+    // WP-B17 (RN-CAT-02): la base rechaza un granel publicado aun al dueño de
+    // la tabla; `updateVariant` ya no lo normaliza porque no hace falta.
+    await expect(
+      testDb.superuserClient.query(
+        `UPDATE app.product_variants SET online_visible = true WHERE id = $1`,
+        [bulk.id],
+      ),
+    ).rejects.toThrow(/product_variants_online_visible_type_check/);
+    const renamedBulk = await mutateOk<{ onlineVisible: boolean }>("catalog.variant.update", {
       id: bulk.id,
       sku: "LAYTON-125-GRANEL",
     });
-    expect(repairedBulk.onlineVisible).toBe(false);
+    expect(renamedBulk.onlineVisible).toBe(false);
 
     const decant = await mutateOk<{
       id: string;
@@ -433,8 +437,8 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
   // `is_serialized` de `requires_serial` del producto al crearse, no se marcan
   // aparte. La recepción de una variante serializada exige cargar los seriales
   // (RN-SER, WP-C15): un reloj sin serie no puede trabarse al recibirlo, y uno con
-  // serie no puede entrar sin registrarla. Solo rige en `createVariant`: la
-  // actualización posterior es WP-C08f.
+  // serie no puede entrar sin registrarla. WP-C08f extiende la misma guarda a
+  // `updateVariant`.
   async function createWatchProduct(suffix: string, requiresSerial: boolean) {
     const category = await mutateOk<{ id: string }>("catalog.category.create", {
       slug: `relojeria-${suffix}`,
@@ -565,6 +569,145 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     );
     expect(serialized.isSerialized).toBe(true);
     expect(plain.isSerialized).toBe(false);
+  });
+
+  // WP-C08f. `updateVariant` aceptaba un `isSerialized` sin mirar el producto: se
+  // podía apagar en la variante de un reloj con serie (entra sin registrarla) o
+  // encender en la de uno sin serie (se traba al recibirlo).
+  it("WP-C08f · un isSerialized que contradice al producto se rechaza al actualizar, en los dos sentidos, y la variante queda como estaba (RN-SER-02)", async () => {
+    const withSerial = await createWatchProduct("upd-con-c08f", true);
+    const withoutSerial = await createWatchProduct("upd-sin-c08f", false);
+    const serialized = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      unitVariantPayload(withSerial.id, "RELOJ-UPD-CON-C08F", {}),
+    );
+    const plain = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      unitVariantPayload(withoutSerial.id, "RELOJ-UPD-SIN-C08F", {}),
+    );
+
+    const turnedOff = await mutate("catalog.variant.update", {
+      id: serialized.id,
+      isSerialized: false,
+    });
+    expect(turnedOff.statusCode).toBe(400);
+    expect(turnedOff.json().error.data.appCode).toBe("VALIDATION_SERIALIZED_INHERITED");
+    expect(turnedOff.json().error.message).toBe(
+      "Las variantes de un reloj toman el número de serie de requiresSerial del producto (acá: sí); no se marcan aparte.",
+    );
+
+    const turnedOn = await mutate("catalog.variant.update", {
+      id: plain.id,
+      isSerialized: true,
+    });
+    expect(turnedOn.statusCode).toBe(400);
+    expect(turnedOn.json().error.data.appCode).toBe("VALIDATION_SERIALIZED_INHERITED");
+
+    const serializedAfter = await call<{ isSerialized: boolean }>("catalog.variant.byId", {
+      id: serialized.id,
+    });
+    const plainAfter = await call<{ isSerialized: boolean }>("catalog.variant.byId", {
+      id: plain.id,
+    });
+    expect(serializedAfter.isSerialized).toBe(true);
+    expect(plainAfter.isSerialized).toBe(false);
+  });
+
+  it("WP-C08f · una variante de reloj anterior a E05c que contradice al producto se edita sin tocar isSerialized, y mandar el valor que coincide la repara (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("legada-c08f", true);
+    const variant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      unitVariantPayload(watch.id, "RELOJ-LEGADA-C08F", {}),
+    );
+    await testDb.superuserClient.query(
+      `UPDATE app.product_variants SET is_serialized = false WHERE id = $1`,
+      [variant.id],
+    );
+
+    const repriced = await mutateOk<{ isSerialized: boolean; pricePyg: string }>(
+      "catalog.variant.update",
+      { id: variant.id, pricePyg: "3600000" },
+    );
+    expect(repriced.pricePyg).toBe("3600000");
+    expect(repriced.isSerialized).toBe(false);
+
+    const repaired = await mutateOk<{ isSerialized: boolean }>("catalog.variant.update", {
+      id: variant.id,
+      isSerialized: true,
+    });
+    expect(repaired.isSerialized).toBe(true);
+  });
+
+  it("WP-C08f · una variante en ml de un reloj con serie no se serializa al actualizar: error claro y sin cambios (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("ml-upd-c08f", true);
+    const inMl = await testDb.superuserClient.query<{ id: string }>(
+      `INSERT INTO app.product_variants (tenant_id, product_id, sku, variant_type, uom, price_pyg)
+       VALUES ($1, $2, 'RELOJ-ML-UPD-C08F', 'bulk', 'ml', 0) RETURNING id`,
+      [TENANT_ID, watch.id],
+    );
+
+    const response = await mutate("catalog.variant.update", {
+      id: inMl.rows[0]!.id,
+      isSerialized: true,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.data.appCode).toBe("VALIDATION_SERIALIZED_REQUIRES_UNIT");
+
+    const after = await call<{ isSerialized: boolean }>("catalog.variant.byId", {
+      id: inMl.rows[0]!.id,
+    });
+    expect(after.isSerialized).toBe(false);
+  });
+
+  it("WP-C08f · las variantes de un accesorio se serializan y se desserializan al actualizar: no heredan nada (RN-SER-02)", async () => {
+    const category = await mutateOk<{ id: string }>("catalog.category.create", {
+      slug: "accesorios-c08f",
+      name: "Accesorios",
+    });
+    const accessory = await mutateOk<{ id: string }>("catalog.product.create", {
+      kind: "accessory",
+      slug: "estuche-c08f",
+      name: "Estuche C08f",
+      categoryIds: [category.id],
+      primaryCategoryId: category.id,
+      accessoryDetails: { material: null, color: null, sizeLabel: null },
+    });
+    const variant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      unitVariantPayload(accessory.id, "ESTUCHE-C08F", {}),
+    );
+
+    const turnedOn = await mutateOk<{ isSerialized: boolean }>("catalog.variant.update", {
+      id: variant.id,
+      isSerialized: true,
+    });
+    const turnedOff = await mutateOk<{ isSerialized: boolean }>("catalog.variant.update", {
+      id: variant.id,
+      isSerialized: false,
+    });
+    expect(turnedOn.isSerialized).toBe(true);
+    expect(turnedOff.isSerialized).toBe(false);
+  });
+
+  // WP-B17. La normalización de `updateVariant` ya no existe: no puede apagar el
+  // flag de una variante que sí se publica.
+  it("WP-B17 · actualizar una variante publicable no cambia online_visible (RN-CAT-02)", async () => {
+    const watch = await createWatchProduct("visible-b17", false);
+    const variant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      unitVariantPayload(watch.id, "RELOJ-VISIBLE-B17", {}),
+    );
+    await testDb.superuserClient.query(
+      `UPDATE app.product_variants SET online_visible = true WHERE id = $1`,
+      [variant.id],
+    );
+
+    const updated = await mutateOk<{ onlineVisible: boolean; pricePyg: string }>(
+      "catalog.variant.update",
+      { id: variant.id, pricePyg: "3700000" },
+    );
+    expect(updated.pricePyg).toBe("3700000");
+    expect(updated.onlineVisible).toBe(true);
   });
 
   it("RF-CAT-01 · update cambia campos y recomputa facets; archive pasa a status archived", async () => {
