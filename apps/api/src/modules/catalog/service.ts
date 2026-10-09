@@ -420,10 +420,14 @@ export async function updateVariant(
     if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
 
     // WP-C08f. Solo si el pedido toca `isSerialized`: el producto no se lee de más.
+    let isSerialized: boolean | undefined;
     if (input.isSerialized !== undefined) {
       const product = await repo.findProductRow(tx, { id: existing.product_id });
       if (!product) throw new Error(`variante ${existing.id} sin producto ${existing.product_id}`);
-      resolveIsSerialized(product, { isSerialized: input.isSerialized, uom: existing.uom });
+      isSerialized = resolveIsSerialized(product, {
+        isSerialized: input.isSerialized,
+        uom: existing.uom,
+      });
     }
 
     await repo.updateVariantRow(tx, input.id, {
@@ -439,7 +443,7 @@ export async function updateVariant(
       allocationPolicy: input.allocationPolicy,
       productionMode: input.productionMode,
       sourceVariantId: input.sourceVariantId,
-      isSerialized: input.isSerialized,
+      isSerialized,
       minStockAlert: input.minStockAlert,
       weightG: input.weightG,
       position: input.position,

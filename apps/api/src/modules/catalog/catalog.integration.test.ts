@@ -352,10 +352,11 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
         [bulk.id],
       ),
     ).rejects.toThrow(/product_variants_online_visible_type_check/);
-    const renamedBulk = await mutateOk<{ onlineVisible: boolean }>("catalog.variant.update", {
-      id: bulk.id,
-      sku: "LAYTON-125-GRANEL",
-    });
+    const renamedBulk = await mutateOk<{ sku: string; onlineVisible: boolean }>(
+      "catalog.variant.update",
+      { id: bulk.id, sku: "LAYTON-GRANEL-B17" },
+    );
+    expect(renamedBulk.sku).toBe("LAYTON-GRANEL-B17");
     expect(renamedBulk.onlineVisible).toBe(false);
 
     const decant = await mutateOk<{
@@ -689,8 +690,10 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(turnedOff.isSerialized).toBe(false);
   });
 
-  // WP-B17. La normalización de `updateVariant` ya no existe: no puede apagar el
-  // flag de una variante que sí se publica.
+  // WP-B17. Control de no-regresión, no un test del cambio: la normalización de
+  // `updateVariant` ya no existe, y esto fija que actualizar una variante que sí
+  // se publica (acá un `unit`) no le apaga el flag. La normalización original
+  // solo miraba el granel, así que esta prueba también pasaba antes de B17.
   it("WP-B17 · actualizar una variante publicable no cambia online_visible (RN-CAT-02)", async () => {
     const watch = await createWatchProduct("visible-b17", false);
     const variant = await mutateOk<{ id: string }>(

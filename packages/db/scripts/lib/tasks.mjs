@@ -18,6 +18,9 @@ const testsDir = join(dbRoot, "tests");
  * objetos a medio crear.
  */
 export async function applyMigrations(client) {
+  // pg descarta los NOTICE si nadie escucha; una migración que repara datos (0038)
+  // avisa por ahí qué tocó.
+  client.on("notice", (notice) => console.log(`[db:migrate] NOTICE: ${notice.message}`));
   for (const file of listSqlFilesSorted(migrationsDir)) {
     console.log(`[db:migrate] ${file}`);
     await client.query(readSqlFile(file));
