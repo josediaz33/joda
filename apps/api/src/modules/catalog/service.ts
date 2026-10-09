@@ -149,6 +149,26 @@ async function assertCategoryAndTagIdsExist(
   }
 }
 
+/**
+ * WP-C08b. `brandId` llega del cliente y se escribe en `products`: se lee
+ * primero bajo RLS (docs/api-conventions.md §8.4). Una marca de otro tenant y
+ * una que no existe dan el mismo 404, sin distinguir cuál fue. `null` (sin
+ * marca) no se consulta.
+ */
+async function assertBrandExists(tx: TenantTx, brandId: string | null | undefined): Promise<void> {
+  if (brandId == null) return;
+  if (!(await repo.brandExists(tx, brandId))) throw toTRPCError(NOT_FOUND_ERROR);
+}
+
+/** WP-C08b. Mismo criterio que `assertBrandExists`, para el granel de origen (`sourceVariantId`) de una variante. */
+async function assertSourceVariantExists(
+  tx: TenantTx,
+  sourceVariantId: string | null | undefined,
+): Promise<void> {
+  if (sourceVariantId == null) return;
+  if (!(await repo.findVariantRow(tx, sourceVariantId))) throw toTRPCError(NOT_FOUND_ERROR);
+}
+
 export async function createProduct(
   db: PrismaClient,
   ctx: TenantTxContext,
@@ -156,6 +176,7 @@ export async function createProduct(
 ): Promise<AdminProduct> {
   return withTenantTx(db, ctx, async (tx) => {
     await assertCategoryAndTagIdsExist(tx, input.categoryIds, input.tagIds ?? []);
+    await assertBrandExists(tx, input.brandId);
 
     const facets = buildProductFacets(toFacetInputFromCreate(input));
     const productId = await repo.insertProductRow(tx, {
@@ -224,6 +245,7 @@ export async function updateProduct(
     if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
     assertDetailsMatchKind(existing.kind as ProductKind, input);
     await assertCategoryAndTagIdsExist(tx, input.categoryIds ?? [], input.tagIds ?? []);
+    await assertBrandExists(tx, input.brandId);
 
     if (input.perfumeDetails) await repo.updatePerfumeDetails(tx, input.id, input.perfumeDetails);
     if (input.watchDetails) await repo.updateWatchDetails(tx, input.id, input.watchDetails);
@@ -378,6 +400,7 @@ export async function createVariant(
     const product = await repo.findProductRow(tx, { id: input.productId });
     if (!product) throw toTRPCError(NOT_FOUND_ERROR);
     const isSerialized = resolveIsSerialized(product, input);
+    await assertSourceVariantExists(tx, input.sourceVariantId);
 
     // El índice único parcial de 0028 lo impone la base; esto adelanta el
     // mensaje, en vez de dejar que llegue como un error interno.
@@ -418,6 +441,7 @@ export async function updateVariant(
   return withTenantTx(db, ctx, async (tx) => {
     const existing = await repo.findVariantRow(tx, input.id);
     if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
+    await assertSourceVariantExists(tx, input.sourceVariantId);
 
     // WP-C08f. Solo si el pedido toca `isSerialized`: el producto no se lee de más.
     let isSerialized: boolean | undefined;

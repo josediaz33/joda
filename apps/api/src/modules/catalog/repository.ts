@@ -133,6 +133,11 @@ export async function countExistingCategoryIds(
   return tx.categories.count({ where: { id: { in: [...ids] } } });
 }
 
+/** ¿Hay una marca con este id para el tenant de la sesión? RLS deja ver solo las propias, así que una ajena no cuenta. */
+export async function brandExists(tx: TenantTx, id: string): Promise<boolean> {
+  return (await tx.brands.count({ where: { id } })) > 0;
+}
+
 export async function countExistingTagIds(tx: TenantTx, ids: readonly string[]): Promise<number> {
   return tx.tags.count({ where: { id: { in: [...ids] } } });
 }
