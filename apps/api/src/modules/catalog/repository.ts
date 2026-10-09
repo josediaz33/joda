@@ -575,6 +575,64 @@ export async function updateCategoryRow(
   });
 }
 
+/**
+ * Bloquea TODAS las categorías del tenant (RLS deja ver solo las propias), en
+ * una sola sentencia y en orden ascendente de `id`. Mover un nodo lee el
+ * árbol para decidir si el destino cae dentro de su propio subárbol y después
+ * lo reescribe: sin serializar, dos movimientos cruzados (A bajo B y B bajo A)
+ * pasan cada uno la comprobación contra un árbol que el otro está por
+ * cambiar, y el resultado es un ciclo. Con el bloqueo, el segundo espera, y
+ * como en READ COMMITTED cada sentencia toma un snapshot nuevo, ya lee el
+ * árbol que dejó el primero. El orden ascendente es lo que evita el
+ * interbloqueo entre dos movimientos (.claude/rules/api.md, "Concurrencia"):
+ * no lo "simplifiques" a un FOR UPDATE por fila.
+ */
+export async function lockCategoryTree(tx: TenantTx): Promise<void> {
+  await tx.$queryRaw`SELECT c.id FROM app.categories c ORDER BY c.id FOR UPDATE OF c`;
+}
+
+/** ¿`candidateId` es `rootId` o un descendiente suyo? Una sola consulta recursiva por `parent_id`, no por prefijo de `path`: no depende de qué caracteres tenga un slug. */
+export async function isCategoryInSubtree(
+  tx: TenantTx,
+  rootId: string,
+  candidateId: string,
+): Promise<boolean> {
+  const rows = await tx.$queryRaw<{ found: boolean }[]>`
+    WITH RECURSIVE subtree(id) AS (
+      SELECT c.id FROM app.categories c WHERE c.id = ${rootId}::uuid
+      UNION ALL
+      SELECT child.id FROM app.categories child JOIN subtree s ON child.parent_id = s.id
+    )
+    SELECT EXISTS (SELECT 1 FROM subtree WHERE id = ${candidateId}::uuid) AS found`;
+  return rows[0]?.found === true;
+}
+
+/**
+ * Cambia el padre de una categoría y recompone el `path` materializado de ella
+ * y de todo su subárbol, en una sola sentencia. El `path` de cada
+ * descendiente sale de encadenar el del padre nuevo con los slugs, no de
+ * reemplazar un prefijo de texto. `parentId` null la deja como raíz.
+ */
+export async function moveCategorySubtree(
+  tx: TenantTx,
+  id: string,
+  parentId: string | null,
+  newPath: string,
+): Promise<void> {
+  await tx.$executeRaw`
+    WITH RECURSIVE subtree(id, new_path) AS (
+      SELECT c.id, ${newPath}::text FROM app.categories c WHERE c.id = ${id}::uuid
+      UNION ALL
+      SELECT child.id, s.new_path || '/' || child.slug::text
+      FROM app.categories child JOIN subtree s ON child.parent_id = s.id
+    )
+    UPDATE app.categories c
+    SET path = s.new_path,
+        parent_id = CASE WHEN c.id = ${id}::uuid THEN ${parentId}::uuid ELSE c.parent_id END
+    FROM subtree s
+    WHERE c.id = s.id`;
+}
+
 // ---------------------------------------------------------------------
 // Tag
 // ---------------------------------------------------------------------

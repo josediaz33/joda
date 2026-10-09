@@ -11,6 +11,7 @@ import {
   createBomComponentInput,
   createProductInput,
   createVariantInput,
+  updateCategoryInput,
   updateProductInput,
   updateVariantInput,
   publicProductSchema,
@@ -425,5 +426,31 @@ describe("catalog — .strict() en los esquemas administrativos restantes (.clau
         role: "owner",
       }),
     ).toThrow();
+  });
+});
+
+// WP-E05b · RF-CAT-03: reubicar categorías.
+describe("catalog — updateCategoryInput distingue «no mover» de «pasar a raíz» (RF-CAT-03)", () => {
+  const id = "33333333-3333-4333-a333-333333333331";
+  const parentId = "33333333-3333-4333-a333-333333333332";
+
+  it("sin parentId no mueve: la clave queda ausente", () => {
+    expect(updateCategoryInput.parse({ id, name: "Nicho" })).toEqual({ id, name: "Nicho" });
+  });
+
+  it("parentId null pasa a raíz y se conserva como null", () => {
+    expect(updateCategoryInput.parse({ id, parentId: null })).toEqual({ id, parentId: null });
+  });
+
+  it("parentId con un uuid mueve bajo ese padre", () => {
+    expect(updateCategoryInput.parse({ id, parentId })).toEqual({ id, parentId });
+  });
+
+  it("rechaza un parentId que no es uuid", () => {
+    expect(() => updateCategoryInput.parse({ id, parentId: "perfumeria" })).toThrow();
+  });
+
+  it("sigue sin aceptar el slug: no se edita después de creada la categoría", () => {
+    expect(() => updateCategoryInput.parse({ id, slug: "otro" })).toThrow();
   });
 });

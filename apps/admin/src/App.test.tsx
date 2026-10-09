@@ -97,6 +97,18 @@ describe("docs/security-spec.md §3.4 · permisos de presentación (WP-E04)", ()
     await waitFor(() => expect(window.location.pathname).toBe("/"));
   });
 
+  it("sin permiso de catálogo no ve el enlace de categorías y una URL directa vuelve al inicio", async () => {
+    vi.mocked(api.current).mockResolvedValue({
+      profile: { ...profile, mfaStatus: "satisfied" },
+      permissions: [],
+    });
+    renderApp("/categorias");
+
+    expect(await screen.findByRole("heading", { name: "Buen día, Vendedor" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Categorías" })).toBeNull();
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+  });
+
   it("al cerrar sesión limpia el estado y vuelve al ingreso", async () => {
     vi.mocked(api.current)
       .mockResolvedValueOnce({

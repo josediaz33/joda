@@ -5,7 +5,6 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import {
   createCategoryInput,
-  type AdminCategory,
   type AdminProduct,
   type AdminVariant,
   type CreateCategoryInput,
@@ -20,6 +19,7 @@ import {
   DialogTitle,
 } from "@joda/ui/primitives/dialog";
 import { api } from "../../api";
+import { CATEGORIES_QUERY_KEY, loadCategories } from "./categoryData";
 import { AccessoryForm, PerfumeForm, WatchForm } from "./ProductForms";
 import { CreateVariantForm, EditVariantForm } from "./VariantForms";
 
@@ -28,17 +28,6 @@ const kindNames: Record<ProductKind, string> = {
   watch: "reloj",
   accessory: "accesorio",
 };
-
-async function loadCategories(): Promise<AdminCategory[]> {
-  const categories: AdminCategory[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await api.listCategories(cursor);
-    categories.push(...page.items);
-    cursor = page.nextCursor ?? undefined;
-  } while (cursor);
-  return categories;
-}
 
 function InitialCategoryForm() {
   const queryClient = useQueryClient();
@@ -57,7 +46,7 @@ function InitialCategoryForm() {
         setError("");
         try {
           await api.createCategory(createCategoryInput.parse(values));
-          await queryClient.invalidateQueries({ queryKey: ["catalog-categories"] });
+          await queryClient.invalidateQueries({ queryKey: CATEGORIES_QUERY_KEY });
         } catch (cause) {
           setError(cause instanceof Error ? cause.message : "No se pudo crear la categoría.");
         }
@@ -124,7 +113,7 @@ export function ProductEditor({
   onClose: () => void;
 }) {
   const categories = useQuery({
-    queryKey: ["catalog-categories"],
+    queryKey: CATEGORIES_QUERY_KEY,
     queryFn: loadCategories,
     retry: false,
   });
