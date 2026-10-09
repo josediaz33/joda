@@ -541,9 +541,11 @@ export async function removeBomComponent(
 }
 
 // ---------------------------------------------------------------------
-// Categoría — RF-CAT-03. `path` es un materialized path: se computa una
-// sola vez, al crear (docs/data-model.md §3.1) — parentId no se edita
-// después (ver el comentario de updateCategoryInput en packages/contracts).
+// Categoría — RF-CAT-03. `path` es un materialized path (docs/data-model.md
+// §3.1): se computa al crear y se recompone, junto con el de todo el subárbol,
+// al mover la categoría (WP-E05b, `updateCategory`). Crear bajo un padre y
+// mover leen el árbol antes de escribirlo, así que ambos empiezan por
+// `lockCategoryTree`.
 // ---------------------------------------------------------------------
 export async function listCategories(
   db: PrismaClient,
@@ -564,6 +566,9 @@ export async function createCategory(
   input: CreateCategoryInput,
 ): Promise<AdminCategory> {
   return withTenantTx(db, ctx, async (tx) => {
+    // Antes de leer el padre: si otro movimiento le está cambiando el `path`
+    // (a él o a un ancestro), esperar a que termine y leerlo ya nuevo.
+    if (input.parentId) await repo.lockCategoryTree(tx);
     let path = input.slug;
     if (input.parentId) {
       const parent = await repo.findCategoryRow(tx, input.parentId);

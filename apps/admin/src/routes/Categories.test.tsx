@@ -141,6 +141,41 @@ describe("RF-CAT-03 · orden y visibilidad", () => {
     expect((bajarUltima as HTMLButtonElement).disabled).toBe(true);
   });
 
+  it("tras subir avisa el resultado y, si el botón quedó deshabilitado, el foco pasa al contrario", async () => {
+    const user = userEvent.setup();
+    renderCategories(WRITER, [perfumeria, relojes]);
+    await screen.findByRole("button", { name: "Subir Relojes" });
+    // Al releer, Relojes ya es la primera: «Subir» queda deshabilitado.
+    vi.mocked(api.listCategories).mockResolvedValue({
+      items: [
+        { ...relojes, position: 0 },
+        { ...perfumeria, position: 1 },
+      ],
+      nextCursor: null,
+    });
+
+    await user.click(screen.getByRole("button", { name: "Subir Relojes" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe("Relojes subió un lugar."),
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Bajar Relojes" })),
+    );
+  });
+
+  it("si la API rechaza el cambio muestra el error, no avisa éxito y relee el árbol", async () => {
+    const user = userEvent.setup();
+    renderCategories(WRITER, [relojes]);
+    vi.mocked(api.updateCategory).mockRejectedValue(new Error("No tenés permiso."));
+
+    await user.click(await screen.findByRole("button", { name: "Ocultar Relojes" }));
+
+    expect(await screen.findByText("No tenés permiso.")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("");
+    await waitFor(() => expect(api.listCategories).toHaveBeenCalledTimes(2));
+  });
+
   it("ocultar manda solo la visibilidad", async () => {
     const user = userEvent.setup();
     renderCategories(WRITER, [relojes]);

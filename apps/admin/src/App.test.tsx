@@ -97,6 +97,16 @@ describe("docs/security-spec.md §3.4 · permisos de presentación (WP-E04)", ()
     await waitFor(() => expect(window.location.pathname).toBe("/"));
   });
 
+  it("con permiso de lectura del catálogo ve el enlace de categorías", async () => {
+    vi.mocked(api.current).mockResolvedValue({
+      profile: { ...profile, mfaStatus: "satisfied" },
+      permissions: ["catalog.product:read"],
+    });
+    renderApp("/");
+
+    expect(await screen.findByRole("link", { name: "Categorías" })).toBeTruthy();
+  });
+
   it("sin permiso de catálogo no ve el enlace de categorías y una URL directa vuelve al inicio", async () => {
     vi.mocked(api.current).mockResolvedValue({
       profile: { ...profile, mfaStatus: "satisfied" },

@@ -577,18 +577,25 @@ export async function updateCategoryRow(
 
 /**
  * Bloquea TODAS las categorías del tenant (RLS deja ver solo las propias), en
- * una sola sentencia y en orden ascendente de `id`. Mover un nodo lee el
- * árbol para decidir si el destino cae dentro de su propio subárbol y después
- * lo reescribe: sin serializar, dos movimientos cruzados (A bajo B y B bajo A)
+ * una sola sentencia y en orden ascendente de `id`. Mover un nodo (o dar de
+ * alta una categoría bajo un padre) lee el árbol para decidir y después lo
+ * escribe: sin serializar, dos movimientos cruzados (A bajo B y B bajo A)
  * pasan cada uno la comprobación contra un árbol que el otro está por
- * cambiar, y el resultado es un ciclo. Con el bloqueo, el segundo espera, y
- * como en READ COMMITTED cada sentencia toma un snapshot nuevo, ya lee el
- * árbol que dejó el primero. El orden ascendente es lo que evita el
- * interbloqueo entre dos movimientos (.claude/rules/api.md, "Concurrencia"):
- * no lo "simplifiques" a un FOR UPDATE por fila.
+ * cambiar, y el resultado es un ciclo; un alta puede heredar el `path` que un
+ * movimiento acaba de dejar viejo. Con el bloqueo, el segundo espera, y como
+ * en READ COMMITTED cada sentencia toma un snapshot nuevo, ya lee el árbol
+ * que dejó el primero. El orden ascendente es lo que evita el interbloqueo
+ * entre dos de estos (.claude/rules/api.md, "Concurrencia"): no lo
+ * "simplifiques" a un FOR UPDATE por fila ni le saques el ORDER BY.
+ *
+ * Es `NO KEY UPDATE` y no `UPDATE` a propósito: dar de alta un producto
+ * inserta en `product_categories`, y cada fila toma `FOR KEY SHARE` sobre su
+ * categoría por la FK. `FOR UPDATE` haría esperar ahí a todo el alta de
+ * productos, y como esas filas se insertan en el orden en que el cliente
+ * mandó las categorías (no el ascendente), abriría un interbloqueo.
  */
 export async function lockCategoryTree(tx: TenantTx): Promise<void> {
-  await tx.$queryRaw`SELECT c.id FROM app.categories c ORDER BY c.id FOR UPDATE OF c`;
+  await tx.$queryRaw`SELECT c.id FROM app.categories c ORDER BY c.id FOR NO KEY UPDATE OF c`;
 }
 
 /** ¿`candidateId` es `rootId` o un descendiente suyo? Una sola consulta recursiva por `parent_id`, no por prefijo de `path`: no depende de qué caracteres tenga un slug. */
@@ -600,7 +607,7 @@ export async function isCategoryInSubtree(
   const rows = await tx.$queryRaw<{ found: boolean }[]>`
     WITH RECURSIVE subtree(id) AS (
       SELECT c.id FROM app.categories c WHERE c.id = ${rootId}::uuid
-      UNION ALL
+      UNION
       SELECT child.id FROM app.categories child JOIN subtree s ON child.parent_id = s.id
     )
     SELECT EXISTS (SELECT 1 FROM subtree WHERE id = ${candidateId}::uuid) AS found`;

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AdminCategory, UpdateCategoryInput } from "@joda/contracts";
 import { Button } from "@joda/ui/primitives/button";
@@ -30,6 +30,23 @@ export default function Categories() {
   const [dialog, setDialog] = useState<OpenDialog | null>(null);
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState("");
+  // Región `aria-live`: el resultado de subir, bajar u ocultar solo se ve en el cambio de la lista.
+  const [status, setStatus] = useState("");
+  // Ids de botones, por preferencia: al reordenar o cambiar la visibilidad la lista se
+  // relee y el botón que se apretó queda deshabilitado un instante; el foco vuelve solo.
+  const [pendingFocus, setPendingFocus] = useState<readonly string[] | null>(null);
+
+  useEffect(() => {
+    if (pendingFocus === null || busy) return;
+    const target = pendingFocus
+      .map((id) => document.getElementById(id))
+      .find(
+        (element): element is HTMLButtonElement =>
+          element instanceof HTMLButtonElement && !element.disabled,
+      );
+    target?.focus();
+    setPendingFocus(null);
+  }, [pendingFocus, busy]);
 
   const all = categories.data ?? [];
   const rows = buildCategoryRows(all);
@@ -39,17 +56,24 @@ export default function Categories() {
     await queryClient.invalidateQueries({ queryKey: CATEGORIES_QUERY_KEY });
   }
 
-  async function run(updates: readonly UpdateCategoryInput[], failure: string) {
+  async function run(
+    updates: readonly UpdateCategoryInput[],
+    messages: { readonly done: string; readonly failure: string },
+    focus: readonly string[],
+  ) {
     setActionError("");
+    setStatus("");
     setBusy(true);
     try {
       await Promise.all(updates.map((update) => api.updateCategory(update)));
+      setStatus(messages.done);
     } catch (cause) {
-      setActionError(cause instanceof Error ? cause.message : failure);
+      setActionError(cause instanceof Error ? cause.message : messages.failure);
     } finally {
       // Si una de varias falló, el árbol puede haber cambiado a medias: se relee siempre.
       await refresh();
       setBusy(false);
+      setPendingFocus(focus);
     }
   }
 
@@ -84,6 +108,9 @@ export default function Categories() {
           No se pudieron consultar las categorías. {categories.error.message}
         </p>
       )}
+      <p role="status" className="sr-only">
+        {status}
+      </p>
       {actionError && (
         <p role="alert" className="mt-6 text-error">
           {actionError}
@@ -93,7 +120,11 @@ export default function Categories() {
         <p className="mt-8 text-text-secondary">Todavía no hay categorías.</p>
       )}
       {rows.length > 0 && (
-        <ul aria-label="Árbol de categorías" className="mt-6 border-y border-border-subtle">
+        <ul
+          role="list"
+          aria-label="Árbol de categorías"
+          className="mt-6 border-y border-border-subtle"
+        >
           {rows.map(({ category, depth, siblings, index }) => (
             <li
               key={category.id}
@@ -102,6 +133,7 @@ export default function Categories() {
             >
               <div className="min-w-0">
                 <p className="font-semibold">
+                  <span className="sr-only">Nivel {depth + 1}. </span>
                   {category.name}
                   {!category.isVisible && (
                     <span className="ml-2 border border-border-strong px-1.5 py-0.5 text-xs font-normal text-text-secondary">
@@ -117,9 +149,17 @@ export default function Categories() {
                     variant="outline"
                     size="sm"
                     disabled={busy || index === 0}
+                    id={`category-${category.id}-up`}
                     aria-label={`Subir ${category.name}`}
                     onClick={() =>
-                      void run(reorderUpdates(siblings, index, -1), "No se pudo reordenar.")
+                      void run(
+                        reorderUpdates(siblings, index, -1),
+                        {
+                          done: `${category.name} subió un lugar.`,
+                          failure: "No se pudo reordenar.",
+                        },
+                        [`category-${category.id}-up`, `category-${category.id}-down`],
+                      )
                     }
                   >
                     Subir
@@ -128,9 +168,17 @@ export default function Categories() {
                     variant="outline"
                     size="sm"
                     disabled={busy || index === siblings.length - 1}
+                    id={`category-${category.id}-down`}
                     aria-label={`Bajar ${category.name}`}
                     onClick={() =>
-                      void run(reorderUpdates(siblings, index, 1), "No se pudo reordenar.")
+                      void run(
+                        reorderUpdates(siblings, index, 1),
+                        {
+                          done: `${category.name} bajó un lugar.`,
+                          failure: "No se pudo reordenar.",
+                        },
+                        [`category-${category.id}-down`, `category-${category.id}-up`],
+                      )
                     }
                   >
                     Bajar
@@ -139,11 +187,16 @@ export default function Categories() {
                     variant="outline"
                     size="sm"
                     disabled={busy}
+                    id={`category-${category.id}-visibility`}
                     aria-label={`${category.isVisible ? "Ocultar" : "Mostrar"} ${category.name}`}
                     onClick={() =>
                       void run(
                         [{ id: category.id, isVisible: !category.isVisible }],
-                        "No se pudo cambiar la visibilidad.",
+                        {
+                          done: `${category.name} quedó ${category.isVisible ? "oculta" : "visible"}.`,
+                          failure: "No se pudo cambiar la visibilidad.",
+                        },
+                        [`category-${category.id}-visibility`],
                       )
                     }
                   >
