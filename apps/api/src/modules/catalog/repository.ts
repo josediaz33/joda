@@ -591,8 +591,15 @@ export async function updateCategoryRow(
  * Es `NO KEY UPDATE` y no `UPDATE` a propósito: dar de alta un producto
  * inserta en `product_categories`, y cada fila toma `FOR KEY SHARE` sobre su
  * categoría por la FK. `FOR UPDATE` haría esperar ahí a todo el alta de
- * productos, y como esas filas se insertan en el orden en que el cliente
- * mandó las categorías (no el ascendente), abriría un interbloqueo.
+ * productos desde el momento del bloqueo, tenga o no que ver con el árbol que
+ * se mueve.
+ *
+ * **No elimina el interbloqueo del todo.** El `UPDATE` de
+ * `moveCategorySubtree` cambia `path`, que está en un índice único, y
+ * Postgres lo toma como `FOR UPDATE` sobre esas filas: un alta de producto con
+ * dos o más categorías de ese subárbol, insertadas en otro orden, puede
+ * interbloquearse con el movimiento (40P01, que hoy sale como 500). Es poco
+ * probable y no corrompe nada; queda anotado como WP-C08l.
  */
 export async function lockCategoryTree(tx: TenantTx): Promise<void> {
   await tx.$queryRaw`SELECT c.id FROM app.categories c ORDER BY c.id FOR NO KEY UPDATE OF c`;

@@ -36,6 +36,8 @@ export default function Categories() {
   // relee y el botón que se apretó queda deshabilitado un instante; el foco vuelve solo.
   const [pendingFocus, setPendingFocus] = useState<readonly string[] | null>(null);
 
+  // `run` baja `busy` y fija `pendingFocus` en el mismo render (React agrupa los dos
+  // `set` del `finally`): recién ahí los botones vuelven a estar habilitados.
   useEffect(() => {
     if (pendingFocus === null || busy) return;
     const target = pendingFocus

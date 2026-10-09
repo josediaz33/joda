@@ -405,6 +405,40 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     });
   });
 
+  it("RF-CAT-03 · el movimiento lee la categoría ya con el bloqueo: devolverla a su padre original se aplica aunque otra transacción la acabe de sacar", async () => {
+    const parent = await createCategory("mv-vuelta-padre");
+    const child = await createCategory("mv-vuelta-hija", parent.id);
+
+    // Otra transacción saca a la hija de su padre y todavía no confirma. Una
+    // petición que leyera primero a la hija la vería aún bajo `parent`, tomaría
+    // «devolverla a su padre» por un no-op y, al confirmarse la otra, la dejaría
+    // como raíz.
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        "UPDATE app.categories SET parent_id = NULL, path = 'mv-vuelta-hija' WHERE id = $1",
+        [child.id],
+      );
+      pending = mutate("catalog.category.update", { id: child.id, parentId: parent.id });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+
+      expect((await pending).statusCode).toBe(200);
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    expect(await categoryBySlug("mv-vuelta-hija")).toMatchObject({
+      parentId: parent.id,
+      path: "mv-vuelta-padre/mv-vuelta-hija",
+    });
+  });
+
   it("RF-CAT-03 · dar de alta una subcategoría espera a un movimiento en curso y cuelga del path ya nuevo", async () => {
     const root = await createCategory("mv-alta-raiz");
     const moving = await createCategory("mv-alta-mueve");

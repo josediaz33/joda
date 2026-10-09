@@ -99,6 +99,20 @@ describe("RF-CAT-03 · la pantalla muestra el árbol", () => {
     ]);
   });
 
+  it("es una lista con nombre y dice a qué nivel está cada categoría", async () => {
+    renderCategories(WRITER, [relojes, arabes, nicho, perfumeria]);
+
+    const items = await screen.findAllByRole("listitem");
+
+    expect(screen.getByRole("list", { name: "Árbol de categorías" })).toBeTruthy();
+    expect(items.map((item) => within(item).getByText(/^Nivel \d\./).textContent)).toEqual([
+      "Nivel 1. ",
+      "Nivel 2. ",
+      "Nivel 3. ",
+      "Nivel 1. ",
+    ]);
+  });
+
   it("marca como oculta a la categoría que no es visible", async () => {
     renderCategories(WRITER, [{ ...relojes, isVisible: false }]);
 
