@@ -162,6 +162,367 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(child.parentId).toBe(root.id);
   });
 
+  // WP-E05b · reubicar categorías. Cada prueba usa slugs propios: las
+  // categorías de un test siguen ahí en el siguiente (la base es una sola).
+  async function createCategory(slug: string, parentId?: string) {
+    return mutateOk<{ id: string; slug: string; path: string; parentId: string | null }>(
+      "catalog.category.create",
+      { slug, name: slug, ...(parentId ? { parentId } : {}) },
+    );
+  }
+
+  async function categoryBySlug(slug: string) {
+    const page = await call<{
+      items: { id: string; slug: string; path: string; parentId: string | null }[];
+    }>("catalog.category.list", { limit: 200 });
+    const found = page.items.find((item) => item.slug === slug);
+    if (!found) throw new Error(`no hay una categoría con slug ${slug}`);
+    return found;
+  }
+
+  it("RF-CAT-03 · mover una categoría recompone el path de ella y de todos sus descendientes", async () => {
+    const perfumeria = await createCategory("mv-perfumeria");
+    const nicho = await createCategory("mv-nicho", perfumeria.id);
+    await createCategory("mv-arabes", nicho.id);
+    const relojes = await createCategory("mv-relojes");
+
+    const moved = await mutateOk<{ parentId: string | null; slug: string; path: string }>(
+      "catalog.category.update",
+      { id: nicho.id, parentId: relojes.id },
+    );
+
+    expect(moved).toMatchObject({
+      parentId: relojes.id,
+      slug: "mv-nicho",
+      path: "mv-relojes/mv-nicho",
+    });
+    expect((await categoryBySlug("mv-arabes")).path).toBe("mv-relojes/mv-nicho/mv-arabes");
+    expect((await categoryBySlug("mv-perfumeria")).path).toBe("mv-perfumeria");
+    expect((await categoryBySlug("mv-relojes")).path).toBe("mv-relojes");
+  });
+
+  it("RF-CAT-03 · parentId null deja a la categoría como raíz y sus descendientes cuelgan de ella", async () => {
+    const accesorios = await createCategory("mv-accesorios");
+    const correas = await createCategory("mv-correas", accesorios.id);
+    await createCategory("mv-cuero", correas.id);
+
+    const moved = await mutateOk<{ parentId: string | null; path: string }>(
+      "catalog.category.update",
+      { id: correas.id, parentId: null },
+    );
+
+    expect(moved).toMatchObject({ parentId: null, path: "mv-correas" });
+    expect((await categoryBySlug("mv-cuero")).path).toBe("mv-correas/mv-cuero");
+  });
+
+  it("RF-CAT-03 · mover no arrastra a otra categoría cuyo path solo empieza con el mismo texto", async () => {
+    const catalogo = await createCategory("mv-catalogo");
+    const relojes = await createCategory("mv-sk");
+    const vintage = await createCategory("mv-sk-vintage");
+    await createCategory("mv-seiko", vintage.id);
+
+    await mutateOk("catalog.category.update", { id: relojes.id, parentId: catalogo.id });
+
+    expect((await categoryBySlug("mv-sk")).path).toBe("mv-catalogo/mv-sk");
+    expect((await categoryBySlug("mv-sk-vintage")).path).toBe("mv-sk-vintage");
+    expect((await categoryBySlug("mv-seiko")).path).toBe("mv-sk-vintage/mv-seiko");
+  });
+
+  it("RF-CAT-03 · rechaza mover una categoría dentro de sí misma o de un descendiente, y el árbol queda igual", async () => {
+    const a = await createCategory("mv-a");
+    const b = await createCategory("mv-b", a.id);
+    const c = await createCategory("mv-c", b.id);
+
+    const intoItself = await mutate("catalog.category.update", { id: a.id, parentId: a.id });
+    const intoChild = await mutate("catalog.category.update", { id: a.id, parentId: b.id });
+    const intoGrandchild = await mutate("catalog.category.update", { id: a.id, parentId: c.id });
+
+    expect(intoItself.statusCode).toBe(400);
+    expect(intoItself.json().error.data.appCode).toBe("VALIDATION_CATEGORY_CYCLE");
+    expect(intoChild.statusCode).toBe(400);
+    expect(intoChild.json().error.data.appCode).toBe("VALIDATION_CATEGORY_CYCLE");
+    expect(intoGrandchild.statusCode).toBe(400);
+    expect(intoGrandchild.json().error.data.appCode).toBe("VALIDATION_CATEGORY_CYCLE");
+    expect(await categoryBySlug("mv-a")).toMatchObject({ parentId: null, path: "mv-a" });
+    expect(await categoryBySlug("mv-c")).toMatchObject({ parentId: b.id, path: "mv-a/mv-b/mv-c" });
+  });
+
+  it("RF-CAT-03 · una categoría de otro tenant no es un destino válido: 404 y la categoría no se mueve", async () => {
+    const otherTenantId = "88888888-8888-4888-a888-8888888888e5";
+    const foreignCategoryId = "77777777-7777-4777-a777-7777777777e5";
+    await testDb.superuserClient.query(
+      `INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+       VALUES ($1, 'otro-e05b', 'Otra SRL', 'Otra')`,
+      [otherTenantId],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.categories (id, tenant_id, slug, name, path)
+       VALUES ($1, $2, 'mv-ajena', 'Ajena', 'mv-ajena')`,
+      [foreignCategoryId, otherTenantId],
+    );
+    const own = await createCategory("mv-propia");
+
+    const moved = await mutate("catalog.category.update", {
+      id: own.id,
+      parentId: foreignCategoryId,
+    });
+
+    expect(moved.statusCode).toBe(404);
+    expect(await categoryBySlug("mv-propia")).toMatchObject({ parentId: null, path: "mv-propia" });
+  });
+
+  it("RF-CAT-03 · mover una categoría no cambia a qué productos pertenece", async () => {
+    const root = await createCategory("mv-destino");
+    const nicho = await createCategory("mv-con-productos");
+    const product = await mutateOk<{ id: string }>("catalog.product.create", {
+      kind: "accessory",
+      slug: "mv-estuche",
+      name: "Estuche",
+      categoryIds: [nicho.id],
+      primaryCategoryId: nicho.id,
+      accessoryDetails: { material: null, color: null, sizeLabel: null },
+    });
+
+    await mutateOk("catalog.category.update", { id: nicho.id, parentId: root.id });
+
+    const fetched = await call<{ categoryIds: string[]; primaryCategoryId: string | null }>(
+      "catalog.product.byId",
+      { id: product.id },
+    );
+    expect(fetched.categoryIds).toEqual([nicho.id]);
+    expect(fetched.primaryCategoryId).toBe(nicho.id);
+  });
+
+  it("RF-CAT-03 · cambiar nombre, orden o visibilidad, o repetir el mismo padre, no mueve la categoría", async () => {
+    const parent = await createCategory("mv-padre");
+    const child = await createCategory("mv-hija", parent.id);
+
+    const renamed = await mutateOk<{
+      name: string;
+      position: number;
+      isVisible: boolean;
+      parentId: string | null;
+      path: string;
+    }>("catalog.category.update", {
+      id: child.id,
+      name: "Hija renombrada",
+      position: 3,
+      isVisible: false,
+    });
+    const samePlace = await mutateOk<{ parentId: string | null; path: string }>(
+      "catalog.category.update",
+      { id: child.id, parentId: parent.id },
+    );
+
+    expect(renamed).toMatchObject({
+      name: "Hija renombrada",
+      position: 3,
+      isVisible: false,
+      parentId: parent.id,
+      path: "mv-padre/mv-hija",
+    });
+    expect(samePlace).toMatchObject({ parentId: parent.id, path: "mv-padre/mv-hija" });
+  });
+
+  // Concurrencia (.claude/rules/api.md). Cada prueba retiene una fila desde
+  // otra conexión y espera, mirando `pg_stat_activity`, a que la petición
+  // quede detenida en un bloqueo: sin esa espera, comprobar «todavía no
+  // terminó» daría falso verde en una máquina lenta.
+  async function waitUntilABackendIsBlockedOnALock(): Promise<void> {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      // Dentro de una transacción, pg_stat_activity devuelve la foto del primer
+      // acceso: sin descartarla nunca se ve el cambio.
+      await testDb.superuserClient.query("SELECT pg_stat_clear_snapshot()");
+      const blocked = await testDb.superuserClient.query(
+        `SELECT count(*)::int AS n FROM pg_stat_activity
+         WHERE wait_event_type = 'Lock' AND pid <> pg_backend_pid()`,
+      );
+      if (blocked.rows[0].n > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error("la petición nunca quedó esperando un bloqueo");
+  }
+
+  /**
+   * Fuerza para `joda_api` el recorrido del heap (sin índice) y lo devuelve a su
+   * estado. Bajo RLS el plan normal recorre el índice de la clave primaria y ya
+   * entrega las filas ordenadas por `id`, así que sin esto un `ORDER BY` de
+   * menos no se nota. `ALTER ROLE ... SET` solo vale para conexiones nuevas: hay
+   * que reconectar el pool, al entrar y al salir.
+   */
+  async function withHeapPlansForApiRole(body: () => Promise<void>): Promise<void> {
+    const settings = ["enable_indexscan", "enable_bitmapscan", "enable_indexonlyscan"];
+    try {
+      for (const setting of settings) {
+        await testDb.superuserClient.query(`ALTER ROLE joda_api SET ${setting} = off`);
+      }
+      await db.$disconnect();
+      await body();
+    } finally {
+      for (const setting of settings) {
+        await testDb.superuserClient.query(`ALTER ROLE joda_api RESET ${setting}`);
+      }
+      await db.$disconnect();
+    }
+  }
+
+  it("RF-CAT-03 · dos movimientos cruzados no arman un ciclo: el segundo espera, lee el árbol del primero y se rechaza", async () => {
+    const a = await createCategory("mv-cruz-a");
+    const b = await createCategory("mv-cruz-b");
+
+    // Otra transacción deja a B bajo A y todavía no confirma. Si la petición «A
+    // bajo B» leyera el árbol antes de tomar el bloqueo, vería a B como raíz,
+    // no vería ciclo, y al confirmarse la otra armaría A → B → A.
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        "UPDATE app.categories SET parent_id = $1, path = 'mv-cruz-a/mv-cruz-b' WHERE id = $2",
+        [a.id, b.id],
+      );
+      pending = mutate("catalog.category.update", { id: a.id, parentId: b.id });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+      const response = await pending;
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.data.appCode).toBe("VALIDATION_CATEGORY_CYCLE");
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    expect(await categoryBySlug("mv-cruz-a")).toMatchObject({
+      parentId: null,
+      path: "mv-cruz-a",
+    });
+    expect(await categoryBySlug("mv-cruz-b")).toMatchObject({
+      parentId: a.id,
+      path: "mv-cruz-a/mv-cruz-b",
+    });
+  });
+
+  it("RF-CAT-03 · el movimiento lee la categoría ya con el bloqueo: devolverla a su padre original se aplica aunque otra transacción la acabe de sacar", async () => {
+    const parent = await createCategory("mv-vuelta-padre");
+    const child = await createCategory("mv-vuelta-hija", parent.id);
+
+    // Otra transacción saca a la hija de su padre y todavía no confirma. Una
+    // petición que leyera primero a la hija la vería aún bajo `parent`, tomaría
+    // «devolverla a su padre» por un no-op y, al confirmarse la otra, la dejaría
+    // como raíz.
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        "UPDATE app.categories SET parent_id = NULL, path = 'mv-vuelta-hija' WHERE id = $1",
+        [child.id],
+      );
+      pending = mutate("catalog.category.update", { id: child.id, parentId: parent.id });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+
+      expect((await pending).statusCode).toBe(200);
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    expect(await categoryBySlug("mv-vuelta-hija")).toMatchObject({
+      parentId: parent.id,
+      path: "mv-vuelta-padre/mv-vuelta-hija",
+    });
+  });
+
+  it("RF-CAT-03 · dar de alta una subcategoría espera a un movimiento en curso y cuelga del path ya nuevo", async () => {
+    const root = await createCategory("mv-alta-raiz");
+    const moving = await createCategory("mv-alta-mueve");
+
+    // Otra transacción mueve `moving` bajo `root` y todavía no confirma. Un alta
+    // bajo `moving` que leyera su `path` antes de esperar lo heredaría viejo.
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        "UPDATE app.categories SET parent_id = $1, path = 'mv-alta-raiz/mv-alta-mueve' WHERE id = $2",
+        [root.id, moving.id],
+      );
+      pending = mutate("catalog.category.create", {
+        parentId: moving.id,
+        slug: "mv-alta-hija",
+        name: "Hija",
+      });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+      const response = await pending;
+
+      expect(response.statusCode).toBe(200);
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    expect((await categoryBySlug("mv-alta-hija")).path).toBe(
+      "mv-alta-raiz/mv-alta-mueve/mv-alta-hija",
+    );
+  });
+
+  it("RF-CAT-03 · toma las categorías en orden ascendente de id aunque el plan no lo dé: con el heap forzado, la de id más alto no queda tomada mientras espera la de id más bajo", async () => {
+    const left = await createCategory("mv-orden-izq");
+    // La de id MÁS ALTO se inserta primero: en un recorrido del heap sale
+    // primero. Sin el `ORDER BY` el movimiento la tomaría antes que la de id más
+    // bajo y, con otro movimiento en orden inverso, habría interbloqueo.
+    const highestId = "ffffffff-0000-4000-8000-0000000000e5";
+    const lowestId = "00000000-0000-4000-8000-0000000000e5";
+    await testDb.superuserClient.query(
+      `INSERT INTO app.categories (id, tenant_id, slug, name, path)
+       VALUES ($1, $3, 'mv-orden-alta', 'Alta', 'mv-orden-alta'),
+              ($2, $3, 'mv-orden-baja', 'Baja', 'mv-orden-baja')`,
+      [highestId, lowestId, TENANT_ID],
+    );
+    let status = 0;
+
+    await withHeapPlansForApiRole(async () => {
+      await testDb.superuserClient.query("BEGIN");
+      let released = false;
+      let pending: ReturnType<typeof mutate> | undefined;
+      try {
+        // Otra transacción retiene la de id más bajo...
+        await testDb.superuserClient.query(
+          "SELECT id FROM app.categories WHERE id = $1 FOR NO KEY UPDATE",
+          [lowestId],
+        );
+        pending = mutate("catalog.category.update", { id: left.id, parentId: null });
+        await waitUntilABackendIsBlockedOnALock();
+        // ...y el movimiento, que espera por ella, todavía no tiene la de id más
+        // alto: NOWAIT la consigue. Con el orden del heap ya la tendría tomada y
+        // esto falla (55P03).
+        await testDb.superuserClient.query(
+          "SELECT id FROM app.categories WHERE id = $1 FOR UPDATE NOWAIT",
+          [highestId],
+        );
+        await testDb.superuserClient.query("COMMIT");
+        released = true;
+        status = (await pending).statusCode;
+      } finally {
+        if (!released) {
+          await testDb.superuserClient.query("ROLLBACK");
+          await pending?.catch(() => undefined);
+        }
+      }
+    });
+
+    expect(status).toBe(200);
+  });
+
   it("RF-CAT-04 · crea un tag", async () => {
     const tag = await mutateOk<{ id: string; slug: string; kind: string }>("catalog.tag.create", {
       slug: "best-seller",

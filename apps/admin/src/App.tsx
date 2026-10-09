@@ -10,6 +10,7 @@ const Enroll = lazy(() => import("./routes/Enroll"));
 const Verify = lazy(() => import("./routes/Verify"));
 const Home = lazy(() => import("./routes/Home"));
 const CatalogPreview = lazy(() => import("./routes/CatalogPreview"));
+const Categories = lazy(() => import("./routes/Categories"));
 const Accounting = lazy(() => import("./routes/Accounting"));
 
 function Loading() {
@@ -68,6 +69,7 @@ function SessionBoundary() {
             <Link to="/">Inicio</Link>
             <Can perform="catalog.product:read">
               <Link to="/vista-catalogo">Catálogo</Link>
+              <Link to="/categorias">Categorías</Link>
             </Can>
             <Can perform="accounting.journal:read">
               <Link to="/contabilidad">Contabilidad</Link>
@@ -101,6 +103,14 @@ function SessionBoundary() {
             element={
               <Guard perform="catalog.product:read">
                 <CatalogPreview />
+              </Guard>
+            }
+          />
+          <Route
+            path="/categorias"
+            element={
+              <Guard perform="catalog.product:read">
+                <Categories />
               </Guard>
             }
           />

@@ -541,9 +541,11 @@ export async function removeBomComponent(
 }
 
 // ---------------------------------------------------------------------
-// Categoría — RF-CAT-03. `path` es un materialized path: se computa una
-// sola vez, al crear (docs/data-model.md §3.1) — parentId no se edita
-// después (ver el comentario de updateCategoryInput en packages/contracts).
+// Categoría — RF-CAT-03. `path` es un materialized path (docs/data-model.md
+// §3.1): se computa al crear y se recompone, junto con el de todo el subárbol,
+// al mover la categoría (WP-E05b, `updateCategory`). Crear bajo un padre y
+// mover leen el árbol antes de escribirlo, así que ambos empiezan por
+// `lockCategoryTree`.
 // ---------------------------------------------------------------------
 export async function listCategories(
   db: PrismaClient,
@@ -564,6 +566,9 @@ export async function createCategory(
   input: CreateCategoryInput,
 ): Promise<AdminCategory> {
   return withTenantTx(db, ctx, async (tx) => {
+    // Antes de leer el padre: si otro movimiento le está cambiando el `path`
+    // (a él o a un ancestro), esperar a que termine y leerlo ya nuevo.
+    if (input.parentId) await repo.lockCategoryTree(tx);
     let path = input.slug;
     if (input.parentId) {
       const parent = await repo.findCategoryRow(tx, input.parentId);
@@ -588,14 +593,51 @@ export async function createCategory(
   });
 }
 
+const CATEGORY_CYCLE_ERROR = appError(
+  "VALIDATION_CATEGORY_CYCLE",
+  400,
+  "Una categoría no puede quedar dentro de sí misma ni de una de sus subcategorías.",
+);
+
+/**
+ * WP-E05b. El destino se lee bajo RLS antes del UPDATE (una FK al padre no
+ * protege nada: docs/api-conventions.md §8.4), y no puede ser la propia
+ * categoría ni un descendiente suyo. El árbol queda bloqueado por quien llama
+ * (`lockCategoryTree`) antes de leer `category`.
+ */
+async function moveCategory(
+  tx: TenantTx,
+  category: repo.CategoryRow,
+  parentId: string | null,
+): Promise<void> {
+  let path = category.slug;
+  if (parentId !== null) {
+    const parent = await repo.findCategoryRow(tx, parentId);
+    if (!parent) throw toTRPCError(NOT_FOUND_ERROR);
+    if (await repo.isCategoryInSubtree(tx, category.id, parent.id)) {
+      throw toTRPCError(CATEGORY_CYCLE_ERROR);
+    }
+    path = `${parent.path}/${category.slug}`;
+  }
+  await repo.moveCategorySubtree(tx, category.id, parentId, path);
+}
+
 export async function updateCategory(
   db: PrismaClient,
   ctx: TenantTxContext,
   input: UpdateCategoryInput,
 ): Promise<AdminCategory> {
   return withTenantTx(db, ctx, async (tx) => {
+    // Antes de leer: lo que se lee para decidir el movimiento no puede
+    // cambiarle debajo a otro movimiento concurrente.
+    if (input.parentId !== undefined) await repo.lockCategoryTree(tx);
+
     const existing = await repo.findCategoryRow(tx, input.id);
     if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
+
+    if (input.parentId !== undefined && input.parentId !== existing.parent_id) {
+      await moveCategory(tx, existing, input.parentId);
+    }
 
     await repo.updateCategoryRow(tx, input.id, {
       name: input.name,
