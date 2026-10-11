@@ -31,6 +31,7 @@ import {
   toAdminTag,
   toAdminVariant,
 } from "./mappers.js";
+import * as inventoryRepo from "../inventory/repository.js";
 import * as repo from "./repository.js";
 
 const NOT_FOUND_ERROR = appError("NOT_FOUND", 404, "No encontrado.");
@@ -357,8 +358,8 @@ const BULK_VARIANT_EXISTS_ERROR = appError(
 // seriales), y uno con serie no puede entrar sin registrarla. WP-C08f: la misma
 // regla rige al actualizar la variante, que no puede contradecir al producto.
 // Lo inverso, cambiar `requires_serial` del producto con variantes ya creadas,
-// espera la decisión de José (WP-C08h). Apagarlo con unidades ya registradas es
-// WP-C08d.
+// espera la decisión de José (WP-C08h). Apagarlo con unidades ya registradas lo rechaza
+// `lockLotsAndAssertNoSerialUnits` (WP-C08d).
 //
 // El refine de `createVariantInput` sobre `isSerialized` solo ve lo que manda el
 // cliente, no lo que se hereda; por eso el CHECK `NOT is_serialized OR uom =
@@ -437,6 +438,38 @@ export async function createVariant(
   });
 }
 
+/**
+ * WP-C08d, RN-SER-02. Una variante con unidades registradas no deja de ser
+ * serializada: quedarían unidades con número de serie colgando de una variante
+ * que ya no las admite, y la recepción y la venta dejarían de tratarlas como tales.
+ * Cuentan las unidades de todos los estados (RN-SER-03).
+ *
+ * Primero se bloquean los lotes de la variante y después se cuenta: el alta de una
+ * unidad bloquea su lote antes de leer el flag de la variante, así que, sobre un lote
+ * que ya existe, o la unidad ya está confirmada cuando se cuenta, o el alta espera y
+ * encuentra la variante apagada y se rechaza. Sin el bloqueo, un alta en vuelo pasa
+ * inadvertida.
+ *
+ * **Toma bloqueos, no solo cuenta.** Y tiene límites: el bloqueo corre con la
+ * visibilidad de quien apaga (sin permisos de inventario sobre los lotes no bloquea
+ * nada) y no ve un lote que nace después con sus unidades. El invariante completo
+ * vive en la base: WP-B20.
+ */
+async function lockLotsAndAssertNoSerialUnits(tx: TenantTx, variantId: string): Promise<void> {
+  await inventoryRepo.lockLotsOfVariant(tx, variantId);
+  const registered = await inventoryRepo.countSerializedUnitsOfVariant(tx, variantId);
+  if (registered > 0) {
+    throw toTRPCError(
+      appError(
+        "CONFLICT_VARIANT_HAS_SERIAL_UNITS",
+        409,
+        "Esta variante ya tiene unidades con número de serie registradas: no se puede dejar de serializar.",
+        { registered },
+      ),
+    );
+  }
+}
+
 export async function updateVariant(
   db: PrismaClient,
   ctx: TenantTxContext,
@@ -456,6 +489,10 @@ export async function updateVariant(
         isSerialized: input.isSerialized,
         uom: existing.uom,
       });
+    }
+    // Solo al apagar: encender no tiene este problema (el CHECK de la base ya exige `unit`).
+    if (isSerialized === false && existing.is_serialized) {
+      await lockLotsAndAssertNoSerialUnits(tx, existing.id);
     }
 
     await repo.updateVariantRow(tx, input.id, {
