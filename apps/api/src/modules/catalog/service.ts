@@ -160,7 +160,11 @@ async function assertBrandExists(tx: TenantTx, brandId: string | null | undefine
   if (!(await repo.brandExists(tx, brandId))) throw toTRPCError(NOT_FOUND_ERROR);
 }
 
-/** WP-C08b. Mismo criterio que `assertBrandExists`, para el granel de origen (`sourceVariantId`) de una variante. */
+/**
+ * WP-C08b. Mismo criterio que `assertBrandExists`, para el origen (`sourceVariantId`) de una variante.
+ * Solo comprueba que la variante sea del tenant: no que sea un granel, ni del mismo producto,
+ * ni que no sea la propia variante. Esa regla de negocio está sin decidir (WP-C08m).
+ */
 async function assertSourceVariantExists(
   tx: TenantTx,
   sourceVariantId: string | null | undefined,

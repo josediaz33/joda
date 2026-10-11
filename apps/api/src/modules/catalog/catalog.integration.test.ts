@@ -1275,6 +1275,8 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(unknown.json().error.data.appCode).toBe("NOT_FOUND");
     expect(foreign.json().error.message).toBe("No encontrado.");
     expect(unknown.json().error.message).toBe("No encontrado.");
+    expect(foreign.json().error.data.details).toBeUndefined();
+    expect(unknown.json().error.data.details).toBeUndefined();
   });
 
   it("docs/api-conventions.md §8.4 · actualizar un producto con la marca de otro tenant da 404 y conserva la suya", async () => {
@@ -1375,6 +1377,8 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(unknown.json().error.data.appCode).toBe("NOT_FOUND");
     expect(foreign.json().error.message).toBe("No encontrado.");
     expect(unknown.json().error.message).toBe("No encontrado.");
+    expect(foreign.json().error.data.details).toBeUndefined();
+    expect(unknown.json().error.data.details).toBeUndefined();
     const fetched = await call<{ sourceVariantId: string | null }>("catalog.variant.byId", {
       id: decant.id,
     });
@@ -1391,6 +1395,9 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       sizeMl: null,
       pricePyg: "0",
     });
+    // Un insumo y no un segundo granel: el índice único de 0028 permite un solo granel por
+    // producto. Qué variantes valen como origen es la pregunta abierta de WP-C08m; si se
+    // restringe a `bulk`, esta prueba se reescribe sin que haya una regresión.
     const secondSource = await mutateOk<{ id: string }>("catalog.variant.create", {
       productId: product.id,
       sku: "C08B-ORIGEN-2",
