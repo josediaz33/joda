@@ -296,6 +296,63 @@ export async function updateWatchDetails(
   });
 }
 
+/**
+ * Lee `requires_serial` de un reloj con `FOR SHARE` (WP-C08h). Las variantes
+ * de un reloj heredan `is_serialized` de él (RN-SER-02) y cambiar el producto
+ * lo propaga a las variantes: crear o actualizar una variante lee el valor y
+ * después escribe, y sin bloqueo lee el viejo mientras el cambio del producto
+ * está en curso, y deja una variante que contradice al reloj que ya cambió. Con
+ * `FOR SHARE` la lectura espera a que termine el cambio, o el cambio espera a
+ * que termine la variante y entonces la ve al propagar. Tiene que tomarse
+ * ANTES de decidir, en la misma transacción. `null` si el producto no tiene
+ * detalle de reloj. Prisma no expone `FOR SHARE`: va por `$queryRaw`.
+ */
+export async function readWatchRequiresSerialShared(
+  tx: TenantTx,
+  productId: string,
+): Promise<boolean | null> {
+  const rows = await tx.$queryRaw<{ requires_serial: boolean }[]>`
+    SELECT w.requires_serial FROM app.watch_details w
+     WHERE w.product_id = ${productId}::uuid FOR SHARE OF w`;
+  return rows[0]?.requires_serial ?? null;
+}
+
+/**
+ * Lo mismo que `readWatchRequiresSerialShared`, para quien lo va a cambiar:
+ * `FOR NO KEY UPDATE`, que espera a toda variante que esté leyendo el valor y
+ * hace esperar a las que lleguen después. Devuelve el valor VIGENTE, no el que
+ * leyó `findProductRow` antes de bloquear.
+ */
+export async function lockWatchRequiresSerial(
+  tx: TenantTx,
+  productId: string,
+): Promise<boolean | null> {
+  const rows = await tx.$queryRaw<{ requires_serial: boolean }[]>`
+    SELECT w.requires_serial FROM app.watch_details w
+     WHERE w.product_id = ${productId}::uuid FOR NO KEY UPDATE OF w`;
+  return rows[0]?.requires_serial ?? null;
+}
+
+/** Unidades con número de serie registradas contra esas variantes, de todos los estados (RN-SER-02). */
+export async function countSerializedUnitsOfVariants(
+  tx: TenantTx,
+  variantIds: readonly string[],
+): Promise<number> {
+  return tx.serialized_units.count({ where: { variant_id: { in: [...variantIds] } } });
+}
+
+/** Fija `is_serialized` en esas variantes con una sola sentencia (WP-C08h). */
+export async function setVariantsSerialized(
+  tx: TenantTx,
+  variantIds: readonly string[],
+  isSerialized: boolean,
+): Promise<void> {
+  await tx.product_variants.updateMany({
+    where: { id: { in: [...variantIds] } },
+    data: { is_serialized: isSerialized },
+  });
+}
+
 export interface AccessoryDetailsData {
   readonly material: string | null;
   readonly color: string | null;

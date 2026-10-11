@@ -1051,6 +1051,294 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(turnedOff.isSerialized).toBe(false);
   });
 
+  // WP-C08h, decisión de José (2026-10-11): cambiar `requires_serial` de un reloj se
+  // propaga a las variantes que ya existen, que heredan `is_serialized` de él.
+  async function variantsOf(productId: string) {
+    return call<{ id: string; sku: string; isSerialized: boolean }[]>("catalog.variant.list", {
+      productId,
+    });
+  }
+
+  function setRequiresSerial(productId: string, requiresSerial: boolean, extra = {}) {
+    return mutate("catalog.product.update", {
+      id: productId,
+      watchDetails: { requiresSerial },
+      ...extra,
+    });
+  }
+
+  it("WP-C08h · pasar requiresSerial a «sí» serializa las variantes del reloj y no toca las de otro (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("prop-si-c08h", false);
+    const other = await createWatchProduct("prop-si-otro-c08h", false);
+    await mutateOk("catalog.variant.create", unitVariantPayload(watch.id, "RELOJ-PROP-SI-1", {}));
+    await mutateOk("catalog.variant.create", unitVariantPayload(watch.id, "RELOJ-PROP-SI-2", {}));
+    await mutateOk("catalog.variant.create", unitVariantPayload(other.id, "RELOJ-PROP-OTRO", {}));
+
+    const response = await setRequiresSerial(watch.id, true);
+    expect(response.statusCode).toBe(200);
+
+    const changed = await variantsOf(watch.id);
+    const untouched = await variantsOf(other.id);
+    expect(changed.map((variant) => variant.isSerialized)).toEqual([true, true]);
+    expect(untouched.map((variant) => variant.isSerialized)).toEqual([false]);
+  });
+
+  it("WP-C08h · pasar requiresSerial a «no» desserializa las variantes del reloj (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("prop-no-c08h", true);
+    await mutateOk("catalog.variant.create", unitVariantPayload(watch.id, "RELOJ-PROP-NO-1", {}));
+    await mutateOk("catalog.variant.create", unitVariantPayload(watch.id, "RELOJ-PROP-NO-2", {}));
+
+    const response = await setRequiresSerial(watch.id, false);
+    expect(response.statusCode).toBe(200);
+
+    const changed = await variantsOf(watch.id);
+    expect(changed.map((variant) => variant.isSerialized)).toEqual([false, false]);
+  });
+
+  it("WP-C08h · guardar el reloj con el mismo requiresSerial «sí» no propaga ni revalida una variante anterior a E05c (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("prop-igual-si-c08h", true);
+    const variant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      unitVariantPayload(watch.id, "RELOJ-PROP-IGUAL-SI", {}),
+    );
+    await testDb.superuserClient.query(
+      `UPDATE app.product_variants SET is_serialized = false WHERE id = $1`,
+      [variant.id],
+    );
+
+    const response = await setRequiresSerial(watch.id, true, { name: "Reloj renombrado" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.data.name).toBe("Reloj renombrado");
+
+    const after = await variantsOf(watch.id);
+    expect(after.map((v) => v.isSerialized)).toEqual([false]);
+  });
+
+  // El caso que justifica «solo si cambia»: el formulario del admin reenvía
+  // `watchDetails` completo en cada guardado. Con unidades registradas en una
+  // variante anterior a E05c, propagar siempre frenaría una edición del nombre.
+  it("WP-C08h · guardar el reloj con el mismo requiresSerial «no» no se frena por unidades registradas en una variante anterior a E05c (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("prop-igual-no-c08h", false);
+    const variant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      unitVariantPayload(watch.id, "RELOJ-PROP-IGUAL-NO", {}),
+    );
+    await testDb.superuserClient.query(
+      `UPDATE app.product_variants SET is_serialized = true WHERE id = $1`,
+      [variant.id],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.serialized_units (tenant_id, variant_id, serial_number)
+       VALUES ($1, $2, 'SN-PROP-IGUAL-NO')`,
+      [TENANT_ID, variant.id],
+    );
+
+    const response = await setRequiresSerial(watch.id, false, { name: "Reloj renombrado" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.data.name).toBe("Reloj renombrado");
+
+    const after = await variantsOf(watch.id);
+    expect(after.map((v) => v.isSerialized)).toEqual([true]);
+  });
+
+  it("WP-C08h · requiresSerial a «sí» con una variante en ml se rechaza, nombra el SKU y no cambia nada (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("prop-ml-c08h", false);
+    await mutateOk("catalog.variant.create", unitVariantPayload(watch.id, "RELOJ-PROP-UNIT", {}));
+    await testDb.superuserClient.query(
+      `INSERT INTO app.product_variants (tenant_id, product_id, sku, variant_type, uom, price_pyg)
+       VALUES ($1, $2, 'RELOJ-PROP-ML', 'bulk', 'ml', 0)`,
+      [TENANT_ID, watch.id],
+    );
+
+    const response = await setRequiresSerial(watch.id, true);
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_REQUIRES_SERIAL_VARIANT_NOT_UNIT");
+    expect(response.json().error.message).toContain("RELOJ-PROP-ML");
+    expect(response.json().error.data.details).toEqual({ skus: ["RELOJ-PROP-ML"] });
+
+    const product = await call<{ watchDetails: { requiresSerial: boolean } }>(
+      "catalog.product.byId",
+      { id: watch.id },
+    );
+    const variants = await variantsOf(watch.id);
+    expect(product.watchDetails.requiresSerial).toBe(false);
+    expect(variants.map((variant) => variant.isSerialized)).toEqual([false, false]);
+  });
+
+  it("WP-C08h · requiresSerial a «no» con unidades registradas se rechaza y no cambia nada (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("prop-unidades-c08h", true);
+    const variant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      unitVariantPayload(watch.id, "RELOJ-PROP-UNIDADES", {}),
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.serialized_units (tenant_id, variant_id, serial_number)
+       VALUES ($1, $2, 'SN-PROP-UNIDADES')`,
+      [TENANT_ID, variant.id],
+    );
+
+    const response = await setRequiresSerial(watch.id, false);
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_REQUIRES_SERIAL_UNITS_REGISTERED");
+    expect(response.json().error.data.details).toEqual({ registeredUnits: 1 });
+
+    const product = await call<{ watchDetails: { requiresSerial: boolean } }>(
+      "catalog.product.byId",
+      { id: watch.id },
+    );
+    const variants = await variantsOf(watch.id);
+    expect(product.watchDetails.requiresSerial).toBe(true);
+    expect(variants.map((v) => v.isSerialized)).toEqual([true]);
+  });
+
+  it("WP-C08h · un reloj sin variantes cambia requiresSerial sin más (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("prop-vacio-c08h", false);
+
+    const response = await setRequiresSerial(watch.id, true);
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.data.watchDetails.requiresSerial).toBe(true);
+  });
+
+  // La propagación lee las variantes y después escribe; crear o actualizar una
+  // variante lee `requires_serial` y después escribe. Cada prueba retiene el
+  // bloqueo del otro lado desde otra conexión (como en los movimientos de
+  // categorías) y espera a que la petición quede detenida: sin eso, «todavía no
+  // terminó» daría falso verde en una máquina lenta. Si algo falla antes del
+  // COMMIT, el ROLLBACK libera la fila y se espera a la petición pendiente, para
+  // que no siga viva durante la prueba siguiente sobre la misma conexión.
+  async function whileHolding(
+    hold: () => Promise<unknown>,
+    request: () => ReturnType<typeof mutate>,
+  ): Promise<Awaited<ReturnType<typeof mutate>>> {
+    await testDb.superuserClient.query("BEGIN");
+    let committed = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await hold();
+      pending = request();
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      committed = true;
+      return await pending;
+    } finally {
+      if (!committed) await testDb.superuserClient.query("ROLLBACK");
+      await pending?.catch(() => undefined);
+    }
+  }
+
+  // La espera del bloqueo puede tardar más que los 5 s por defecto de Vitest.
+  const RACE_TEST_TIMEOUT_MS = 20_000;
+
+  it(
+    "WP-C08h · una variante que se crea mientras el reloj cambia espera y nace con el valor nuevo (RN-SER-02)",
+    async () => {
+      const watch = await createWatchProduct("carrera-alta-c08h", false);
+
+      const response = await whileHolding(
+        () =>
+          testDb.superuserClient.query(
+            `UPDATE app.watch_details SET requires_serial = true WHERE product_id = $1`,
+            [watch.id],
+          ),
+        () =>
+          mutate("catalog.variant.create", unitVariantPayload(watch.id, "RELOJ-CARRERA-ALTA", {})),
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().result.data.isSerialized).toBe(true);
+    },
+    RACE_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "WP-C08h · una variante que se actualiza mientras el reloj cambia espera y se compara con el valor nuevo (RN-SER-02)",
+    async () => {
+      const watch = await createWatchProduct("carrera-upd-c08h", false);
+      const variant = await mutateOk<{ id: string }>(
+        "catalog.variant.create",
+        unitVariantPayload(watch.id, "RELOJ-CARRERA-UPD", {}),
+      );
+
+      const response = await whileHolding(
+        () =>
+          testDb.superuserClient.query(
+            `UPDATE app.watch_details SET requires_serial = true WHERE product_id = $1`,
+            [watch.id],
+          ),
+        () => mutate("catalog.variant.update", { id: variant.id, isSerialized: false }),
+      );
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.data.appCode).toBe("VALIDATION_SERIALIZED_INHERITED");
+    },
+    RACE_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "WP-C08h · el cambio del reloj espera a una variante que se está creando y la propaga también (RN-SER-02)",
+    async () => {
+      const watch = await createWatchProduct("carrera-prod-c08h", false);
+
+      const response = await whileHolding(
+        async () => {
+          // Lo que hace `createVariant` a mitad de camino: leyó `false` y todavía no confirmó.
+          await testDb.superuserClient.query(
+            `SELECT 1 FROM app.watch_details WHERE product_id = $1 FOR SHARE`,
+            [watch.id],
+          );
+          await testDb.superuserClient.query(
+            `INSERT INTO app.product_variants
+               (tenant_id, product_id, sku, variant_type, uom, price_pyg, is_serialized)
+             VALUES ($1, $2, 'RELOJ-CARRERA-PROD', 'unit', 'unit', 0, false)`,
+            [TENANT_ID, watch.id],
+          );
+        },
+        () => setRequiresSerial(watch.id, true),
+      );
+
+      expect(response.statusCode).toBe(200);
+      const variants = await variantsOf(watch.id);
+      expect(variants.map((variant) => variant.isSerialized)).toEqual([true]);
+    },
+    RACE_TEST_TIMEOUT_MS,
+  );
+
+  // Un guardado que leyó el valor viejo y esperó el bloqueo tiene que comparar con
+  // el valor VIGENTE, el que dejó el que confirmó antes. Con el valor viejo vería
+  // «igual», no propagaría y dejaría las variantes serializadas bajo un reloj que
+  // ya no lo pide: el estado contradictorio que C08f impide.
+  it(
+    "WP-C08h · un guardado que leyó el valor viejo espera, compara con el vigente y propaga el suyo (RN-SER-02)",
+    async () => {
+      const watch = await createWatchProduct("carrera-vigente-c08h", false);
+      const variant = await mutateOk<{ id: string }>(
+        "catalog.variant.create",
+        unitVariantPayload(watch.id, "RELOJ-CARRERA-VIGENTE", {}),
+      );
+
+      const response = await whileHolding(
+        async () => {
+          // Otro guardado que ya pasó el reloj a «sí» y serializó la variante, sin confirmar.
+          await testDb.superuserClient.query(
+            `UPDATE app.watch_details SET requires_serial = true WHERE product_id = $1`,
+            [watch.id],
+          );
+          await testDb.superuserClient.query(
+            `UPDATE app.product_variants SET is_serialized = true WHERE id = $1`,
+            [variant.id],
+          );
+        },
+        () => setRequiresSerial(watch.id, false),
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().result.data.watchDetails.requiresSerial).toBe(false);
+      const variants = await variantsOf(watch.id);
+      expect(variants.map((v) => v.isSerialized)).toEqual([false]);
+    },
+    RACE_TEST_TIMEOUT_MS,
+  );
+
   // WP-B17. Control de no-regresión, no un test del cambio: la normalización de
   // `updateVariant` ya no existe, y esto fija que actualizar una variante que sí
   // se publica (acá un `unit`) no le apaga el flag. La normalización original
