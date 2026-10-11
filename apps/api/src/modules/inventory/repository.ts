@@ -359,6 +359,37 @@ export async function countSerializedUnitsOfLot(tx: TenantTx, lotId: string): Pr
   return tx.serialized_units.count({ where: { lot_id: lotId } });
 }
 
+/**
+ * Bloquea TODOS los lotes de la variante, en una sola sentencia y en orden
+ * ascendente de `id` (.claude/rules/api.md, "Concurrencia"): no le saques el
+ * `ORDER BY`, es lo que evita el interbloqueo con otra operación que tome
+ * varios lotes. Lo usa `catalog.variant.update` antes de apagar
+ * `is_serialized` (WP-C08d), por el mismo motivo por el que el alta de una
+ * unidad bloquea su lote antes de contar: sin esto, un alta en vuelo cuya
+ * unidad todavía no se confirmó pasa inadvertida al contar, y la variante
+ * queda sin serializar con una unidad colgando.
+ *
+ * Es `NO KEY UPDATE` y no `UPDATE` a propósito: choca con el `FOR UPDATE` del
+ * alta de unidad (`lockLotRow`), que es lo que hace falta, pero no con el
+ * `FOR KEY SHARE` que toma cada movimiento de una venta por la FK, así que
+ * apagar la serialización no frena las ventas.
+ */
+export async function lockLotsOfVariant(tx: TenantTx, variantId: string): Promise<void> {
+  await tx.$queryRaw`
+    SELECT l.id FROM app.inventory_lots l
+    WHERE l.variant_id = ${variantId}::uuid
+    ORDER BY l.id
+    FOR NO KEY UPDATE OF l`;
+}
+
+/** Unidades registradas de la variante, de TODOS los estados: las vendidas también cuentan (RN-SER-03). */
+export async function countSerializedUnitsOfVariant(
+  tx: TenantTx,
+  variantId: string,
+): Promise<number> {
+  return tx.serialized_units.count({ where: { variant_id: variantId } });
+}
+
 export interface InsertSerializedUnitInput {
   readonly id: string;
   readonly tenantId: string;

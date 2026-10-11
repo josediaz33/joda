@@ -946,6 +946,22 @@ describe("módulo inventario · WP-C10 (RF-INV-03…05), WP-C11 (RF-INV-08) y WP
     }
   }
 
+  /** Espera a que una petición quede detenida en un bloqueo de fila: sin esto, sondear «todavía no terminó» daría falso verde. */
+  async function waitUntilABackendIsBlockedOnALock(): Promise<void> {
+    for (let attempt = 0; attempt < 40; attempt++) {
+      // Dentro de una transacción, pg_stat_activity devuelve la foto del primer
+      // acceso: sin descartarla nunca se ve el cambio.
+      await testDb.superuserClient.query("SELECT pg_stat_clear_snapshot()");
+      const blocked = await testDb.superuserClient.query(
+        `SELECT count(*)::int AS n FROM pg_stat_activity
+         WHERE wait_event_type = 'Lock' AND pid <> pg_backend_pid()`,
+      );
+      if (blocked.rows[0].n > 0) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error("la petición nunca quedó esperando un bloqueo");
+  }
+
   type SerialUnit = import("@joda/contracts").AdminSerializedUnit;
 
   function createSerial(lotId: string, serialNumber: string, extra: Record<string, unknown> = {}) {
@@ -1227,5 +1243,206 @@ describe("módulo inventario · WP-C10 (RF-INV-03…05), WP-C11 (RF-INV-08) y WP
     });
 
     expect(response.statusCode).toBe(404);
+  });
+
+  // -------------------------------------------------------------------
+  // WP-C08d · RN-SER-02. Apagar `is_serialized` de una variante con unidades
+  // registradas dejaría unidades colgando de una variante que ya no las admite.
+  // `catalog.variant.update` lo rechaza. Los relojes con `requiresSerial` no
+  // llegan a la guarda (WP-C08f ya rechaza apagarlo, porque contradice al
+  // producto): se prueba con un accesorio, que no hereda nada, y con un reloj
+  // anterior a E05c cuya variante quedó serializada sin que el producto lo pida.
+  // -------------------------------------------------------------------
+  let accessoryCounter = 0;
+  async function createSerializedAccessoryVariant(): Promise<{ productId: string; id: string }> {
+    const suffix = `${Date.now()}-${++accessoryCounter}`;
+    const category = await mutateOk<{ id: string }>("catalog.category.create", {
+      slug: `accesorios-c08d-${suffix}`,
+      name: "Accesorios",
+    });
+    const product = await mutateOk<{ id: string }>("catalog.product.create", {
+      kind: "accessory",
+      slug: `estuche-c08d-${suffix}`,
+      name: "Estuche numerado",
+      categoryIds: [category.id],
+      primaryCategoryId: category.id,
+      accessoryDetails: { material: null, color: null, sizeLabel: null },
+    });
+    const variant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: `SKU-ESTUCHE-C08D-${suffix}`,
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "150000",
+      isSerialized: true,
+    });
+    return { productId: product.id, id: variant.id };
+  }
+
+  async function variantIsSerialized(variantId: string): Promise<boolean> {
+    const row = await testDb.superuserClient.query(
+      `SELECT is_serialized FROM app.product_variants WHERE id = $1`,
+      [variantId],
+    );
+    return row.rows[0].is_serialized;
+  }
+
+  it("RN-SER-02 · apagar is_serialized con unidades registradas se rechaza con un error en español y la variante sigue serializada", async () => {
+    const variant = await createSerializedAccessoryVariant();
+    const lotId = await seedSealedLot(variant.id, { qtyInitial: 3, unitCostPyg: 100_000 });
+    expect((await createSerial(lotId, "SN-C08D-1")).statusCode).toBe(200);
+
+    const response = await mutate("catalog.variant.update", {
+      id: variant.id,
+      isSerialized: false,
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_VARIANT_HAS_SERIAL_UNITS");
+    expect(response.json().error.message).toBe(
+      "Esta variante ya tiene unidades con número de serie registradas: no se puede dejar de serializar.",
+    );
+    expect(response.json().error.data.details).toEqual({ registered: 1 });
+    expect(await variantIsSerialized(variant.id)).toBe(true);
+  });
+
+  it("RN-SER-02 · una unidad vendida también cuenta: el lote la trajo igual", async () => {
+    const variant = await createSerializedAccessoryVariant();
+    const lotId = await seedSealedLot(variant.id, { qtyInitial: 3, unitCostPyg: 100_000 });
+    const created = await createSerial(lotId, "SN-C08D-VENDIDA");
+    await testDb.superuserClient.query(
+      `UPDATE app.serialized_units SET status = 'sold' WHERE id = $1`,
+      [created.json().result.data.id],
+    );
+
+    const response = await mutate("catalog.variant.update", {
+      id: variant.id,
+      isSerialized: false,
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_VARIANT_HAS_SERIAL_UNITS");
+  });
+
+  it("RN-SER-02 · sin unidades registradas se puede apagar y volver a encender", async () => {
+    const variant = await createSerializedAccessoryVariant();
+    await seedSealedLot(variant.id, { qtyInitial: 3, unitCostPyg: 100_000 });
+
+    const off = await mutateOk<{ isSerialized: boolean }>("catalog.variant.update", {
+      id: variant.id,
+      isSerialized: false,
+    });
+    const on = await mutateOk<{ isSerialized: boolean }>("catalog.variant.update", {
+      id: variant.id,
+      isSerialized: true,
+    });
+
+    expect(off.isSerialized).toBe(false);
+    expect(on.isSerialized).toBe(true);
+  });
+
+  it("RN-SER-02 · con unidades registradas se sigue editando todo lo demás, y mandar isSerialized: true no cambia nada", async () => {
+    const variant = await createSerializedAccessoryVariant();
+    const lotId = await seedSealedLot(variant.id, { qtyInitial: 3, unitCostPyg: 100_000 });
+    await createSerial(lotId, "SN-C08D-EDITA");
+
+    const edited = await mutateOk<{ pricePyg: string; isSerialized: boolean }>(
+      "catalog.variant.update",
+      { id: variant.id, pricePyg: "175000", isSerialized: true },
+    );
+
+    expect(edited.pricePyg).toBe("175000");
+    expect(edited.isSerialized).toBe(true);
+  });
+
+  it("RN-SER-02 · la guarda rige también cuando WP-C08f no interviene: una variante de reloj que no hereda serie pero tiene unidades", async () => {
+    const suffix = `${Date.now()}-${++accessoryCounter}`;
+    const category = await mutateOk<{ id: string }>("catalog.category.create", {
+      slug: `relojes-c08d-${suffix}`,
+      name: "Relojes",
+    });
+    const product = await mutateOk<{ id: string }>("catalog.product.create", {
+      kind: "watch",
+      slug: `reloj-sin-serie-c08d-${suffix}`,
+      name: "Reloj de cuarzo",
+      categoryIds: [category.id],
+      primaryCategoryId: category.id,
+      watchDetails: {
+        movement: "quartz",
+        caseMaterial: "acero",
+        caseDiameterMm: 38,
+        waterResistanceM: 50,
+        strapMaterial: null,
+        crystal: "mineral",
+        warrantyMonths: 12,
+        requiresSerial: false,
+      },
+    });
+    const variant = await mutateOk<{ id: string; isSerialized: boolean }>(
+      "catalog.variant.create",
+      {
+        productId: product.id,
+        sku: `SKU-CUARZO-C08D-${suffix}`,
+        variantType: "unit",
+        uom: "unit",
+        sizeMl: null,
+        pricePyg: "900000",
+      },
+    );
+    expect(variant.isSerialized).toBe(false);
+    // Una variante anterior a E05c: serializada aunque el producto no lo pida.
+    await testDb.superuserClient.query(
+      `UPDATE app.product_variants SET is_serialized = true WHERE id = $1`,
+      [variant.id],
+    );
+    const lotId = await seedSealedLot(variant.id, { qtyInitial: 2, unitCostPyg: 600_000 });
+    await createSerial(lotId, "SN-C08D-CUARZO");
+
+    // Coincide con `requires_serial = false`: C08f lo acepta; lo frena la guarda de las unidades.
+    const response = await mutate("catalog.variant.update", {
+      id: variant.id,
+      isSerialized: false,
+    });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_VARIANT_HAS_SERIAL_UNITS");
+  });
+
+  it("RN-SER-02 · apagar espera a un alta de unidad en curso, la ve al terminar y se rechaza", async () => {
+    const variant = await createSerializedAccessoryVariant();
+    const lotId = await seedSealedLot(variant.id, { qtyInitial: 3, unitCostPyg: 100_000 });
+
+    // Un alta de unidad en vuelo: tiene el lote tomado y la unidad insertada, sin confirmar.
+    // Una petición que contara las unidades antes de tomar los lotes vería cero, apagaría la
+    // variante, y al confirmarse el alta quedaría una unidad en una variante no serializada.
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        "SELECT id FROM app.inventory_lots WHERE id = $1 FOR UPDATE",
+        [lotId],
+      );
+      await testDb.superuserClient.query(
+        `INSERT INTO app.serialized_units (tenant_id, variant_id, lot_id, serial_number)
+         VALUES ($1, $2, $3, 'SN-C08D-EN-VUELO')`,
+        [TENANT_ID, variant.id, lotId],
+      );
+      pending = mutate("catalog.variant.update", { id: variant.id, isSerialized: false });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+      const response = await pending;
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.data.appCode).toBe("CONFLICT_VARIANT_HAS_SERIAL_UNITS");
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    expect(await variantIsSerialized(variant.id)).toBe(true);
   });
 });
