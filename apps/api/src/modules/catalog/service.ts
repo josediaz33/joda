@@ -359,7 +359,7 @@ const BULK_VARIANT_EXISTS_ERROR = appError(
 // regla rige al actualizar la variante, que no puede contradecir al producto.
 // Lo inverso, cambiar `requires_serial` del producto con variantes ya creadas,
 // espera la decisión de José (WP-C08h). Apagarlo con unidades ya registradas lo rechaza
-// `assertNoSerialUnits` (WP-C08d).
+// `lockLotsAndAssertNoSerialUnits` (WP-C08d).
 //
 // El refine de `createVariantInput` sobre `isSerialized` solo ve lo que manda el
 // cliente, no lo que se hereda; por eso el CHECK `NOT is_serialized OR uom =
@@ -445,11 +445,17 @@ export async function createVariant(
  * Cuentan las unidades de todos los estados (RN-SER-03).
  *
  * Primero se bloquean los lotes de la variante y después se cuenta: el alta de una
- * unidad bloquea su lote antes de leer el flag de la variante, así que o la unidad
- * ya está confirmada cuando se cuenta, o el alta espera y encuentra la variante
- * apagada y se rechaza. Sin el bloqueo, un alta en vuelo pasa inadvertida.
+ * unidad bloquea su lote antes de leer el flag de la variante, así que, sobre un lote
+ * que ya existe, o la unidad ya está confirmada cuando se cuenta, o el alta espera y
+ * encuentra la variante apagada y se rechaza. Sin el bloqueo, un alta en vuelo pasa
+ * inadvertida.
+ *
+ * **Toma bloqueos, no solo cuenta.** Y tiene límites: el bloqueo corre con la
+ * visibilidad de quien apaga (sin permisos de inventario sobre los lotes no bloquea
+ * nada) y no ve un lote que nace después con sus unidades. El invariante completo
+ * vive en la base: WP-B20.
  */
-async function assertNoSerialUnits(tx: TenantTx, variantId: string): Promise<void> {
+async function lockLotsAndAssertNoSerialUnits(tx: TenantTx, variantId: string): Promise<void> {
   await inventoryRepo.lockLotsOfVariant(tx, variantId);
   const registered = await inventoryRepo.countSerializedUnitsOfVariant(tx, variantId);
   if (registered > 0) {
@@ -486,7 +492,7 @@ export async function updateVariant(
     }
     // Solo al apagar: encender no tiene este problema (el CHECK de la base ya exige `unit`).
     if (isSerialized === false && existing.is_serialized) {
-      await assertNoSerialUnits(tx, existing.id);
+      await lockLotsAndAssertNoSerialUnits(tx, existing.id);
     }
 
     await repo.updateVariantRow(tx, input.id, {

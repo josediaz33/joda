@@ -371,8 +371,17 @@ export async function countSerializedUnitsOfLot(tx: TenantTx, lotId: string): Pr
  *
  * Es `NO KEY UPDATE` y no `UPDATE` a propósito: choca con el `FOR UPDATE` del
  * alta de unidad (`lockLotRow`), que es lo que hace falta, pero no con el
- * `FOR KEY SHARE` que toma cada movimiento de una venta por la FK, así que
- * apagar la serialización no frena las ventas.
+ * `FOR KEY SHARE` que toma cada movimiento por la FK. Sí espera a cualquier
+ * otro `FOR UPDATE` sobre esos lotes (ajustes, ejecución de decants, altas de
+ * unidades); todos toman los suyos en orden ascendente de `id`.
+ *
+ * **Corre con la visibilidad de quien llama.** Con RLS, un `FOR UPDATE` solo
+ * toma las filas que pasan además la política de UPDATE de `inventory_lots`
+ * (`market.purchase_order:receive`, `inventory.decant:execute`,
+ * `sales.order:refund` o `inventory.stock:adjust`): quien no tiene ninguno no
+ * bloquea nada, y no hay error. Con los roles sembrados no pasa; con roles a
+ * medida (WP-C24) sí. Tampoco ve un lote que nace después con sus unidades. El
+ * cierre real es un invariante en la base: WP-B20.
  */
 export async function lockLotsOfVariant(tx: TenantTx, variantId: string): Promise<void> {
   await tx.$queryRaw`
