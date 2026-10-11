@@ -174,7 +174,9 @@ Se generan dos filas en `movement_cost_allocations`. El COGS de la venta es 4.35
 
 **Qué decidió José explícitamente, 2026-10-09** (las tres preguntas abiertas de WP-C16, ninguna cubierta hasta ahora en este documento): el margen se calcula neto de IVA, igual que RN-FRA-04 (RN-SRC-02); el arancel se modela ad valorem, cargado como `other` de `LandedCostComponents` (RN-SRC-01); `projected_landed_pyg` y `projected_price_pyg` son por unidad, no el total de la línea (RN-SRC-02).
 
-**Qué quedó como decisión técnica propia, no confirmada palabra por palabra con José** (corrección de la revisión cruzada de WP-C16, §7: una versión anterior de este encabezado las presentaba juntas, sin distinguir): que un precio proyectado inválido es excepción y no `Result` (RN-SRC-02, por el mismo precedente que `fxRateToPyg` en RN-COS-01, `procurement/landedCost.ts`); el redondeo a milésimas del margen (RN-SRC-02); y el criterio de "mejor opción" de `compareScenarioLines` como mayor margen porcentual (RN-SRC-04) — este último sigue sin confirmar y puede no ser el correcto si las líneas comparadas tienen cantidades o precios muy distintos (margen % y ganancia absoluta pueden contradecirse).
+**Qué decidió José explícitamente, 2026-10-11** (segunda revisión cruzada): el criterio de "mejor opción" de `compareScenarioLines` es la mayor **ganancia absoluta** por unidad, no el mayor margen porcentual — el margen % se muestra como dato auxiliar, pero no decide (RN-SRC-04).
+
+**Qué quedó como decisión técnica propia, no confirmada palabra por palabra con José** (corrección de la revisión cruzada de WP-C16, §7: una versión anterior de este encabezado las presentaba juntas, sin distinguir): que un precio proyectado inválido es excepción y no `Result` (RN-SRC-02, por el mismo precedente que `fxRateToPyg` en RN-COS-01, `procurement/landedCost.ts`); y el redondeo a milésimas del margen (RN-SRC-02).
 
 ### RN-SRC-01 · Costo puesto proyectado de una línea
 
@@ -238,9 +240,22 @@ El `round3` del umbral **no es cosmético**: `0,07 × 100` da `7.000000000000001
 
 **Siguiendo el ejemplo de RN-SRC-02:** con un umbral del 25%, un margen de 19,7% dispara la alerta.
 
-### RN-SRC-04 · Criterio de "mejor opción" al comparar — sin confirmar
+### RN-SRC-04 · Criterio de "mejor opción" al comparar: ganancia absoluta
 
-**Pendiente, anotado en la revisión cruzada de WP-C16 (§3): esto no fue decisión de José, preguntar antes de dar por buena.** `compareScenarioLines` hoy elige la línea con **mayor margen porcentual** dentro de cada variante. Es razonable como default (comparar tasas, no montos, es el criterio natural cuando las alternativas son del mismo producto bajo distintos supuestos de compra — proveedor A vs. B, GLOSARIO.md), pero margen % y ganancia absoluta por unidad pueden apuntar a líneas distintas si las cantidades o precios proyectados difieren mucho entre alternativas, y hoy no hay ninguna regla que diga cuál gana en ese caso. El desempate entre dos líneas con margen EXACTAMENTE igual es determinístico (gana la primera vista, por orden de entrada), eso sí probado.
+`compareScenarioLines` elige, dentro de cada variante, la línea con mayor **ganancia por unidad** (`profitPyg = precio_neto_unitario − costo_puesto_unitario`, el mismo numerador de RN-SRC-02 antes de dividir por el precio) — no la de mayor margen porcentual. `marginPct` sigue siendo parte de la proyección y se muestra en la comparación, pero como dato **auxiliar**: no decide cuál opción gana.
+
+**Por qué no el margen %:** dos alternativas de precio o cantidad muy distintos pueden tener el margen % y la ganancia absoluta apuntando a líneas diferentes — la plata entra en guaraníes, no en puntos porcentuales, y una línea con margen alto sobre un monto chico puede dejar menos plata que una de margen bajo sobre un monto grande.
+
+**Ejemplo que distingue los dos criterios.** Dos líneas de distinta escala, sin flete ni arancel:
+
+| Línea                        | Costo puesto | Precio neto | Ganancia   | Margen % |
+| ---------------------------- | ------------ | ----------- | ---------- | -------- |
+| Margen alto, ganancia chica  | 95           | 100         | **5**      | 5%       |
+| Margen bajo, ganancia grande | 990.000      | 1.000.000   | **10.000** | 1%       |
+
+Por margen % ganaría la primera (5% > 1%); por ganancia absoluta (RN-SRC-04) gana la segunda — es la que efectivamente deja más plata. `compareScenarioLines` devuelve la segunda.
+
+El desempate entre dos líneas con ganancia EXACTAMENTE igual es determinístico: gana la primera vista, por orden de entrada.
 
 **Fuera de alcance de WP-C16 (RF-SRC-04/05, anotado para WP-C16b).** Que un escenario no afecte inventario, caja ni cuentas por pagar es una garantía arquitectónica, no una regla con fórmula: `packages/domain` no tiene I/O, así que ninguna función de este módulo puede escribir en el ledger aunque quisiera (RF-SRC-04). Convertir un escenario en orden de compra (RF-SRC-05) es una escritura — pertenece a `apps/api`, fuera del alcance de `packages/domain` y de este WP; ver la fila de WP-C16b en `docs/backlog.md`.
 

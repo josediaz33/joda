@@ -161,7 +161,7 @@ describe("RN-SRC-02 · margen proyectado, neto de IVA", () => {
     ).toThrow(InvalidSourcingInputError);
   });
 
-  it("un costo puesto mayor al precio neto da un margen negativo — una línea en pérdida no es un bug (revisión cruzada, §3)", () => {
+  it("un costo puesto mayor al precio neto da un margen negativo — una línea en pérdida no es un bug", () => {
     const projections = expectOkProjections(
       projectScenarioLines({
         lines: [
@@ -267,13 +267,12 @@ describe("RN-SRC-03 · alerta de margen bajo umbral configurable", () => {
   });
 });
 
-// RN-SRC-04 está marcada "sin confirmar" en domain-rules.md: el criterio de
-// "mejor opción" (mayor margen %) es una decisión técnica propia, no
-// confirmada con José (hallazgo de la revisión cruzada, §3/§7). Estos tests
-// prueban el COMPORTAMIENTO actual del código, no que el criterio sea el
-// correcto para el negocio.
-describe("RN-SRC-04 · compareScenarioLines agrupa por variante y señala la de mejor margen", () => {
-  it("proveedor A (margen 19,700%) vs. proveedor B (margen 44,937%) de la misma variante: B es la mejor", () => {
+// RN-SRC-04, decisión de José (segunda revisión cruzada de WP-C16): "mejor
+// opción" es la de mayor GANANCIA ABSOLUTA por unidad (profitPyg), no la de
+// mayor margen porcentual — marginPct queda como dato auxiliar en la
+// proyección, no decide nada acá.
+describe("RN-SRC-04 · compareScenarioLines agrupa por variante y señala la de mayor ganancia absoluta", () => {
+  it("proveedor A (ganancia Gs. 626.818) vs. proveedor B (ganancia Gs. 1.429.818) de la misma variante: B es la mejor", () => {
     const optionA = expectOkProjections(
       projectScenarioLines(buildInput({ lines: [buildLine({ id: "line-A", variantLabel: "A" })] })),
     );
@@ -296,10 +295,61 @@ describe("RN-SRC-04 · compareScenarioLines agrupa por variante y señala la de 
     expect(groups).toHaveLength(1);
     expect(groups[0]!.variantId).toBe("variant-1");
     expect(groups[0]!.bestLineId).toBe("line-B");
-    expect(optionB[0]!.marginPct).toBe(44.937);
+    expect(optionA[0]!.profitPyg.minor).toBe(626_818n);
+    expect(optionB[0]!.profitPyg.minor).toBe(1_429_818n);
   });
 
-  it("empate exacto de margen: gana la primera línea vista, no la segunda (desempate determinístico, revisión cruzada §3)", () => {
+  it("margen % y ganancia absoluta pueden apuntar a opciones distintas: gana la de mayor ganancia, aunque tenga menor margen", () => {
+    // Línea de margen alto pero ganancia chica: costo 95, precio neto 100 → ganancia 5, margen 5%.
+    const highMarginLowProfit = buildLine({
+      id: "line-high-margin",
+      variantId: "variant-conflict",
+      unitPrice: Money.of(9_500n, "USD"),
+      fxRateToPyg: 1,
+      projectedPricePyg: Money.pyg(100n),
+      vatRate: "exenta",
+    });
+    // Línea de margen bajo pero ganancia grande: costo 990.000, precio neto 1.000.000 → ganancia 10.000, margen 1%.
+    const lowMarginHighProfit = buildLine({
+      id: "line-low-margin",
+      variantId: "variant-conflict",
+      unitPrice: Money.of(99_000_000n, "USD"),
+      fxRateToPyg: 1,
+      projectedPricePyg: Money.pyg(1_000_000n),
+      vatRate: "exenta",
+    });
+    const noFreightOrTariff = {
+      freightTotal: Money.of(0n, "USD"),
+      freightMethod: "by_value" as const,
+      tariffRate: Percentage.of(0),
+    };
+
+    const highMargin = expectOkProjections(
+      projectScenarioLines({
+        lines: [highMarginLowProfit],
+        assumptions: noFreightOrTariff,
+        marginThresholdPct: Percentage.of(0.25),
+      }),
+    );
+    const lowMargin = expectOkProjections(
+      projectScenarioLines({
+        lines: [lowMarginHighProfit],
+        assumptions: noFreightOrTariff,
+        marginThresholdPct: Percentage.of(0.25),
+      }),
+    );
+
+    expect(highMargin[0]!.marginPct).toBe(5);
+    expect(highMargin[0]!.profitPyg.minor).toBe(5n);
+    expect(lowMargin[0]!.marginPct).toBe(1);
+    expect(lowMargin[0]!.profitPyg.minor).toBe(10_000n);
+
+    const groups = compareScenarioLines([...highMargin, ...lowMargin]);
+
+    expect(groups[0]!.bestLineId).toBe("line-low-margin");
+  });
+
+  it("empate exacto de ganancia: gana la primera línea vista, no la segunda (desempate determinístico)", () => {
     const optionA = expectOkProjections(
       projectScenarioLines(buildInput({ lines: [buildLine({ id: "line-A", variantLabel: "A" })] })),
     );
@@ -307,12 +357,12 @@ describe("RN-SRC-04 · compareScenarioLines agrupa por variante y señala la de 
       projectScenarioLines(buildInput({ lines: [buildLine({ id: "line-B", variantLabel: "B" })] })),
     );
 
-    expect(optionA[0]!.marginPct).toBe(optionB[0]!.marginPct);
+    expect(optionA[0]!.profitPyg.minor).toBe(optionB[0]!.profitPyg.minor);
     expect(compareScenarioLines([...optionA, ...optionB])[0]!.bestLineId).toBe("line-A");
     expect(compareScenarioLines([...optionB, ...optionA])[0]!.bestLineId).toBe("line-B");
   });
 
-  it("si la primera línea ya es la mejor, una segunda con menos margen no la desplaza", () => {
+  it("si la primera línea ya es la mejor, una segunda con menos ganancia no la desplaza", () => {
     const optionA = expectOkProjections(
       projectScenarioLines(buildInput({ lines: [buildLine({ id: "line-A", variantLabel: "A" })] })),
     );
@@ -330,7 +380,7 @@ describe("RN-SRC-04 · compareScenarioLines agrupa por variante y señala la de 
       ),
     );
 
-    // Orden invertido respecto al test anterior: B (44,937%) entra primero.
+    // Orden invertido respecto al primer test: B (ganancia mayor) entra primero.
     const groups = compareScenarioLines([...optionB, ...optionA]);
 
     expect(groups[0]!.bestLineId).toBe("line-B");

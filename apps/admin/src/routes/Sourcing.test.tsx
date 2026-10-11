@@ -56,14 +56,35 @@ async function fillWorkedExample(user: ReturnType<typeof userEvent.setup>) {
 }
 
 describe("RN-SRC-01/02 · WP-C16, vista previa de sourcing calculada en el cliente", () => {
-  it("reloj importado: USD 300 + flete USD 20 + arancel 10%, fx 7.300 → costo puesto Gs. 2.555.000 y margen 19,7%", async () => {
+  it("reloj importado: USD 300 + flete USD 20 + arancel 10%, fx 7.300 → costo puesto Gs. 2.555.000, ganancia Gs. 626.818 (19,7% auxiliar)", async () => {
     const user = userEvent.setup();
     renderSourcing();
 
     await fillWorkedExample(user);
 
     expect(await screen.findByText("Gs. 2.555.000")).toBeTruthy();
+    expect(await screen.findByText("Gs. 626.818")).toBeTruthy();
     expect(await screen.findByText("19,7%")).toBeTruthy();
+  });
+
+  it("escribir sobre el campo de precio sin borrar primero no antepone un cero (segunda revisión cruzada): un click y un type de '3500000' da '3500000', no '03500000'", async () => {
+    const user = userEvent.setup();
+    renderSourcing();
+
+    await user.click(screen.getByLabelText("Id de variante"));
+    await user.paste(VARIANT_ID);
+    // Sin user.clear(): el campo arranca vacío (no en "0"), así que escribir
+    // directo sobre él no antepone nada — a diferencia de un <input
+    // type="number">, un type="text" no sanitiza ceros a la izquierda solo.
+    await user.click(screen.getByLabelText("Precio de venta proyectado"));
+    await user.type(screen.getByLabelText("Precio de venta proyectado"), "3500000");
+
+    expect((screen.getByLabelText("Precio de venta proyectado") as HTMLInputElement).value).toBe(
+      "3500000",
+    );
+    expect(
+      screen.queryByText("Línea 1: el precio de venta proyectado tiene que ser mayor a cero."),
+    ).toBeNull();
   });
 
   it("RF-SRC-04 · nunca ofrece una acción que afecte inventario o caja mientras no exista la API (WP-C16b)", async () => {
@@ -174,7 +195,7 @@ describe("RN-SRC-01/02 · validaciones de negocio que el contrato no expresa, he
 });
 
 describe("RF-SRC-02 · comparación línea por línea de la misma variante", () => {
-  it("dos líneas con la misma variante: la de mejor margen se marca como mejor opción", async () => {
+  it("dos líneas con la misma variante: la de mayor ganancia absoluta se marca como mejor opción (RN-SRC-04)", async () => {
     const user = userEvent.setup();
     renderSourcing();
 

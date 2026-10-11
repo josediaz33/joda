@@ -70,7 +70,13 @@ export interface ScenarioLineProjection {
   readonly variantLabel: string | undefined;
   /** Costo puesto por unidad (RN-SRC-01) — comparable directamente con projectedPricePyg. */
   readonly unitLandedPyg: Money;
-  /** Porcentaje (19.7 = 19,7%), neto de IVA (RN-SRC-02). Puede ser negativo: una línea en pérdida no es un bug. */
+  /**
+   * Ganancia por unidad, neta de IVA: precio neto menos costo puesto
+   * (RN-SRC-02). Criterio de "mejor opción" de RN-SRC-04 — puede ser
+   * negativa: una línea en pérdida no es un bug.
+   */
+  readonly profitPyg: Money;
+  /** Porcentaje (19.7 = 19,7%), neto de IVA (RN-SRC-02). Dato AUXILIAR (RN-SRC-04): no decide cuál opción es mejor, eso lo hace profitPyg. */
   readonly marginPct: number;
   readonly belowThreshold: boolean;
 }
@@ -119,6 +125,7 @@ function projectLine(
     variantId: line.variantId,
     variantLabel: line.variantLabel,
     unitLandedPyg,
+    profitPyg: profit,
     marginPct,
     belowThreshold: marginPct < marginThresholdPct,
   };
@@ -173,18 +180,20 @@ export function projectScenarioLines(
 export interface ScenarioComparisonGroup {
   readonly variantId: string;
   readonly projections: readonly ScenarioLineProjection[];
-  /** El id de línea con mayor marginPct del grupo — el desempate es el primero visto, determinístico por orden de entrada. */
+  /** El id de línea con mayor profitPyg del grupo (RN-SRC-04) — el desempate es el primero visto, determinístico por orden de entrada. */
   readonly bestLineId: string;
 }
 
 /**
- * RF-SRC-02 · agrupa proyecciones por variante (GLOSARIO.md "Sourcing /
+ * RN-SRC-04 · agrupa proyecciones por variante (GLOSARIO.md "Sourcing /
  * escenario": proveedor A vs. B, comprar ahora vs. esperar es la misma
- * variante bajo dos supuestos) y señala cuál conviene por margen (RN-SRC-04,
- * marcada "sin confirmar" en docs/domain-rules.md — mayor margen % y mayor
- * ganancia absoluta pueden contradecirse con cantidades o precios
- * distintos; corrección de la revisión cruzada de WP-C16, que esta función
- * citaba como RF-SRC-02, un requisito, no una regla de negocio decidida).
+ * variante bajo dos supuestos) y señala cuál conviene por GANANCIA
+ * ABSOLUTA por unidad (profitPyg), decisión de José — no por margen
+ * porcentual: dos líneas con precios o cantidades muy distintos pueden
+ * tener el margen % y la ganancia absoluta apuntando a opciones distintas,
+ * y la plata entra en guaraníes, no en puntos porcentuales. marginPct
+ * sigue siendo parte de la proyección, pero como dato AUXILIAR — no decide
+ * cuál es la mejor opción.
  */
 export function compareScenarioLines(
   projections: readonly ScenarioLineProjection[],
@@ -204,7 +213,7 @@ export function compareScenarioLines(
   return order.map((variantId) => {
     const group = byVariant.get(variantId)!;
     const best = group.reduce((best, current) =>
-      current.marginPct > best.marginPct ? current : best,
+      current.profitPyg.compare(best.profitPyg) > 0 ? current : best,
     );
     return { variantId, projections: group, bestLineId: best.lineId };
   });

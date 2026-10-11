@@ -54,6 +54,12 @@ type DraftLine = {
   volume: string;
 };
 
+// Los campos de texto (type="text", no type="number") arrancan en "" y NO
+// en "0": un <input type="number"> sanitiza los ceros a la izquierda al
+// escribir (0 + "10" tipeado da "10"), pero type="text" no — con "0" como
+// valor inicial, hacer click al final y escribir "3500000" sin borrar da
+// "03500000", que la validación nueva rechaza. Regresión real de la
+// revisión cruzada anterior, con test (Sourcing.test.tsx).
 function newLine(): DraftLine {
   return {
     key: crypto.randomUUID(),
@@ -61,12 +67,12 @@ function newLine(): DraftLine {
     variantLabel: "",
     uom: "unit",
     qty: "1",
-    unitPriceMinor: "0",
+    unitPriceMinor: "",
     currency: "USD",
     fxAssumed: "7300",
     vatRate: "iva_10",
-    projectedPricePyg: "0",
-    manualFreightMinor: "0",
+    projectedPricePyg: "",
+    manualFreightMinor: "",
     volume: "0",
   };
 }
@@ -80,7 +86,7 @@ type Assumptions = {
 
 function defaultAssumptions(): Assumptions {
   return {
-    freightTotalMinor: "0",
+    freightTotalMinor: "",
     freightCurrency: "USD",
     freightMethod: "by_value",
     tariffRatePct: "0",
@@ -99,8 +105,7 @@ type Computation =
 
 // Record<FreightError["code"], string> en vez de Record<string, string>: si
 // procurement/freight.ts (WP-A05) agrega un código de error nuevo, TypeScript
-// obliga a mapearlo acá en vez de caer en silencio al mensaje genérico
-// (hallazgo de la revisión cruzada, §4).
+// obliga a mapearlo acá en vez de caer en silencio al mensaje genérico.
 const FREIGHT_ERROR_MESSAGES: Record<FreightError["code"], string> = {
   EMPTY_LINES: "Agregá al menos una línea para prorratear el flete.",
   ZERO_TOTAL_WEIGHT: "Ninguna línea tiene valor, cantidad o volumen para repartir el flete.",
@@ -138,10 +143,9 @@ function toScenarioLineInput(line: DraftLine): ScenarioLineInput {
  * en el contrato: `sourcing_scenario_lines` no tiene esa columna, RN-SRC-01).
  * Sin esto, una entrada que el contrato acepta llega al dominio y éste la
  * rechaza con una EXCEPCIÓN (precio proyectado positivo, cantidad entera
- * para 'unit', moneda extranjera) en vez de un mensaje de validación
- * (hallazgo de la revisión cruzada, §1/§2): un precio en 0 —el valor por
- * defecto de una línea nueva— no debería mostrarle al usuario el mensaje
- * interno de `InvalidSourcingInputError`.
+ * para 'unit', moneda extranjera) en vez de un mensaje de validación: un
+ * precio en 0 —el valor por defecto de una línea nueva— no debería
+ * mostrarle al usuario el mensaje interno de `InvalidSourcingInputError`.
  */
 function validateCrossFieldRules(lines: readonly DraftLine[], assumptions: Assumptions): string[] {
   const errors: string[] = [];
@@ -393,7 +397,7 @@ export default function Sourcing() {
               <th className="py-2 pr-2">IVA</th>
               <th className="py-2 pr-2">Precio de venta (Gs.)</th>
               <th className="py-2 pr-2">Costo puesto/u.</th>
-              <th className="py-2 pr-2">Margen</th>
+              <th className="py-2 pr-2">Ganancia/u.</th>
               <th className="py-2 pr-2" />
             </tr>
           </thead>
@@ -563,7 +567,15 @@ export default function Sourcing() {
                   >
                     {projection ? (
                       <span>
-                        <span>{formatPercent(projection.marginPct)}</span>
+                        {/* Ganancia absoluta: criterio de "mejor opción" (RN-SRC-04, decisión
+                            de José). El margen % queda como dato auxiliar, entre paréntesis —
+                            no decide nada. */}
+                        <span>{formatPyg(projection.profitPyg.minor.toString())}</span>
+                        {" ("}
+                        <span className="text-xs text-text-secondary">
+                          {formatPercent(projection.marginPct)}
+                        </span>
+                        {")"}
                         {projection.belowThreshold && (
                           <span aria-label="Por debajo del umbral"> ⚠</span>
                         )}
