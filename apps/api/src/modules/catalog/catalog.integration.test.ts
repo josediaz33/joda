@@ -1251,20 +1251,30 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(page.items.map((item) => item.slug)).not.toContain("c08b-marca-ajena");
   });
 
-  it("docs/api-conventions.md §8.4 · una marca inexistente da el mismo 404 que una ajena", async () => {
+  it("docs/api-conventions.md §8.4 · una marca inexistente da exactamente la misma respuesta que una ajena", async () => {
+    await seedForeignCatalog();
     const category = await createCategory("c08b-cat-marca-inexistente");
+    const create = (slug: string, brandId: string) =>
+      mutate("catalog.product.create", {
+        kind: "accessory",
+        slug,
+        name: slug,
+        brandId,
+        categoryIds: [category.id],
+        primaryCategoryId: category.id,
+        accessoryDetails: { material: null, color: null, sizeLabel: null },
+      });
 
-    const response = await mutate("catalog.product.create", {
-      kind: "accessory",
-      slug: "c08b-marca-inexistente",
-      name: "Con marca inexistente",
-      brandId: UNKNOWN_ID,
-      categoryIds: [category.id],
-      primaryCategoryId: category.id,
-      accessoryDetails: { material: null, color: null, sizeLabel: null },
-    });
+    const foreign = await create("c08b-marca-ajena-2", FOREIGN_BRAND_ID);
+    const unknown = await create("c08b-marca-inexistente", UNKNOWN_ID);
 
-    expect(response.statusCode).toBe(404);
+    // Mismo estado, mismo código y mismo mensaje: nada que revele si el id existe en otro tenant.
+    expect(foreign.statusCode).toBe(404);
+    expect(unknown.statusCode).toBe(404);
+    expect(foreign.json().error.data.appCode).toBe("NOT_FOUND");
+    expect(unknown.json().error.data.appCode).toBe("NOT_FOUND");
+    expect(foreign.json().error.message).toBe("No encontrado.");
+    expect(unknown.json().error.message).toBe("No encontrado.");
   });
 
   it("docs/api-conventions.md §8.4 · actualizar un producto con la marca de otro tenant da 404 y conserva la suya", async () => {
@@ -1361,9 +1371,56 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
 
     expect(foreign.statusCode).toBe(404);
     expect(unknown.statusCode).toBe(404);
+    expect(foreign.json().error.data.appCode).toBe("NOT_FOUND");
+    expect(unknown.json().error.data.appCode).toBe("NOT_FOUND");
+    expect(foreign.json().error.message).toBe("No encontrado.");
+    expect(unknown.json().error.message).toBe("No encontrado.");
     const fetched = await call<{ sourceVariantId: string | null }>("catalog.variant.byId", {
       id: decant.id,
     });
     expect(fetched.sourceVariantId).toBe(bulk.id);
+  });
+
+  it("docs/api-conventions.md §8.4 · actualizar el origen de una variante con otra variante propia se acepta, y null lo quita", async () => {
+    const product = await createAccessory("c08b-variante-origen-propio");
+    const firstSource = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08B-ORIGEN-1",
+      variantType: "bulk",
+      uom: "ml",
+      sizeMl: null,
+      pricePyg: "0",
+    });
+    const secondSource = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08B-ORIGEN-2",
+      variantType: "supply",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "0",
+    });
+    const decant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08B-DECANT-PROPIO",
+      variantType: "decant",
+      uom: "ml",
+      sizeMl: 10,
+      pricePyg: "285000",
+      productionMode: "made_to_order",
+      sourceVariantId: firstSource.id,
+    });
+
+    const moved = await mutateOk<{ sourceVariantId: string | null }>("catalog.variant.update", {
+      id: decant.id,
+      sourceVariantId: secondSource.id,
+    });
+    const cleared = await mutateOk<{ sourceVariantId: string | null; productionMode: string }>(
+      "catalog.variant.update",
+      { id: decant.id, productionMode: "stocked", sourceVariantId: null },
+    );
+
+    expect(moved.sourceVariantId).toBe(secondSource.id);
+    expect(cleared.sourceVariantId).toBeNull();
+    expect(cleared.productionMode).toBe("stocked");
   });
 });

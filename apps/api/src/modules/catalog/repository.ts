@@ -133,13 +133,13 @@ export async function countExistingCategoryIds(
   return tx.categories.count({ where: { id: { in: [...ids] } } });
 }
 
+export async function countExistingTagIds(tx: TenantTx, ids: readonly string[]): Promise<number> {
+  return tx.tags.count({ where: { id: { in: [...ids] } } });
+}
+
 /** ¿Hay una marca con este id para el tenant de la sesión? RLS deja ver solo las propias, así que una ajena no cuenta. */
 export async function brandExists(tx: TenantTx, id: string): Promise<boolean> {
   return (await tx.brands.count({ where: { id } })) > 0;
-}
-
-export async function countExistingTagIds(tx: TenantTx, ids: readonly string[]): Promise<number> {
-  return tx.tags.count({ where: { id: { in: [...ids] } } });
 }
 
 /** Reemplaza TODA la asignación de categorías del producto — el caller siempre manda la lista completa (docs/api-conventions.md, no hay PATCH parcial de una relación N:N con un índice único parcial de por medio). */

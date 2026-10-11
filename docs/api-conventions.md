@@ -291,6 +291,8 @@ Las comprobaciones de integridad referencial de PostgreSQL corren con privilegio
 
 El patrón correcto está en `apps/api/src/modules/catalog/service.ts` (`assertCategoryAndTagIdsExist`, `findProductRow`): un `SELECT ... count()`/`findX` tenant-scoped, dentro de `withTenantTx`, antes del `INSERT`/`UPDATE` que usa ese id. Este fue exactamente el hueco que motivó WP-B08: `product_media` insertaba con `productId` del cliente sin esta verificación (encontrado en la revisión cruzada de WP-C09), y luego apareció el mismo patrón sin corregir en `categoryId`/`tagId` de `catalog.service.ts` (corregido en el mismo PR de WP-B08) y en `brandId`/`sourceVariantId` del mismo archivo (corregido en WP-C08b). Cada columna nueva que referencia otra tabla con `tenant_id` propio necesita este chequeo — no es opcional para "las columnas obvias".
 
+**Matiz desde 0023 (WP-B08c).** Las FKs entre tablas con `tenant_id` son compuestas, `(col, tenant_id) REFERENCES destino (id, tenant_id)`, así que la base ya rechaza el cruce de tenants, pero con un 409 genérico (`CONFLICT_FOREIGN_KEY`) que no distingue un id ajeno de un conflicto real. El chequeo del servicio sigue siendo obligatorio: da la respuesta correcta (404, la misma para un id ajeno y para uno inexistente), no depende de que una migración futura conserve la FK, y es lo que protege a una tabla cuya FK todavía sea de una sola columna. WP-C08b lo aplicó a `brandId` y `sourceVariantId`, que ya estaban cubiertos por la FK compuesta.
+
 ---
 
 ## 9. Autorización
