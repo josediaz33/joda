@@ -55,7 +55,7 @@ describe("RN-SRC-01 · costo puesto proyectado de una línea", () => {
     expect(projections[0]!.unitLandedPyg.currency).toBe("PYG");
   });
 
-  it("el arancel ad valorem escala con qty: costo puesto unitario no cambia si el flete fuera proporcional, pero SÍ cambia porque el flete es un total fijo repartido entre más unidades", () => {
+  it("el costo puesto unitario cambia con qty porque el flete es un total FIJO que se diluye entre más unidades (el arancel ad valorem, en cambio, escala con el valor y no distorsiona)", () => {
     // qty 2 en vez de 1: valor de línea USD 200 (100 c/u), arancel 10% = USD
     // 20, flete total USD 20 entero (única línea) → componentes 240 USD ×
     // 7.300 = Gs. 1.752.000 / 2 = Gs. 876.000 por unidad.
@@ -160,6 +160,55 @@ describe("RN-SRC-02 · margen proyectado, neto de IVA", () => {
       ),
     ).toThrow(InvalidSourcingInputError);
   });
+
+  it("un costo puesto mayor al precio neto da un margen negativo — una línea en pérdida no es un bug (revisión cruzada, §3)", () => {
+    const projections = expectOkProjections(
+      projectScenarioLines({
+        lines: [
+          buildLine({
+            unitPrice: Money.of(10_700n, "USD"), // 107,00 → landed 107 Gs. (fx 1, sin flete ni arancel)
+            fxRateToPyg: 1,
+            projectedPricePyg: Money.pyg(100n),
+            vatRate: "exenta",
+          }),
+        ],
+        assumptions: {
+          freightTotal: Money.of(0n, "USD"),
+          freightMethod: "by_value",
+          tariffRate: Percentage.of(0),
+        },
+        marginThresholdPct: Percentage.of(0.25),
+      }),
+    );
+
+    // (100 − 107) / 100 × 100 = −7%
+    expect(projections[0]!.marginPct).toBe(-7);
+    expect(projections[0]!.belowThreshold).toBe(true);
+  });
+
+  it("redondea el margen a milésimas, media unidad hacia +infinito, igual que round_pyg (borde 7,0005%)", () => {
+    const projections = expectOkProjections(
+      projectScenarioLines({
+        lines: [
+          buildLine({
+            unitPrice: Money.of(18_599_900n, "USD"), // landed 185.999 Gs. (fx 1, sin flete ni arancel)
+            fxRateToPyg: 1,
+            projectedPricePyg: Money.pyg(200_000n),
+            vatRate: "exenta",
+          }),
+        ],
+        assumptions: {
+          freightTotal: Money.of(0n, "USD"),
+          freightMethod: "by_value",
+          tariffRate: Percentage.of(0),
+        },
+        marginThresholdPct: Percentage.of(0.25),
+      }),
+    );
+
+    // (200.000 − 185.999) / 200.000 × 100 = 7,0005% exacto → 7,001%
+    expect(projections[0]!.marginPct).toBe(7.001);
+  });
 });
 
 describe("RN-SRC-03 · alerta de margen bajo umbral configurable", () => {
@@ -186,9 +235,44 @@ describe("RN-SRC-03 · alerta de margen bajo umbral configurable", () => {
 
     expect(projections[0]!.belowThreshold).toBe(false);
   });
+
+  it("umbral y margen iguales con un valor que NO es exacto en punto flotante (revisión cruzada, hallazgo 1) no cuentan como 'por debajo'", () => {
+    // 0,07 × 100 = 7.000000000000001 en punto flotante — sin redondear el
+    // umbral a la misma grilla de milésimas que marginPct, un margen que
+    // iguala exactamente el umbral (7,000%) daba belowThreshold true. Este
+    // caso está construido para dar margen EXACTAMENTE 7 (no una
+    // aproximación que redondee a 7,000): costo puesto 93, precio neto 100
+    // (exenta, sin IVA que redondear) → (100 − 93) / 100 × 100 = 7.
+    const projections = expectOkProjections(
+      projectScenarioLines({
+        lines: [
+          buildLine({
+            unitPrice: Money.of(9_300n, "USD"),
+            fxRateToPyg: 1,
+            projectedPricePyg: Money.pyg(100n),
+            vatRate: "exenta",
+          }),
+        ],
+        assumptions: {
+          freightTotal: Money.of(0n, "USD"),
+          freightMethod: "by_value",
+          tariffRate: Percentage.of(0),
+        },
+        marginThresholdPct: Percentage.of(0.07),
+      }),
+    );
+
+    expect(projections[0]!.marginPct).toBe(7);
+    expect(projections[0]!.belowThreshold).toBe(false);
+  });
 });
 
-describe("RF-SRC-02 · compareScenarioLines agrupa por variante y señala la de mejor margen", () => {
+// RN-SRC-04 está marcada "sin confirmar" en domain-rules.md: el criterio de
+// "mejor opción" (mayor margen %) es una decisión técnica propia, no
+// confirmada con José (hallazgo de la revisión cruzada, §3/§7). Estos tests
+// prueban el COMPORTAMIENTO actual del código, no que el criterio sea el
+// correcto para el negocio.
+describe("RN-SRC-04 · compareScenarioLines agrupa por variante y señala la de mejor margen", () => {
   it("proveedor A (margen 19,700%) vs. proveedor B (margen 44,937%) de la misma variante: B es la mejor", () => {
     const optionA = expectOkProjections(
       projectScenarioLines(buildInput({ lines: [buildLine({ id: "line-A", variantLabel: "A" })] })),
@@ -213,6 +297,19 @@ describe("RF-SRC-02 · compareScenarioLines agrupa por variante y señala la de 
     expect(groups[0]!.variantId).toBe("variant-1");
     expect(groups[0]!.bestLineId).toBe("line-B");
     expect(optionB[0]!.marginPct).toBe(44.937);
+  });
+
+  it("empate exacto de margen: gana la primera línea vista, no la segunda (desempate determinístico, revisión cruzada §3)", () => {
+    const optionA = expectOkProjections(
+      projectScenarioLines(buildInput({ lines: [buildLine({ id: "line-A", variantLabel: "A" })] })),
+    );
+    const optionB = expectOkProjections(
+      projectScenarioLines(buildInput({ lines: [buildLine({ id: "line-B", variantLabel: "B" })] })),
+    );
+
+    expect(optionA[0]!.marginPct).toBe(optionB[0]!.marginPct);
+    expect(compareScenarioLines([...optionA, ...optionB])[0]!.bestLineId).toBe("line-A");
+    expect(compareScenarioLines([...optionB, ...optionA])[0]!.bestLineId).toBe("line-B");
   });
 
   it("si la primera línea ya es la mejor, una segunda con menos margen no la desplaza", () => {

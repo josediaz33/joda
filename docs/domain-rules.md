@@ -172,7 +172,9 @@ Se generan dos filas en `movement_cost_allocations`. El COGS de la venta es 4.35
 
 ## RN-SRC — Sourcing (WP-C16)
 
-Decisiones de José, 2026-10-09 (resolución de las preguntas abiertas de WP-C16, ninguna cubierta hasta ahora en este documento).
+**Qué decidió José explícitamente, 2026-10-09** (las tres preguntas abiertas de WP-C16, ninguna cubierta hasta ahora en este documento): el margen se calcula neto de IVA, igual que RN-FRA-04 (RN-SRC-02); el arancel se modela ad valorem, cargado como `other` de `LandedCostComponents` (RN-SRC-01); `projected_landed_pyg` y `projected_price_pyg` son por unidad, no el total de la línea (RN-SRC-02).
+
+**Qué quedó como decisión técnica propia, no confirmada palabra por palabra con José** (corrección de la revisión cruzada de WP-C16, §7: una versión anterior de este encabezado las presentaba juntas, sin distinguir): que un precio proyectado inválido es excepción y no `Result` (RN-SRC-02, por el mismo precedente que `fxRateToPyg` en RN-COS-01, `procurement/landedCost.ts`); el redondeo a milésimas del margen (RN-SRC-02); y el criterio de "mejor opción" de `compareScenarioLines` como mayor margen porcentual (RN-SRC-04) — este último sigue sin confirmar y puede no ser el correcto si las líneas comparadas tienen cantidades o precios muy distintos (margen % y ganancia absoluta pueden contradecirse).
 
 ### RN-SRC-01 · Costo puesto proyectado de una línea
 
@@ -229,10 +231,16 @@ margen        = (3.181.818 − 2.555.000) / 3.181.818 × 100 ≈ 19,700%
 El umbral (RF-SRC-03) es un parámetro de la función de comparación, nunca una constante en el código — no hay columna ni tabla que lo persista todavía (sin fila en el esquema de Bloque B para esto). Se modela como `Percentage` (rango `[0, 1]`, igual que `waste_factor`): nadie configura "alertar por debajo de −10%" o "por encima de 100%", así que el rango de `Percentage` es la restricción correcta, no una coincidencia de tipo.
 
 ```
-bajo_umbral = margen_pct < umbral.value × 100
+bajo_umbral = margen_pct < round3(umbral.value × 100)
 ```
 
+El `round3` del umbral **no es cosmético**: `0,07 × 100` da `7.000000000000001` en punto flotante (JavaScript), así que un margen que iguala EXACTAMENTE el umbral (7,000%) daba `belowThreshold = true` sin redondearlo a la misma grilla de milésimas que `marginPct`. Bug encontrado en la revisión cruzada de WP-C16, con test de regresión en `scenario.test.ts`.
+
 **Siguiendo el ejemplo de RN-SRC-02:** con un umbral del 25%, un margen de 19,7% dispara la alerta.
+
+### RN-SRC-04 · Criterio de "mejor opción" al comparar — sin confirmar
+
+**Pendiente, anotado en la revisión cruzada de WP-C16 (§3): esto no fue decisión de José, preguntar antes de dar por buena.** `compareScenarioLines` hoy elige la línea con **mayor margen porcentual** dentro de cada variante. Es razonable como default (comparar tasas, no montos, es el criterio natural cuando las alternativas son del mismo producto bajo distintos supuestos de compra — proveedor A vs. B, GLOSARIO.md), pero margen % y ganancia absoluta por unidad pueden apuntar a líneas distintas si las cantidades o precios proyectados difieren mucho entre alternativas, y hoy no hay ninguna regla que diga cuál gana en ese caso. El desempate entre dos líneas con margen EXACTAMENTE igual es determinístico (gana la primera vista, por orden de entrada), eso sí probado.
 
 **Fuera de alcance de WP-C16 (RF-SRC-04/05, anotado para WP-C16b).** Que un escenario no afecte inventario, caja ni cuentas por pagar es una garantía arquitectónica, no una regla con fórmula: `packages/domain` no tiene I/O, así que ninguna función de este módulo puede escribir en el ledger aunque quisiera (RF-SRC-04). Convertir un escenario en orden de compra (RF-SRC-05) es una escritura — pertenece a `apps/api`, fuera del alcance de `packages/domain` y de este WP; ver la fila de WP-C16b en `docs/backlog.md`.
 

@@ -1406,6 +1406,8 @@ Alcance: escenarios, comparación, alerta de margen, conversión a orden de
 compra. Sin canales de venta (RF-MKT-08…10, fuera del bloque C).
 ```
 
+**Lo que pasó realmente (revisión cruzada, 2026-10-09):** la sesión real se tomó con `apps/api` y `packages/db` prohibidos (decisión del alcance, no de este prompt), así que solo cerró el cálculo (`packages/domain`), los contratos de todo el módulo (contract-first) y una vista previa sin persistencia en `apps/admin`. "Convertir un escenario en orden de compra" (RF-SRC-05) y `.claude/rules/api.md` quedaron para **WP-C16b**, fila nueva del backlog — quien tome C16b lee esta sesión para el objetivo original, pero el criterio de aceptación completo (RF-SRC-01 a 05) sigue sin cerrarse hasta esa fila.
+
 ---
 
 ### Sesión 37 — WP-C17 · Ventas: pedidos, totales, IVA
@@ -2024,6 +2026,8 @@ Alcance: solo WP-E06. Si el alcance crece, pará y consultá.
 ### Sesión E09 — WP-E09 · Compras y sourcing
 
 **Dependencias:** C14, C15, C16 y E04. **Estado hoy:** esperando todas.
+
+**La parte de sourcing ya tiene un cimiento (WP-C16, 2026-10-09):** `apps/admin/src/routes/Sourcing.tsx` es exactamente la vista previa que la trampa de abajo pedía — reusa `projectScenarioLines`/`compareScenarioLines` de `@joda/domain` en el navegador. Quien tome E09 la integra contra la API real de WP-C16b (habilita Guardar/Convertir) en vez de reescribirla desde cero.
 
 ```
 Antes de tocar nada: git checkout -b feat/e09-admin-procurement

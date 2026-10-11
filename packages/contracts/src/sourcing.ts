@@ -139,9 +139,14 @@ export const listSourcingScenariosOutput = paginatedOutputSchema(sourcingScenari
 // RF-SRC-05 · contract-first, sin endpoint todavía (WP-C16b decide la forma
 // final). `converted_to_po_id` es de la CABEZA del escenario (una sola FK),
 // así que convertir filtra por `variantLabel` cuando el escenario compara
-// más de una alternativa — la opción no elegida queda como historial, nunca
-// se borra (docs/security-spec.md: un escenario no tiene DELETE selectivo
-// de líneas fuera de borrar el escenario entero).
+// más de una alternativa. La opción no elegida no se borra como EFECTO de
+// convertir — pero el escenario SÍ admite DELETE manual completo (a
+// diferencia de purchase_orders/suppliers/etc.): docs/security-spec.md
+// dice que un escenario "es una simulación, no historial de costo ni plata
+// recibida, y no tiene estado con el que desactivarlo" (migración 0032).
+// Corrección de la revisión cruzada: una versión anterior de este
+// comentario decía "nunca se borra", citando security-spec.md para lo
+// contrario de lo que dice.
 export const convertSourcingScenarioInput = z
   .object({
     scenarioId: idSchema,

@@ -20,6 +20,7 @@ import {
   Quantity,
   compareScenarioLines,
   projectScenarioLines,
+  type FreightError,
   type ScenarioLineInput,
   type ScenarioLineProjection,
 } from "@joda/domain";
@@ -30,7 +31,13 @@ import { Can } from "../Can";
 
 const inputClass =
   "w-full rounded-control border border-border-strong bg-surface px-2 py-1.5 text-sm focus-visible:outline-2 focus-visible:outline-focus aria-invalid:border-error";
-const CURRENCIES = ["USD", "BRL", "ARS", "PYG"] as const;
+// Sin PYG: procurement/landedCost.ts::convertToPyg (WP-A05, reusado por
+// projectScenarioLines) lanza InvalidLandedCostInputError si un componente
+// ya viene en PYG — no hay nada que convertir. RF-SRC-01 asume compra en
+// moneda extranjera (fx, flete, aranceles son conceptos de importación);
+// una compra local no necesita un escenario de sourcing. Hallazgo de la
+// revisión cruzada (una línea en PYG disparaba esa excepción cruda).
+const FOREIGN_CURRENCIES = ["USD", "BRL", "ARS"] as const;
 
 type DraftLine = {
   readonly key: string;
@@ -81,6 +88,7 @@ function defaultAssumptions(): Assumptions {
 }
 
 type Computation =
+  | { readonly status: "empty" }
   | { readonly status: "invalid"; readonly errors: readonly string[] }
   | { readonly status: "error"; readonly message: string }
   | {
@@ -89,7 +97,11 @@ type Computation =
       readonly bestKeyByVariant: ReadonlyMap<string, string>;
     };
 
-const FREIGHT_ERROR_MESSAGES: Record<string, string> = {
+// Record<FreightError["code"], string> en vez de Record<string, string>: si
+// procurement/freight.ts (WP-A05) agrega un código de error nuevo, TypeScript
+// obliga a mapearlo acá en vez de caer en silencio al mensaje genérico
+// (hallazgo de la revisión cruzada, §4).
+const FREIGHT_ERROR_MESSAGES: Record<FreightError["code"], string> = {
   EMPTY_LINES: "Agregá al menos una línea para prorratear el flete.",
   ZERO_TOTAL_WEIGHT: "Ninguna línea tiene valor, cantidad o volumen para repartir el flete.",
   MISSING_VOLUME: "El método 'por volumen' necesita el volumen de cada línea.",
@@ -120,11 +132,48 @@ function toScenarioLineInput(line: DraftLine): ScenarioLineInput {
   };
 }
 
+/**
+ * Validaciones que `createSourcingScenarioLineInput` no puede expresar —
+ * cruzan varias líneas, o dependen del `uom` elegido en la UI (que no viaja
+ * en el contrato: `sourcing_scenario_lines` no tiene esa columna, RN-SRC-01).
+ * Sin esto, una entrada que el contrato acepta llega al dominio y éste la
+ * rechaza con una EXCEPCIÓN (precio proyectado positivo, cantidad entera
+ * para 'unit', moneda extranjera) en vez de un mensaje de validación
+ * (hallazgo de la revisión cruzada, §1/§2): un precio en 0 —el valor por
+ * defecto de una línea nueva— no debería mostrarle al usuario el mensaje
+ * interno de `InvalidSourcingInputError`.
+ */
+function validateCrossFieldRules(lines: readonly DraftLine[], assumptions: Assumptions): string[] {
+  const errors: string[] = [];
+
+  lines.forEach((line, index) => {
+    if (!/^[1-9]\d*$/.test(line.projectedPricePyg)) {
+      errors.push(`Línea ${index + 1}: el precio de venta proyectado tiene que ser mayor a cero.`);
+    }
+    if (line.uom === "unit" && line.qty.includes(".")) {
+      errors.push(`Línea ${index + 1}: una cantidad en unidades tiene que ser un entero.`);
+    }
+  });
+
+  const currencies = new Set([assumptions.freightCurrency, ...lines.map((line) => line.currency)]);
+  if (currencies.size > 1) {
+    errors.push(
+      "El flete y todas las líneas tienen que estar en la misma moneda — procurement/landedCost.ts no convierte entre monedas extranjeras.",
+    );
+  }
+
+  return errors;
+}
+
 function compute(
   lines: readonly DraftLine[],
   assumptions: Assumptions,
   marginThresholdPctRaw: string,
 ): Computation {
+  if (lines.every((line) => line.variantId.trim() === "")) {
+    return { status: "empty" };
+  }
+
   const errors: string[] = [];
 
   const tariffRate = Number(assumptions.tariffRatePct) / 100;
@@ -156,6 +205,7 @@ function compute(
   lineResults.forEach((result, index) => {
     if (!result.success) errors.push(`Línea ${index + 1}: datos incompletos o inválidos.`);
   });
+  errors.push(...validateCrossFieldRules(lines, assumptions));
 
   if (errors.length > 0 || !assumptionsResult.success) return { status: "invalid", errors };
 
@@ -179,7 +229,12 @@ function compute(
       };
     }
 
-    const groups = compareScenarioLines(projected.value);
+    // Solo variantes con MÁS DE UNA línea tienen algo que comparar — con
+    // una sola, "mejor opción" no informa nada (hallazgo de la revisión
+    // cruzada, §6).
+    const groups = compareScenarioLines(projected.value).filter(
+      (group) => group.projections.length > 1,
+    );
     const bestKeyByVariant = new Map(groups.map((group) => [group.variantId, group.bestLineId]));
 
     return { status: "ok", projections: projected.value, bestKeyByVariant };
@@ -262,7 +317,7 @@ export default function Sourcing() {
                 }))
               }
             >
-              {CURRENCIES.map((code) => (
+              {FOREIGN_CURRENCIES.map((code) => (
                 <option key={code} value={code}>
                   {code}
                 </option>
@@ -420,7 +475,7 @@ export default function Sourcing() {
                         }
                         aria-label="Moneda"
                       >
-                        {CURRENCIES.map((code) => (
+                        {FOREIGN_CURRENCIES.map((code) => (
                           <option key={code} value={code}>
                             {code}
                           </option>

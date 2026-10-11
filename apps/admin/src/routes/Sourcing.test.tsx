@@ -104,6 +104,75 @@ describe("RN-SRC-03 · alerta de margen bajo umbral configurable", () => {
   });
 });
 
+// RN-SRC-01 (moneda extranjera, cantidad entera para 'unit' — ADR-009) y
+// RN-SRC-02 (precio proyectado positivo): la UI valida estas reglas ANTES
+// de llamar al dominio, para que una entrada legítima por acción del
+// usuario (el valor por defecto de una línea nueva, un fat-finger de
+// moneda o decimales) dé un mensaje de validación, no la excepción técnica
+// del dominio (.claude/rules/domain.md: "si el usuario puede provocarlo
+// con una acción legítima, es Result"). Hallazgo de la revisión cruzada de
+// WP-C16, §1/§2.
+describe("RN-SRC-01/02 · validaciones de negocio que el contrato no expresa, hechas antes de llegar al dominio", () => {
+  it("al abrir, sin ningún dato ingresado, no muestra ningún error", async () => {
+    renderSourcing();
+
+    expect(await screen.findByRole("button", { name: "Agregar línea" })).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("un precio de venta en 0 (el valor por defecto de una línea nueva) da un mensaje de validación, no la excepción técnica del dominio", async () => {
+    const user = userEvent.setup();
+    renderSourcing();
+
+    await user.click(screen.getByLabelText("Id de variante"));
+    await user.paste(VARIANT_ID);
+
+    expect(
+      await screen.findByText("Línea 1: el precio de venta proyectado tiene que ser mayor a cero."),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(/InvalidSourcingInputError|requiere un projectedPricePyg/),
+    ).toBeNull();
+  });
+
+  it("el selector de moneda no ofrece PYG — procurement/landedCost.ts no convierte un componente que ya está en PYG", async () => {
+    renderSourcing();
+
+    const [currencySelect] = screen.getAllByLabelText("Moneda");
+    const options = Array.from(currencySelect!.querySelectorAll("option")).map(
+      (option) => option.textContent,
+    );
+    expect(options).toEqual(["USD", "BRL", "ARS"]);
+  });
+
+  it("el flete en una moneda distinta a la de la línea da un mensaje de validación, no CurrencyMismatchError", async () => {
+    const user = userEvent.setup();
+    renderSourcing();
+
+    await fillWorkedExample(user);
+    await user.selectOptions(screen.getByLabelText("Moneda del flete"), "BRL");
+
+    expect(
+      await screen.findByText(
+        "El flete y todas las líneas tienen que estar en la misma moneda — procurement/landedCost.ts no convierte entre monedas extranjeras.",
+      ),
+    ).toBeTruthy();
+  });
+
+  it("una cantidad fraccionaria en 'unidad' da un mensaje de validación, no la excepción de Quantity.units", async () => {
+    const user = userEvent.setup();
+    renderSourcing();
+
+    await fillWorkedExample(user);
+    await user.clear(screen.getByLabelText("Cantidad"));
+    await user.type(screen.getByLabelText("Cantidad"), "1.5");
+
+    expect(
+      await screen.findByText("Línea 1: una cantidad en unidades tiene que ser un entero."),
+    ).toBeTruthy();
+  });
+});
+
 describe("RF-SRC-02 · comparación línea por línea de la misma variante", () => {
   it("dos líneas con la misma variante: la de mejor margen se marca como mejor opción", async () => {
     const user = userEvent.setup();

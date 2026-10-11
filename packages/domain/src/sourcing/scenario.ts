@@ -150,7 +150,14 @@ export function projectScenarioLines(
     return err({ code: "FREIGHT_ALLOCATION_FAILED", reason: freightShares.error });
   }
 
-  const marginThresholdPct = input.marginThresholdPct.value * 100;
+  // round3 en los dos lados de la comparación de projectLine, no solo en
+  // marginPct: 0.07 × 100 = 7.000000000000001 en punto flotante. Sin
+  // redondear el umbral a la misma grilla de milésimas, un margen que
+  // IGUALA el umbral exacto (7,000% con umbral 7%) daba belowThreshold
+  // true — el mismo bug de punto flotante que motivó la grilla de
+  // milésimas de Quantity en WP-C13 (revisión cruzada), ahora en
+  // porcentajes. Hallazgo de la revisión cruzada de WP-C16.
+  const marginThresholdPct = round3(input.marginThresholdPct.value * 100);
   const projections = input.lines.map((line) =>
     projectLine(
       line,
@@ -173,7 +180,11 @@ export interface ScenarioComparisonGroup {
 /**
  * RF-SRC-02 · agrupa proyecciones por variante (GLOSARIO.md "Sourcing /
  * escenario": proveedor A vs. B, comprar ahora vs. esperar es la misma
- * variante bajo dos supuestos) y señala cuál conviene por margen.
+ * variante bajo dos supuestos) y señala cuál conviene por margen (RN-SRC-04,
+ * marcada "sin confirmar" en docs/domain-rules.md — mayor margen % y mayor
+ * ganancia absoluta pueden contradecirse con cantidades o precios
+ * distintos; corrección de la revisión cruzada de WP-C16, que esta función
+ * citaba como RF-SRC-02, un requisito, no una regla de negocio decidida).
  */
 export function compareScenarioLines(
   projections: readonly ScenarioLineProjection[],
