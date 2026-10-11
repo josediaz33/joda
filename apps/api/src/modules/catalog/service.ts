@@ -31,6 +31,7 @@ import {
   toAdminTag,
   toAdminVariant,
 } from "./mappers.js";
+import * as inventoryRepo from "../inventory/repository.js";
 import * as repo from "./repository.js";
 
 const NOT_FOUND_ERROR = appError("NOT_FOUND", 404, "No encontrado.");
@@ -149,6 +150,30 @@ async function assertCategoryAndTagIdsExist(
   }
 }
 
+/**
+ * WP-C08b. `brandId` llega del cliente y se escribe en `products`: se lee
+ * primero bajo RLS (docs/api-conventions.md §8.4). Una marca de otro tenant y
+ * una que no existe dan el mismo 404, sin distinguir cuál fue. `null` (sin
+ * marca) no se consulta.
+ */
+async function assertBrandExists(tx: TenantTx, brandId: string | null | undefined): Promise<void> {
+  if (brandId == null) return;
+  if (!(await repo.brandExists(tx, brandId))) throw toTRPCError(NOT_FOUND_ERROR);
+}
+
+/**
+ * WP-C08b. Mismo criterio que `assertBrandExists`, para el origen (`sourceVariantId`) de una variante.
+ * Solo comprueba que la variante sea del tenant: no que sea un granel, ni del mismo producto,
+ * ni que no sea la propia variante. Esa regla de negocio está sin decidir (WP-C08m).
+ */
+async function assertSourceVariantExists(
+  tx: TenantTx,
+  sourceVariantId: string | null | undefined,
+): Promise<void> {
+  if (sourceVariantId == null) return;
+  if (!(await repo.findVariantRow(tx, sourceVariantId))) throw toTRPCError(NOT_FOUND_ERROR);
+}
+
 export async function createProduct(
   db: PrismaClient,
   ctx: TenantTxContext,
@@ -156,6 +181,7 @@ export async function createProduct(
 ): Promise<AdminProduct> {
   return withTenantTx(db, ctx, async (tx) => {
     await assertCategoryAndTagIdsExist(tx, input.categoryIds, input.tagIds ?? []);
+    await assertBrandExists(tx, input.brandId);
 
     const facets = buildProductFacets(toFacetInputFromCreate(input));
     const productId = await repo.insertProductRow(tx, {
@@ -224,6 +250,7 @@ export async function updateProduct(
     if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
     assertDetailsMatchKind(existing.kind as ProductKind, input);
     await assertCategoryAndTagIdsExist(tx, input.categoryIds ?? [], input.tagIds ?? []);
+    await assertBrandExists(tx, input.brandId);
 
     if (input.perfumeDetails) await repo.updatePerfumeDetails(tx, input.id, input.perfumeDetails);
     if (input.watchDetails) await repo.updateWatchDetails(tx, input.id, input.watchDetails);
@@ -331,8 +358,8 @@ const BULK_VARIANT_EXISTS_ERROR = appError(
 // seriales), y uno con serie no puede entrar sin registrarla. WP-C08f: la misma
 // regla rige al actualizar la variante, que no puede contradecir al producto.
 // Lo inverso, cambiar `requires_serial` del producto con variantes ya creadas,
-// espera la decisión de José (WP-C08h). Apagarlo con unidades ya registradas es
-// WP-C08d.
+// espera la decisión de José (WP-C08h). Apagarlo con unidades ya registradas lo rechaza
+// `lockLotsAndAssertNoSerialUnits` (WP-C08d).
 //
 // El refine de `createVariantInput` sobre `isSerialized` solo ve lo que manda el
 // cliente, no lo que se hereda; por eso el CHECK `NOT is_serialized OR uom =
@@ -378,6 +405,7 @@ export async function createVariant(
     const product = await repo.findProductRow(tx, { id: input.productId });
     if (!product) throw toTRPCError(NOT_FOUND_ERROR);
     const isSerialized = resolveIsSerialized(product, input);
+    await assertSourceVariantExists(tx, input.sourceVariantId);
 
     // El índice único parcial de 0028 lo impone la base; esto adelanta el
     // mensaje, en vez de dejar que llegue como un error interno.
@@ -410,6 +438,38 @@ export async function createVariant(
   });
 }
 
+/**
+ * WP-C08d, RN-SER-02. Una variante con unidades registradas no deja de ser
+ * serializada: quedarían unidades con número de serie colgando de una variante
+ * que ya no las admite, y la recepción y la venta dejarían de tratarlas como tales.
+ * Cuentan las unidades de todos los estados (RN-SER-03).
+ *
+ * Primero se bloquean los lotes de la variante y después se cuenta: el alta de una
+ * unidad bloquea su lote antes de leer el flag de la variante, así que, sobre un lote
+ * que ya existe, o la unidad ya está confirmada cuando se cuenta, o el alta espera y
+ * encuentra la variante apagada y se rechaza. Sin el bloqueo, un alta en vuelo pasa
+ * inadvertida.
+ *
+ * **Toma bloqueos, no solo cuenta.** Y tiene límites: el bloqueo corre con la
+ * visibilidad de quien apaga (sin permisos de inventario sobre los lotes no bloquea
+ * nada) y no ve un lote que nace después con sus unidades. El invariante completo
+ * vive en la base: WP-B20.
+ */
+async function lockLotsAndAssertNoSerialUnits(tx: TenantTx, variantId: string): Promise<void> {
+  await inventoryRepo.lockLotsOfVariant(tx, variantId);
+  const registered = await inventoryRepo.countSerializedUnitsOfVariant(tx, variantId);
+  if (registered > 0) {
+    throw toTRPCError(
+      appError(
+        "CONFLICT_VARIANT_HAS_SERIAL_UNITS",
+        409,
+        "Esta variante ya tiene unidades con número de serie registradas: no se puede dejar de serializar.",
+        { registered },
+      ),
+    );
+  }
+}
+
 export async function updateVariant(
   db: PrismaClient,
   ctx: TenantTxContext,
@@ -418,6 +478,7 @@ export async function updateVariant(
   return withTenantTx(db, ctx, async (tx) => {
     const existing = await repo.findVariantRow(tx, input.id);
     if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
+    await assertSourceVariantExists(tx, input.sourceVariantId);
 
     // WP-C08f. Solo si el pedido toca `isSerialized`: el producto no se lee de más.
     let isSerialized: boolean | undefined;
@@ -428,6 +489,10 @@ export async function updateVariant(
         isSerialized: input.isSerialized,
         uom: existing.uom,
       });
+    }
+    // Solo al apagar: encender no tiene este problema (el CHECK de la base ya exige `unit`).
+    if (isSerialized === false && existing.is_serialized) {
+      await lockLotsAndAssertNoSerialUnits(tx, existing.id);
     }
 
     await repo.updateVariantRow(tx, input.id, {
