@@ -320,15 +320,14 @@ export const removeBomComponentOutput = z.object({ ok: z.literal(true) }).strict
 
 // ---------------------------------------------------------------------
 // Categoría — árbol de navegación comercial (ADR-006), compartido entre las
-// tres verticales. `parentId` no se edita después de creada (re-parentar
-// implica recalcular el `path` materializado de todos los descendientes,
-// fuera del alcance de RF-CAT-03 — "administrar... orden y visibilidad", no
-// "mover"). No hay un mecanismo de reemplazo dentro de este WP: `categories`
+// tres verticales. El `slug` no se edita después de creada: es parte del
+// `path` materializado y, a la larga, de la URL pública. `parentId` sí
+// (WP-E05b, RF-CAT-03): mover un nodo recalcula el `path` de todo su subárbol
+// (`updateCategory` en apps/api/src/modules/catalog/service.ts). `categories`
 // no tiene columna de estado (solo `is_visible`) y su router
 // (apps/api/src/modules/catalog/router.ts) no declara `archive` ni `delete`
 // — "crear una nueva y migrar productos a mano" es la única salida hoy, no
-// un flujo soportado por el sistema. Si reparentar termina haciendo falta,
-// es un WP propio (recalcular `path` en cascada sobre los descendientes).
+// un flujo soportado por el sistema.
 // ---------------------------------------------------------------------
 export const adminCategorySchema = z
   .object({
@@ -357,9 +356,11 @@ export const createCategoryInput = z
   .strict();
 export type CreateCategoryInput = z.infer<typeof createCategoryInput>;
 
+// `parentId` ausente = no se mueve; `null` = pasa a ser raíz.
 export const updateCategoryInput = z
   .object({
     id: idSchema,
+    parentId: idSchema.nullable().optional(),
     name: z.string().min(1).optional(),
     position: z.number().int().optional(),
     isVisible: z.boolean().optional(),

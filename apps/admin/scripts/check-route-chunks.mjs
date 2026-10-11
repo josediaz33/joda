@@ -22,6 +22,7 @@ for (const route of [
   "Verify",
   "Home",
   "CatalogPreview",
+  "Categories",
   "Accounting",
   "Sourcing",
 ]) {

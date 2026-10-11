@@ -258,6 +258,16 @@ El `round3` del umbral **no es cosmético**: `0,07 × 100` da `7.000000000000001
 
 **Zona gris sin resolver.** La regla de arriba restringe el `variant_type` del PADRE (`parent_variant_id`), no el del `component_variant_id` — hoy nada impide vincular como insumo, por ejemplo, otra variante `sealed`. Ni RF-CAT-07 ni ningún documento existente declaran una restricción sobre el tipo del componente, así que `catalog.bom.create` (WP-C08) no la valida. Señalado en la revisión cruzada de WP-C08 como algo a preguntar, no a asumir.
 
+### RN-CAT-02 · Solo `sealed`, `decant` y `unit` se publican en la tienda
+
+`product_variants.online_visible` puede ser `true` solo si `variant_type` es `sealed`, `decant` o `unit`. Una variante `tester`, `supply` o `bulk` tiene `online_visible = false`, siempre. Impuesto por la base con un `CHECK` (WP-B17, `0038`); el servicio no lo reimplementa ni lo normaliza.
+
+**Contexto en el glosario.** `GLOSARIO.md` define el granel como «no se vende directo» (es el origen de los decants, RN-FRA-07), el insumo como lo que un BOM consume (RN-CAT-01) y el tester como un frasco de exhibición. Es el contexto de la regla, no una explicación que José haya dado.
+
+**Procedencia.** Regla indicada por José y registrada en el backlog como WP-B17; la lista de tres tipos es suya. Hasta WP-B17 la única defensa era la normalización que WP-E05 metió en `updateVariant` para el granel (apagaba `online_visible` al actualizar una variante `bulk`): cubría un tipo de tres y solo cuando alguien actualizaba esa variante.
+
+**Qué no dice.** No decide cuándo ni quién publica una variante: la visibilidad se administra bajo `catalog.product:publish` (RF-CAT-09, WP-C08g), nunca como campo de edición de la variante. Esta regla es el techo de lo que ese procedimiento puede encender.
+
 ---
 
 ## RN-LOT — Lotes y apertura de frascos
@@ -364,7 +374,7 @@ Un reloj de USD 800 no es "cantidad = 1": lleva número de serie, garantía y su
 
 Una unidad se registra contra un lote de una variante con `is_serialized = true`. Registrar una sobre un lote de otra variante (un sellado, un insumo, un granel) se rechaza. Una variante serializada se mide en unidades enteras (`CHECK (NOT is_serialized OR uom = 'unit')`).
 
-**De dónde sale `is_serialized` en un reloj.** No todos los relojes llevan número de serie: `requires_serial` del producto se decide al crear el reloj, sin valor por defecto. Las variantes de un reloj heredan `is_serialized` de él al crearse, no se marcan aparte: `createVariant` lo toma del producto, sea cual sea el tipo de la variante, y rechaza un valor que lo contradiga (WP-E05c). La herencia rige solo al crear: actualizar después la variante o el producto no la revalida (WP-C08f), y apagarlo con unidades ya registradas es WP-C08d.
+**De dónde sale `is_serialized` en un reloj.** No todos los relojes llevan número de serie: `requires_serial` del producto se decide al crear el reloj, sin valor por defecto. Las variantes de un reloj heredan `is_serialized` de él al crearse, no se marcan aparte: `createVariant` lo toma del producto, sea cual sea el tipo de la variante, y rechaza un valor que lo contradiga (WP-E05c). `updateVariant` revalida lo mismo (WP-C08f): un `isSerialized` que contradiga a `requires_serial` del producto se rechaza también al actualizar la variante; mandar el valor que coincide se acepta, y es la forma de reparar una variante anterior a E05c. Lo que **no** se revalida es la otra dirección: cambiar `requires_serial` del producto no reescribe las variantes que ya existen, y qué hacer entonces (rechazar el cambio o propagarlo) está pendiente de José (WP-C08h). Apagarlo con unidades ya registradas es WP-C08d.
 
 ### RN-SER-03 · Las unidades registradas de un lote no superan su `qty_initial`
 

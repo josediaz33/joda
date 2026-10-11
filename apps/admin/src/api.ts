@@ -17,6 +17,7 @@ import {
   type UpdateProductInput,
   type CreateVariantInput,
   type CreateCategoryInput,
+  type UpdateCategoryInput,
   type UpdateVariantInput,
   type StaffLoginInput,
 } from "@joda/contracts";
@@ -48,6 +49,8 @@ export const api = {
     listCategoriesOutput.parse(await trpc.query("catalog.category.list", { cursor, limit: 200 })),
   createCategory: async (input: CreateCategoryInput) =>
     adminCategorySchema.parse(await trpc.mutation("catalog.category.create", input)),
+  updateCategory: async (input: UpdateCategoryInput) =>
+    adminCategorySchema.parse(await trpc.mutation("catalog.category.update", input)),
   createProduct: async (input: CreateProductInput) =>
     adminProductSchema.parse(await trpc.mutation("catalog.product.create", input)),
   updateProduct: async (input: UpdateProductInput) =>

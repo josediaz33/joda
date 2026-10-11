@@ -328,16 +328,20 @@ const BULK_VARIANT_EXISTS_ERROR = appError(
 // WP-E05c. Las variantes de un reloj heredan `is_serialized` de `requires_serial`
 // del producto: no se marcan aparte. Un reloj sin serie no puede trabarse al
 // recibirlo (la recepción de una variante serializada exige cargar los
-// seriales), y uno con serie no puede entrar sin registrarla. La herencia es al
-// crear: apagarlo después, con unidades ya registradas, es WP-C08d.
+// seriales), y uno con serie no puede entrar sin registrarla. WP-C08f: la misma
+// regla rige al actualizar la variante, que no puede contradecir al producto.
+// Lo inverso, cambiar `requires_serial` del producto con variantes ya creadas,
+// espera la decisión de José (WP-C08h). Apagarlo con unidades ya registradas es
+// WP-C08d.
 //
 // El refine de `createVariantInput` sobre `isSerialized` solo ve lo que manda el
 // cliente, no lo que se hereda; por eso el CHECK `NOT is_serialized OR uom =
 // 'unit'` de la base se adelanta acá con un mensaje claro, en vez de llegar como
-// un conflicto genérico.
+// un conflicto genérico. `updateVariantInput` no lleva `uom` (no se edita), así
+// que al actualizar viene de la variante guardada.
 function resolveIsSerialized(
   product: repo.ProductRow,
-  input: CreateVariantInput,
+  input: { readonly isSerialized?: boolean; readonly uom: CreateVariantInput["uom"] },
 ): boolean | undefined {
   if (product.kind !== "watch") return input.isSerialized;
   const details = product.watch_details_watch_details_product_id_tenant_idToproducts;
@@ -415,6 +419,17 @@ export async function updateVariant(
     const existing = await repo.findVariantRow(tx, input.id);
     if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
 
+    // WP-C08f. Solo si el pedido toca `isSerialized`: el producto no se lee de más.
+    let isSerialized: boolean | undefined;
+    if (input.isSerialized !== undefined) {
+      const product = await repo.findProductRow(tx, { id: existing.product_id });
+      if (!product) throw new Error(`variante ${existing.id} sin producto ${existing.product_id}`);
+      isSerialized = resolveIsSerialized(product, {
+        isSerialized: input.isSerialized,
+        uom: existing.uom,
+      });
+    }
+
     await repo.updateVariantRow(tx, input.id, {
       sku: input.sku,
       pricePyg: input.pricePyg !== undefined ? parsePygAmount(input.pricePyg) : undefined,
@@ -428,9 +443,7 @@ export async function updateVariant(
       allocationPolicy: input.allocationPolicy,
       productionMode: input.productionMode,
       sourceVariantId: input.sourceVariantId,
-      isSerialized: input.isSerialized,
-      // Normaliza datos anteriores: un granel nunca es vendible directamente.
-      onlineVisible: existing.variant_type === "bulk" ? false : undefined,
+      isSerialized,
       minStockAlert: input.minStockAlert,
       weightG: input.weightG,
       position: input.position,
@@ -528,9 +541,11 @@ export async function removeBomComponent(
 }
 
 // ---------------------------------------------------------------------
-// Categoría — RF-CAT-03. `path` es un materialized path: se computa una
-// sola vez, al crear (docs/data-model.md §3.1) — parentId no se edita
-// después (ver el comentario de updateCategoryInput en packages/contracts).
+// Categoría — RF-CAT-03. `path` es un materialized path (docs/data-model.md
+// §3.1): se computa al crear y se recompone, junto con el de todo el subárbol,
+// al mover la categoría (WP-E05b, `updateCategory`). Crear bajo un padre y
+// mover leen el árbol antes de escribirlo, así que ambos empiezan por
+// `lockCategoryTree`.
 // ---------------------------------------------------------------------
 export async function listCategories(
   db: PrismaClient,
@@ -551,6 +566,9 @@ export async function createCategory(
   input: CreateCategoryInput,
 ): Promise<AdminCategory> {
   return withTenantTx(db, ctx, async (tx) => {
+    // Antes de leer el padre: si otro movimiento le está cambiando el `path`
+    // (a él o a un ancestro), esperar a que termine y leerlo ya nuevo.
+    if (input.parentId) await repo.lockCategoryTree(tx);
     let path = input.slug;
     if (input.parentId) {
       const parent = await repo.findCategoryRow(tx, input.parentId);
@@ -575,14 +593,51 @@ export async function createCategory(
   });
 }
 
+const CATEGORY_CYCLE_ERROR = appError(
+  "VALIDATION_CATEGORY_CYCLE",
+  400,
+  "Una categoría no puede quedar dentro de sí misma ni de una de sus subcategorías.",
+);
+
+/**
+ * WP-E05b. El destino se lee bajo RLS antes del UPDATE (una FK al padre no
+ * protege nada: docs/api-conventions.md §8.4), y no puede ser la propia
+ * categoría ni un descendiente suyo. El árbol queda bloqueado por quien llama
+ * (`lockCategoryTree`) antes de leer `category`.
+ */
+async function moveCategory(
+  tx: TenantTx,
+  category: repo.CategoryRow,
+  parentId: string | null,
+): Promise<void> {
+  let path = category.slug;
+  if (parentId !== null) {
+    const parent = await repo.findCategoryRow(tx, parentId);
+    if (!parent) throw toTRPCError(NOT_FOUND_ERROR);
+    if (await repo.isCategoryInSubtree(tx, category.id, parent.id)) {
+      throw toTRPCError(CATEGORY_CYCLE_ERROR);
+    }
+    path = `${parent.path}/${category.slug}`;
+  }
+  await repo.moveCategorySubtree(tx, category.id, parentId, path);
+}
+
 export async function updateCategory(
   db: PrismaClient,
   ctx: TenantTxContext,
   input: UpdateCategoryInput,
 ): Promise<AdminCategory> {
   return withTenantTx(db, ctx, async (tx) => {
+    // Antes de leer: lo que se lee para decidir el movimiento no puede
+    // cambiarle debajo a otro movimiento concurrente.
+    if (input.parentId !== undefined) await repo.lockCategoryTree(tx);
+
     const existing = await repo.findCategoryRow(tx, input.id);
     if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
+
+    if (input.parentId !== undefined && input.parentId !== existing.parent_id) {
+      await moveCategory(tx, existing, input.parentId);
+    }
 
     await repo.updateCategoryRow(tx, input.id, {
       name: input.name,
