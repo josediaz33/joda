@@ -376,11 +376,13 @@ export async function countSerializedUnitsOfLot(tx: TenantTx, lotId: string): Pr
  * unidades); todos toman los suyos en orden ascendente de `id`.
  *
  * **Corre con la visibilidad de quien llama.** Con RLS, un `FOR UPDATE` solo
- * toma las filas que pasan además la política de UPDATE de `inventory_lots`
- * (`market.purchase_order:receive`, `inventory.decant:execute`,
- * `sales.order:refund` o `inventory.stock:adjust`): quien no tiene ninguno no
- * bloquea nada, y no hay error. Con los roles sembrados no pasa; con roles a
- * medida (WP-C24) sí. Tampoco ve un lote que nace después con sus unidades. El
+ * toma las filas que pasan la política de lectura de `inventory_lots`
+ * (`inventory.stock:read`) Y la de UPDATE (`market.purchase_order:receive`,
+ * `inventory.decant:execute`, `sales.order:refund` o `inventory.stock:adjust`):
+ * a quien le falta cualquiera de las dos no le bloquea nada, y no hay error.
+ * `catalog.variant.update` exige `catalog.product:write`, que hoy solo tienen
+ * `owner` y `manager`, con todos los permisos; con roles a medida (WP-C24) sí
+ * puede pasar. Tampoco ve un lote que nace después con sus unidades. El
  * cierre real es un invariante en la base: WP-B20.
  */
 export async function lockLotsOfVariant(tx: TenantTx, variantId: string): Promise<void> {
