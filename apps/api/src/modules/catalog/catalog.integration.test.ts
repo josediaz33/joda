@@ -1167,4 +1167,267 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(page2.items).toHaveLength(1);
     expect(page2.items[0]?.id).toBe(first.id);
   });
+
+  // -------------------------------------------------------------------
+  // WP-C08b · docs/api-conventions.md §8.4. `brandId` y `sourceVariantId` se
+  // leen bajo RLS antes del INSERT/UPDATE: un id de otro tenant (o inexistente)
+  // da 404, el mismo que una categoría ajena, y no revela cuál de las dos cosas
+  // pasó. La FK compuesta de 0023 ya lo rechazaba en la base, pero como un
+  // conflicto genérico; acá se prueba la respuesta del servicio y que nada se
+  // escriba a medias.
+  // -------------------------------------------------------------------
+  const FOREIGN_TENANT_ID = "88888888-8888-4888-a888-8888888888b8";
+  const FOREIGN_BRAND_ID = "77777777-7777-4777-a777-7777777777b1";
+  const FOREIGN_PRODUCT_ID = "77777777-7777-4777-a777-7777777777b2";
+  const FOREIGN_VARIANT_ID = "77777777-7777-4777-a777-7777777777b3";
+  const UNKNOWN_ID = "77777777-7777-4777-a777-7777777777ff";
+
+  /** Un tenant ajeno con una marca, un producto y una variante de granel; idempotente. */
+  async function seedForeignCatalog(): Promise<void> {
+    const sql = testDb.superuserClient;
+    await sql.query(
+      `INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+       VALUES ($1, 'otro-c08b', 'Otra SRL', 'Otra') ON CONFLICT DO NOTHING`,
+      [FOREIGN_TENANT_ID],
+    );
+    await sql.query(
+      `INSERT INTO app.brands (id, tenant_id, slug, name)
+       VALUES ($1, $2, 'marca-ajena', 'Marca ajena') ON CONFLICT DO NOTHING`,
+      [FOREIGN_BRAND_ID, FOREIGN_TENANT_ID],
+    );
+    await sql.query(
+      `INSERT INTO app.products (id, tenant_id, kind, slug, name)
+       VALUES ($1, $2, 'accessory', 'producto-ajeno', 'Producto ajeno') ON CONFLICT DO NOTHING`,
+      [FOREIGN_PRODUCT_ID, FOREIGN_TENANT_ID],
+    );
+    await sql.query(
+      `INSERT INTO app.product_variants
+         (id, tenant_id, product_id, sku, variant_type, uom, price_pyg)
+       VALUES ($1, $2, $3, 'GRANEL-AJENO', 'bulk', 'ml', 0) ON CONFLICT DO NOTHING`,
+      [FOREIGN_VARIANT_ID, FOREIGN_TENANT_ID, FOREIGN_PRODUCT_ID],
+    );
+  }
+
+  /** Una marca del tenant de la sesión: no hay procedimiento para crearlas, se siembra. */
+  async function seedOwnBrand(id: string, slug: string): Promise<void> {
+    await testDb.superuserClient.query(
+      `INSERT INTO app.brands (id, tenant_id, slug, name) VALUES ($1, $2, $3, $4)`,
+      [id, TENANT_ID, slug, slug],
+    );
+  }
+
+  async function createAccessory(slug: string, brandId?: string) {
+    const category = await createCategory(`c08b-cat-${slug}`);
+    return mutateOk<{ id: string; brandId: string | null }>("catalog.product.create", {
+      kind: "accessory",
+      slug,
+      name: slug,
+      ...(brandId ? { brandId } : {}),
+      categoryIds: [category.id],
+      primaryCategoryId: category.id,
+      accessoryDetails: { material: null, color: null, sizeLabel: null },
+    });
+  }
+
+  it("docs/api-conventions.md §8.4 · crear un producto con la marca de otro tenant da 404 y no lo crea", async () => {
+    await seedForeignCatalog();
+    const category = await createCategory("c08b-cat-marca-ajena");
+
+    const response = await mutate("catalog.product.create", {
+      kind: "accessory",
+      slug: "c08b-marca-ajena",
+      name: "Con marca ajena",
+      brandId: FOREIGN_BRAND_ID,
+      categoryIds: [category.id],
+      primaryCategoryId: category.id,
+      accessoryDetails: { material: null, color: null, sizeLabel: null },
+    });
+
+    expect(response.statusCode).toBe(404);
+    const page = await call<{ items: { slug: string }[] }>("catalog.product.list", {
+      kind: "accessory",
+      limit: 100,
+    });
+    expect(page.items.map((item) => item.slug)).not.toContain("c08b-marca-ajena");
+  });
+
+  it("docs/api-conventions.md §8.4 · una marca inexistente da exactamente la misma respuesta que una ajena", async () => {
+    await seedForeignCatalog();
+    const category = await createCategory("c08b-cat-marca-inexistente");
+    const create = (slug: string, brandId: string) =>
+      mutate("catalog.product.create", {
+        kind: "accessory",
+        slug,
+        name: slug,
+        brandId,
+        categoryIds: [category.id],
+        primaryCategoryId: category.id,
+        accessoryDetails: { material: null, color: null, sizeLabel: null },
+      });
+
+    const foreign = await create("c08b-marca-ajena-2", FOREIGN_BRAND_ID);
+    const unknown = await create("c08b-marca-inexistente", UNKNOWN_ID);
+
+    // Mismo estado, mismo código y mismo mensaje: nada que revele si el id existe en otro tenant.
+    expect(foreign.statusCode).toBe(404);
+    expect(unknown.statusCode).toBe(404);
+    expect(foreign.json().error.data.appCode).toBe("NOT_FOUND");
+    expect(unknown.json().error.data.appCode).toBe("NOT_FOUND");
+    expect(foreign.json().error.message).toBe("No encontrado.");
+    expect(unknown.json().error.message).toBe("No encontrado.");
+    expect(foreign.json().error.data.details).toBeUndefined();
+    expect(unknown.json().error.data.details).toBeUndefined();
+  });
+
+  it("docs/api-conventions.md §8.4 · actualizar un producto con la marca de otro tenant da 404 y conserva la suya", async () => {
+    await seedForeignCatalog();
+    const ownBrandId = "66666666-6666-4666-a666-6666666666b1";
+    await seedOwnBrand(ownBrandId, "c08b-marca-propia-a");
+    const product = await createAccessory("c08b-conserva-marca", ownBrandId);
+
+    const response = await mutate("catalog.product.update", {
+      id: product.id,
+      brandId: FOREIGN_BRAND_ID,
+    });
+
+    expect(response.statusCode).toBe(404);
+    const fetched = await call<{ brandId: string | null }>("catalog.product.byId", {
+      id: product.id,
+    });
+    expect(fetched.brandId).toBe(ownBrandId);
+  });
+
+  it("docs/api-conventions.md §8.4 · una marca propia se acepta al crear y al actualizar, y null la quita", async () => {
+    const firstBrandId = "66666666-6666-4666-a666-6666666666b2";
+    const secondBrandId = "66666666-6666-4666-a666-6666666666b3";
+    await seedOwnBrand(firstBrandId, "c08b-marca-propia-b");
+    await seedOwnBrand(secondBrandId, "c08b-marca-propia-c");
+
+    const product = await createAccessory("c08b-marca-propia", firstBrandId);
+    const moved = await mutateOk<{ brandId: string | null }>("catalog.product.update", {
+      id: product.id,
+      brandId: secondBrandId,
+    });
+    const cleared = await mutateOk<{ brandId: string | null }>("catalog.product.update", {
+      id: product.id,
+      brandId: null,
+    });
+
+    expect(product.brandId).toBe(firstBrandId);
+    expect(moved.brandId).toBe(secondBrandId);
+    expect(cleared.brandId).toBeNull();
+  });
+
+  it("docs/api-conventions.md §8.4 · crear una variante con el granel de otro tenant como origen da 404 y no la crea", async () => {
+    await seedForeignCatalog();
+    const product = await createAccessory("c08b-variante-origen-ajeno");
+
+    const response = await mutate("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08B-ORIGEN-AJENO",
+      variantType: "decant",
+      uom: "ml",
+      sizeMl: 10,
+      pricePyg: "285000",
+      productionMode: "made_to_order",
+      sourceVariantId: FOREIGN_VARIANT_ID,
+    });
+
+    expect(response.statusCode).toBe(404);
+    const variants = await call<{ sku: string }[]>("catalog.variant.list", {
+      productId: product.id,
+    });
+    expect(variants).toEqual([]);
+  });
+
+  it("docs/api-conventions.md §8.4 · actualizar el origen de una variante con un granel de otro tenant da 404 y conserva el suyo", async () => {
+    await seedForeignCatalog();
+    const product = await createAccessory("c08b-variante-conserva-origen");
+    const bulk = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08B-GRANEL-PROPIO",
+      variantType: "bulk",
+      uom: "ml",
+      sizeMl: null,
+      pricePyg: "0",
+    });
+    const decant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08B-DECANT",
+      variantType: "decant",
+      uom: "ml",
+      sizeMl: 10,
+      pricePyg: "285000",
+      productionMode: "made_to_order",
+      sourceVariantId: bulk.id,
+    });
+
+    const foreign = await mutate("catalog.variant.update", {
+      id: decant.id,
+      sourceVariantId: FOREIGN_VARIANT_ID,
+    });
+    const unknown = await mutate("catalog.variant.update", {
+      id: decant.id,
+      sourceVariantId: UNKNOWN_ID,
+    });
+
+    expect(foreign.statusCode).toBe(404);
+    expect(unknown.statusCode).toBe(404);
+    expect(foreign.json().error.data.appCode).toBe("NOT_FOUND");
+    expect(unknown.json().error.data.appCode).toBe("NOT_FOUND");
+    expect(foreign.json().error.message).toBe("No encontrado.");
+    expect(unknown.json().error.message).toBe("No encontrado.");
+    expect(foreign.json().error.data.details).toBeUndefined();
+    expect(unknown.json().error.data.details).toBeUndefined();
+    const fetched = await call<{ sourceVariantId: string | null }>("catalog.variant.byId", {
+      id: decant.id,
+    });
+    expect(fetched.sourceVariantId).toBe(bulk.id);
+  });
+
+  it("docs/api-conventions.md §8.4 · actualizar el origen de una variante con otra variante propia se acepta, y null lo quita", async () => {
+    const product = await createAccessory("c08b-variante-origen-propio");
+    const firstSource = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08B-ORIGEN-1",
+      variantType: "bulk",
+      uom: "ml",
+      sizeMl: null,
+      pricePyg: "0",
+    });
+    // Un insumo y no un segundo granel: el índice único de 0028 permite un solo granel por
+    // producto. Qué variantes valen como origen es la pregunta abierta de WP-C08m; si se
+    // restringe a `bulk`, esta prueba se reescribe sin que haya una regresión.
+    const secondSource = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08B-ORIGEN-2",
+      variantType: "supply",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "0",
+    });
+    const decant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08B-DECANT-PROPIO",
+      variantType: "decant",
+      uom: "ml",
+      sizeMl: 10,
+      pricePyg: "285000",
+      productionMode: "made_to_order",
+      sourceVariantId: firstSource.id,
+    });
+
+    const moved = await mutateOk<{ sourceVariantId: string | null }>("catalog.variant.update", {
+      id: decant.id,
+      sourceVariantId: secondSource.id,
+    });
+    const cleared = await mutateOk<{ sourceVariantId: string | null; productionMode: string }>(
+      "catalog.variant.update",
+      { id: decant.id, productionMode: "stocked", sourceVariantId: null },
+    );
+
+    expect(moved.sourceVariantId).toBe(secondSource.id);
+    expect(cleared.sourceVariantId).toBeNull();
+    expect(cleared.productionMode).toBe("stocked");
+  });
 });
