@@ -351,6 +351,18 @@ function CommonFields({ categories }: { categories: AdminCategory[] }) {
   );
 }
 
+// WP-E05e. `requiresSerial` solo viaja si el operador lo cambió respecto de lo que cargó el
+// formulario (o sea, si está sucio). Mandarlo siempre pisaba el valor que otra persona
+// hubiera cambiado mientras este formulario estaba abierto: corregir solo el nombre
+// revertía el campo, y como cambiarlo se propaga a todas las variantes (WP-C08h,
+// RN-SER-02), revertía también las variantes. La API solo propaga si el valor cambia.
+function watchDetailsToUpdate(details: WatchInput["watchDetails"], loaded: boolean | undefined) {
+  if (details.requiresSerial !== loaded) return details;
+  const unchanged: Partial<typeof details> = { ...details };
+  delete unchanged.requiresSerial;
+  return unchanged;
+}
+
 async function saveProduct(
   input: CreateProductInput,
   product?: AdminProduct,
@@ -375,7 +387,13 @@ async function saveProduct(
       update = { ...common, perfumeDetails: input.perfumeDetails };
       break;
     case "watch":
-      update = { ...common, watchDetails: input.watchDetails };
+      update = {
+        ...common,
+        watchDetails: watchDetailsToUpdate(
+          input.watchDetails,
+          product.kind === "watch" ? product.watchDetails.requiresSerial : undefined,
+        ),
+      };
       break;
     case "accessory":
       update = { ...common, accessoryDetails: input.accessoryDetails };
@@ -511,6 +529,31 @@ export function PerfumeForm(props: Props) {
   );
 }
 
+// WP-E05e. Cambiar «Requiere número de serie» de un reloj ya guardado se propaga a todas
+// sus variantes (WP-C08h, RN-SER-02): se avisa antes de guardar, con los dos motivos por
+// los que la API lo rechaza. Sin variantes no hay nada que propagar y no se avisa.
+function RequiresSerialNotice({ loaded, variantCount }: { loaded: boolean; variantCount: number }) {
+  const { watch } = useFormContext<WatchInput>();
+  const current = watch("watchDetails.requiresSerial");
+  let message = "";
+  if (variantCount > 0 && current !== undefined && current !== loaded) {
+    const subject =
+      variantCount === 1
+        ? "La variante de este reloj"
+        : `Las ${variantCount} variantes de este reloj`;
+    const plural = variantCount !== 1;
+    message = current
+      ? `${subject} pasa${plural ? "n" : ""} a llevar número de serie al guardar. Si alguna se mide en ml, el guardado se rechaza y no cambia nada.`
+      : `${subject} deja${plural ? "n" : ""} de llevar número de serie al guardar. Si alguna ya tiene unidades registradas, el guardado se rechaza y no cambia nada.`;
+  }
+  // La región existe siempre: un `status` que aparece junto con su texto no se anuncia bien.
+  return (
+    <div role="status" className="mt-2">
+      {message && <p className="text-sm text-text-secondary">{message}</p>}
+    </div>
+  );
+}
+
 export function WatchForm(props: Props) {
   const details = props.product?.kind === "watch" ? props.product.watchDetails : undefined;
   const form = useForm<CreateProductInput>({
@@ -571,6 +614,12 @@ export function WatchForm(props: Props) {
         name="watchDetails.requiresSerial"
         label="Requiere número de serie"
       />
+      {props.product?.kind === "watch" && (
+        <RequiresSerialNotice
+          loaded={props.product.watchDetails.requiresSerial}
+          variantCount={props.product.variants.length}
+        />
+      )}
     </EditorShell>
   );
 }
