@@ -316,10 +316,10 @@ La tienda ve un producto cuando está `active` **y** publicado (`published_at` n
 
 ### RN-CAT-05 · Mostrar u ocultar una categoría es publicar
 
-Decisión de José del 2026-10-12 (WP-C08k). **Decidido, pendiente de implementación:** hoy `catalog.category.update` exige `catalog.product:write` también para `isVisible`.
+Decisión de José del 2026-10-12 (WP-C08k). **Implementado:** hasta WP-C08k, `catalog.category.update` exigía `catalog.product:write` también para `isVisible`.
 
 - **Mostrar u ocultar** una categoría (cambiar `isVisible`) exige `catalog.product:publish`. **Renombrar o mover** (`name`, `position`, `parentId`, `seo`) exige `catalog.product:write`. Un pedido que haga las dos cosas exige las dos.
-- **Cambiar** quiere decir cambiar el valor: mandar `isVisible` con el que la categoría ya tiene no muestra ni oculta nada y no pide `publish`. Sin el permiso, 403 `FORBIDDEN_INSUFFICIENT_PERMISSION` y no se cambia nada de lo que venía en el pedido.
+- **Cambiar** quiere decir cambiar el valor: mandar `isVisible` con el que la categoría ya tiene no muestra ni oculta nada y no pide `publish`. Sin el permiso, 403 `FORBIDDEN_INSUFFICIENT_PERMISSION` y no se cambia nada de lo que venía en el pedido: el rechazo ocurre antes de mover o escribir. Quien no puede publicar **nunca escribe `is_visible`**: si mandó el valor que ya tiene, se descarta del UPDATE, así una visibilidad que otro pedido cambió mientras su escritura esperaba no la pisa.
 - **Alta.** Crear una categoría sigue siendo de `write`; la visibilidad con la que nace no es un cambio de una categoría existente. José no lo trató (derivación del desarrollo).
 - El admin muestra el control de mostrar/ocultar solo a quien tiene `catalog.product:publish` (como el de Publicar de un producto).
 
