@@ -1770,8 +1770,9 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
   // con independencia del `status`; mostrar u ocultar una variante mueve
   // `online_visible`. Solo con `catalog.product:publish`. La tienda ve un
   // producto cuando está `active` Y publicado, y de él solo las variantes
-  // visibles (public.v_catalog_*). Activar un borrador todavía no tiene
-  // procedimiento propio desde WP-C08e (`catalog.product.activate`); estas pruebas lo hacen por SQL para no depender de él.
+  // visibles (public.v_catalog_*). Activar un borrador tiene procedimiento propio
+  // desde WP-C08e (`catalog.product.activate`); estas pruebas lo hacen por SQL para
+  // no depender de él.
   // -------------------------------------------------------------------
   const PUBLISH_CLOCK_ISO = "2026-01-01T12:00:00.000Z";
 

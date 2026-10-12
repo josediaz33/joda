@@ -162,9 +162,12 @@ describe("RF-CAT-09 · publicar, despublicar y mostrar variantes", () => {
     const user = userEvent.setup();
     renderCatalog(PUBLISHER, [product({ publishedAt: null })]);
 
-    await user.click(await screen.findByRole("button", { name: "Publicar Layton" }));
+    const button = await screen.findByRole("button", { name: "Publicar Layton" });
+    await user.click(button);
 
     await waitFor(() => expect(api.publishProduct).toHaveBeenCalledWith({ id: productId }));
+    // El botón sigue en la fila (solo cambia su etiqueta): el foco no se mueve de ahí.
+    expect(document.activeElement).toBe(button);
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Layton se publicó."));
   });
 
@@ -320,6 +323,20 @@ describe("RN-CAT-04 · activar un borrador", () => {
       expect(screen.queryByRole("button", { name: "Activar Layton" })).toBeNull(),
     );
     await waitFor(() => expect(document.activeElement?.textContent).toBe("Layton"));
+  });
+
+  it("si el producto activado sale de la lista (filtrada por borradores), el foco pasa al título", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.activateProduct).mockResolvedValue({} as AdminProduct);
+    renderCatalog(WRITER, [product({ status: "draft", publishedAt: null })]);
+    const button = await screen.findByRole("button", { name: "Activar Layton" });
+    vi.mocked(api.listProducts).mockResolvedValue({ items: [], nextCursor: null });
+
+    await user.click(button);
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Productos" })),
+    );
   });
 
   it("un borrador que ya tiene publicación no se puede activar sin publish", async () => {

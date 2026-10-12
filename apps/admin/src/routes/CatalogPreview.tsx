@@ -73,7 +73,8 @@ export default function CatalogPreview() {
     null,
   );
   // Al activar un borrador, el botón «Activar» desaparece de la fila (ya no es borrador): el
-  // foco que tenía se perdería en <body>. Si pasa, vuelve al nombre del producto.
+  // foco que tenía se perdería en <body>. Si pasa, vuelve al nombre del producto, o al título
+  // de la pantalla si el producto ya no está en la lista.
   const [refocus, setRefocus] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const products = useQuery({
@@ -85,7 +86,11 @@ export default function CatalogPreview() {
   useEffect(() => {
     if (refocus === null) return;
     if (document.activeElement === document.body || document.activeElement === null) {
-      document.getElementById(`product-name-${refocus}`)?.focus();
+      // Si el producto ya no está en la lista (por ejemplo, filtrada por «Borrador»), al título.
+      (
+        document.getElementById(`product-name-${refocus}`) ??
+        document.getElementById("catalog-heading")
+      )?.focus();
     }
     setRefocus(null);
   }, [refocus]);
@@ -131,7 +136,13 @@ export default function CatalogPreview() {
     <main className="mx-auto max-w-6xl px-6 py-10">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="font-display text-heading-lg">Productos</h1>
+          <h1
+            id="catalog-heading"
+            tabIndex={-1}
+            className="font-display text-heading-lg focus-visible:outline-2 focus-visible:outline-focus"
+          >
+            Productos
+          </h1>
           <p className="mt-2 text-text-secondary">Administrá perfumes, relojes y accesorios.</p>
         </div>
         <Can perform="catalog.product:write">
@@ -226,7 +237,7 @@ export default function CatalogPreview() {
                   <p
                     id={`product-name-${product.id}`}
                     tabIndex={-1}
-                    className="font-semibold outline-none focus-visible:outline-2 focus-visible:outline-focus"
+                    className="font-semibold focus-visible:outline-2 focus-visible:outline-focus"
                   >
                     {product.name}
                   </p>
