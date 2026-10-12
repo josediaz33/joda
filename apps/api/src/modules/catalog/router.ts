@@ -274,12 +274,19 @@ export function createCatalogRouter(db: PrismaClient | null, deps: CatalogServic
         catalogService.createCategory(requireDb(db), requireStaffContext(ctx), input),
       ),
 
+    // El permiso mínimo es `write`; si el pedido cambia `isVisible`, el servicio exige además
+    // `publish` (RN-CAT-05): mostrar u ocultar una categoría cambia lo que ve la tienda.
     update: staffProcedure
       .meta(WRITE)
       .input(updateCategoryInput)
       .output(adminCategorySchema)
       .mutation(({ ctx, input }) =>
-        catalogService.updateCategory(requireDb(db), requireStaffContext(ctx), input),
+        catalogService.updateCategory(
+          requireDb(db),
+          requireStaffContext(ctx),
+          { canPublish: ctx.grantedPermissions?.has("catalog.product:publish") === true },
+          input,
+        ),
       ),
   });
 
