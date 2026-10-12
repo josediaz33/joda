@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AdminProduct, AdminVariant, ProductKind, ProductStatus } from "@joda/contracts";
 import { Button } from "@joda/ui/primitives/button";
@@ -34,6 +34,25 @@ const statuses: Record<ProductStatus, string> = {
   archived: "Archivado",
 };
 
+function ActivateButton({
+  product,
+  onActivate,
+}: {
+  product: AdminProduct;
+  onActivate: (product: AdminProduct) => Promise<void>;
+}) {
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      aria-label={`Activar ${product.name}`}
+      onClick={() => void onActivate(product)}
+    >
+      Activar
+    </Button>
+  );
+}
+
 export default function CatalogPreview() {
   const [kind, setKind] = useState<ProductKind | undefined>();
   const [status, setStatus] = useState<ProductStatus | undefined>();
@@ -53,12 +72,28 @@ export default function CatalogPreview() {
   const [actionError, setActionError] = useState<{ productId: string; message: string } | null>(
     null,
   );
+  // Al activar un borrador, el botón «Activar» desaparece de la fila (ya no es borrador): el
+  // foco que tenía se perdería en <body>. Si pasa, vuelve al nombre del producto, o al título
+  // de la pantalla si el producto ya no está en la lista.
+  const [refocus, setRefocus] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const products = useQuery({
     queryKey: ["catalog-preview", kind, status, cursor],
     queryFn: () => api.listProducts({ kind, status, limit: 20, ...(cursor ? { cursor } : {}) }),
     retry: false,
   });
+
+  useEffect(() => {
+    if (refocus === null) return;
+    if (document.activeElement === document.body || document.activeElement === null) {
+      // Si el producto ya no está en la lista (por ejemplo, filtrada por «Borrador»), al título.
+      (
+        document.getElementById(`product-name-${refocus}`) ??
+        document.getElementById("catalog-heading")
+      )?.focus();
+    }
+    setRefocus(null);
+  }, [refocus]);
 
   async function refresh() {
     await queryClient.invalidateQueries({ queryKey: ["catalog-preview"] });
@@ -86,14 +121,28 @@ export default function CatalogPreview() {
     } finally {
       await refresh();
       busy.current = false;
+      setRefocus(productId);
     }
+  }
+
+  function activate(target: AdminProduct) {
+    return runPublication(target.id, () => api.activateProduct({ id: target.id }), {
+      done: `${target.name} se activó.`,
+      failure: "No se pudo activar el producto.",
+    });
   }
 
   return (
     <main className="mx-auto max-w-6xl px-6 py-10">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="font-display text-heading-lg">Productos</h1>
+          <h1
+            id="catalog-heading"
+            tabIndex={-1}
+            className="font-display text-heading-lg focus-visible:outline-2 focus-visible:outline-focus"
+          >
+            Productos
+          </h1>
           <p className="mt-2 text-text-secondary">Administrá perfumes, relojes y accesorios.</p>
         </div>
         <Can perform="catalog.product:write">
@@ -185,7 +234,13 @@ export default function CatalogPreview() {
             <div key={product.id} className="border-b border-border-subtle py-4 last:border-0">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
-                  <p className="font-semibold">{product.name}</p>
+                  <p
+                    id={`product-name-${product.id}`}
+                    tabIndex={-1}
+                    className="font-semibold focus-visible:outline-2 focus-visible:outline-focus"
+                  >
+                    {product.name}
+                  </p>
                   <p className="text-sm text-text-secondary">
                     {product.brandName ?? "Sin marca"} · {kinds[product.kind]}
                   </p>
@@ -233,6 +288,19 @@ export default function CatalogPreview() {
                       </dl>
                     </DialogContent>
                   </Dialog>
+                  {/* Activar un borrador (RN-CAT-04): con `write` si no está publicado; si ya
+                      tiene publicación, también hace falta `publish`, porque lo muestra en la tienda. */}
+                  {product.status === "draft" && (
+                    <Can perform="catalog.product:write">
+                      {product.publishedAt ? (
+                        <Can perform="catalog.product:publish">
+                          <ActivateButton product={product} onActivate={activate} />
+                        </Can>
+                      ) : (
+                        <ActivateButton product={product} onActivate={activate} />
+                      )}
+                    </Can>
+                  )}
                   <Can perform="catalog.product:publish">
                     <Button
                       variant="outline"

@@ -9,6 +9,7 @@ import {
   type CreateCategoryInput,
   type CreateProductInput,
   type CreateTagInput,
+  type ActivateProductInput,
   type CreateVariantInput,
   type ListProductsInput,
   type SetProductPublicationInput,
@@ -386,6 +387,64 @@ function buildProductFacetsFromRow(row: repo.ProductRow): Record<string, unknown
     case "accessory":
       return buildProductFacets({ kind: "accessory", ...admin.accessoryDetails });
   }
+}
+
+// ---------------------------------------------------------------------
+// Activación — RN-CAT-04 (WP-C08e). `draft` → `active` con su propio procedimiento:
+// `status` no viaja por `update`. Activar un producto que ya tiene `published_at` lo
+// muestra en la tienda, así que además de `write` exige `publish`.
+// ---------------------------------------------------------------------
+const PRODUCT_ARCHIVED_ERROR = appError(
+  "CONFLICT_PRODUCT_ARCHIVED",
+  409,
+  "Un producto archivado no se puede activar.",
+);
+
+const ACTIVATE_PUBLISHED_FORBIDDEN_ERROR = appError(
+  "FORBIDDEN_INSUFFICIENT_PERMISSION",
+  403,
+  "Este producto ya está publicado: activarlo lo muestra en la tienda y hace falta el permiso de publicar.",
+);
+
+export async function activateProduct(
+  db: PrismaClient,
+  ctx: TenantTxContext,
+  origin: AuditOrigin,
+  access: { readonly canPublish: boolean },
+  input: ActivateProductInput,
+): Promise<AdminProduct> {
+  return withTenantTx(db, ctx, async (tx) => {
+    // Una sola decisión: se intenta la escritura condicional (draft → active, y sin
+    // `published_at` si quien activa no puede publicar). Si no cambió nada, se lee el
+    // producto y se explica por qué; así una carrera con otro pedido (que lo publique, lo
+    // archive o lo active) termina igual que si hubiera ocurrido antes de este pedido.
+    if (await repo.activateProductRow(tx, input.id, !access.canPublish)) {
+      await recordAuditEntry(tx, {
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        audience: ctx.audience,
+        action: "catalog.product.activate",
+        entity: "products",
+        entityId: input.id,
+        before: { status: "draft" },
+        after: { status: "active" },
+        ...origin,
+      });
+    } else {
+      const current = await repo.findProductRow(tx, { id: input.id });
+      if (!current) throw toTRPCError(NOT_FOUND_ERROR);
+      if (current.status === "archived") throw toTRPCError(PRODUCT_ARCHIVED_ERROR);
+      // Sigue en borrador: la condición que falló es `published_at IS NULL`, o sea que
+      // está publicado y quien activa no puede publicar.
+      if (current.status === "draft") throw toTRPCError(ACTIVATE_PUBLISHED_FORBIDDEN_ERROR);
+      // Ya activo: no hay nada que hacer.
+      return toAdminProduct(current);
+    }
+
+    const row = await repo.findProductRow(tx, { id: input.id });
+    if (!row) throw new Error(`producto ${input.id} desapareció a mitad de la transacción`);
+    return toAdminProduct(row);
+  });
 }
 
 export async function archiveProduct(

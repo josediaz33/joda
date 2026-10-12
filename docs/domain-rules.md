@@ -204,7 +204,20 @@ La tienda ve un producto cuando está `active` **y** publicado (`published_at` n
 
 **Procedencia.** El criterio de RF-CAT-09 y de WP-C08g (publicar es independiente del estado interno; solo con `catalog.product:publish`) viene del backlog. Lo demás lo derivó el desarrollo del criterio y **no lo confirmó José**: publicar con cualquier `status`, conservar la fecha de un producto ya publicado y que despublicar no toque las variantes.
 
-**Qué no dice.** (a) No exige variantes visibles, imágenes ni precio para publicar: un producto publicado y activo sin variantes visibles aparece en la tienda sin nada que comprar. (b) No dice si un producto archivado se puede publicar: el código lo permite, por la independencia del estado, y el admin avisa que no se ve. Las dos están sin decidir (WP-C08n). (c) La categoría primaria se verifica al publicar, no después: `catalog.product.update` con `categoryIds` y sin `primaryCategoryId` deja las categorías sin primaria, también en un producto ya publicado (WP-C08p). (d) Cómo se pasa un borrador a activo es WP-C08e.
+**Qué no dice.** (a) No exige variantes visibles, imágenes ni precio para publicar: un producto publicado y activo sin variantes visibles aparece en la tienda sin nada que comprar. (b) No dice si un producto archivado se puede publicar: el código lo permite, por la independencia del estado, y el admin avisa que no se ve. Las dos están sin decidir (WP-C08n). (c) La categoría primaria se verifica al publicar, no después: `catalog.product.update` con `categoryIds` y sin `primaryCategoryId` deja las categorías sin primaria, también en un producto ya publicado (WP-C08p). (d) Cómo se pasa un borrador a activo es RN-CAT-04.
+
+### RN-CAT-04 · Activar un producto
+
+`status` (`draft`, `active`, `archived`) no viaja por la edición: `catalog.product.update` lo rechaza. Pasar un borrador a activo tiene su propio procedimiento, `catalog.product.activate`.
+
+- **Permiso.** `catalog.product:write` si el producto no está publicado (`published_at` nulo: nunca se publicó, o se despublicó). Si ya tiene `published_at`, además `catalog.product:publish`: la tienda ve lo que está activo y publicado, así que activarlo lo muestra, y mostrar es de quien publica (RN-CAT-03). Sin ese permiso, 403 `FORBIDDEN_INSUFFICIENT_PERMISSION` y el producto sigue en borrador. El admin no ofrece el botón a quien no lo puede usar.
+- **Solo desde `draft`.** Uno ya activo no cambia nada y no deja entrada en la bitácora. Un archivado no se activa: 409 `CONFLICT_PRODUCT_ARCHIVED`.
+- **Con otros pedidos a la vez.** La escritura es condicional (`status = 'draft'`, y `published_at IS NULL` si quien activa no puede publicar). Si mientras la escritura espera otro pedido publica el producto o lo archiva, el resultado es el mismo que si eso hubiera pasado antes (y si lo activa otro pedido, esta escritura no encuentra nada que cambiar): un producto que se publicó en el medio no queda activado por alguien sin permiso para publicar.
+- **Bitácora.** `catalog.product.activate`, con el estado antes y después.
+
+**Procedencia.** El permiso (write si no está publicado, publish si ya tiene `published_at`) y «de borrador a activo» vienen del criterio de WP-C08e. Que un archivado no se pueda activar es una consecuencia de esa letra, **no la confirmó José**.
+
+**Qué no dice.** No exige nada para activar (variantes, imágenes, precio, categoría). Tampoco dice si un producto archivado se puede reactivar, ni cómo: hoy no se puede (WP-C08q).
 
 ---
 

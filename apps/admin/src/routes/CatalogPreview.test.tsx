@@ -11,6 +11,7 @@ vi.mock("../api", () => ({
   api: {
     current: vi.fn(),
     listProducts: vi.fn(),
+    activateProduct: vi.fn(),
     publishProduct: vi.fn(),
     unpublishProduct: vi.fn(),
     setVariantVisibility: vi.fn(),
@@ -161,9 +162,12 @@ describe("RF-CAT-09 · publicar, despublicar y mostrar variantes", () => {
     const user = userEvent.setup();
     renderCatalog(PUBLISHER, [product({ publishedAt: null })]);
 
-    await user.click(await screen.findByRole("button", { name: "Publicar Layton" }));
+    const button = await screen.findByRole("button", { name: "Publicar Layton" });
+    await user.click(button);
 
     await waitFor(() => expect(api.publishProduct).toHaveBeenCalledWith({ id: productId }));
+    // El botón sigue en la fila (solo cambia su etiqueta): el foco no se mueve de ahí.
+    expect(document.activeElement).toBe(button);
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Layton se publicó."));
   });
 
@@ -285,5 +289,88 @@ describe("RF-CAT-09 · publicar, despublicar y mostrar variantes", () => {
     expect(screen.getByRole("status").textContent).toBe("");
     // El aviso está en el bloque del producto donde se intentó, no suelto arriba de la lista.
     expect(alert.parentElement?.textContent).toContain("Layton");
+  });
+});
+
+// WP-C08e · RN-CAT-04: activar un borrador. Con `write` si no está publicado; si ya tiene
+// publicación, también hace falta `publish`, porque activarlo lo muestra en la tienda.
+describe("RN-CAT-04 · activar un borrador", () => {
+  it("un borrador sin publicar se activa con write, y la API recibe el id", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.activateProduct).mockResolvedValue({} as AdminProduct);
+    renderCatalog(WRITER, [product({ status: "draft", publishedAt: null })]);
+
+    await user.click(await screen.findByRole("button", { name: "Activar Layton" }));
+
+    await waitFor(() => expect(api.activateProduct).toHaveBeenCalledWith({ id: productId }));
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Layton se activó."));
+  });
+
+  it("al activar, el botón desaparece y el foco pasa al nombre del producto en vez de perderse", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.activateProduct).mockResolvedValue({} as AdminProduct);
+    renderCatalog(WRITER, [product({ status: "draft", publishedAt: null })]);
+    const button = await screen.findByRole("button", { name: "Activar Layton" });
+    // Al releer, el producto ya está activo: «Activar» deja de ofrecerse.
+    vi.mocked(api.listProducts).mockResolvedValue({
+      items: [product({ status: "active", publishedAt: null })],
+      nextCursor: null,
+    });
+
+    await user.click(button);
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Activar Layton" })).toBeNull(),
+    );
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Layton"));
+  });
+
+  it("si el producto activado sale de la lista (filtrada por borradores), el foco pasa al título", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.activateProduct).mockResolvedValue({} as AdminProduct);
+    renderCatalog(WRITER, [product({ status: "draft", publishedAt: null })]);
+    const button = await screen.findByRole("button", { name: "Activar Layton" });
+    vi.mocked(api.listProducts).mockResolvedValue({ items: [], nextCursor: null });
+
+    await user.click(button);
+
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("heading", { name: "Productos" })),
+    );
+  });
+
+  it("un borrador que ya tiene publicación no se puede activar sin publish", async () => {
+    renderCatalog(WRITER, [product({ status: "draft", publishedAt: "2026-01-01T12:00:00.000Z" })]);
+
+    await screen.findByRole("button", { name: "Editar" });
+
+    expect(screen.queryByRole("button", { name: "Activar Layton" })).toBeNull();
+  });
+
+  it("un borrador que ya tiene publicación se activa con publish", async () => {
+    renderCatalog(PUBLISHER, [
+      product({ status: "draft", publishedAt: "2026-01-01T12:00:00.000Z" }),
+    ]);
+
+    expect(await screen.findByRole("button", { name: "Activar Layton" })).toBeTruthy();
+  });
+
+  it("un producto activo o archivado no ofrece Activar", async () => {
+    renderCatalog(PUBLISHER, [
+      product({ id: productId, name: "Layton", status: "active" }),
+      product({ id: otherProductId, name: "Herod", status: "archived" }),
+    ]);
+
+    await screen.findByRole("button", { name: "Publicar Layton" });
+
+    expect(screen.queryByRole("button", { name: /^Activar/ })).toBeNull();
+  });
+
+  it("quien solo puede leer no ve Activar", async () => {
+    renderCatalog(["catalog.product:read"], [product({ status: "draft", publishedAt: null })]);
+
+    await screen.findByText("Layton");
+
+    expect(screen.queryByRole("button", { name: /^Activar/ })).toBeNull();
   });
 });

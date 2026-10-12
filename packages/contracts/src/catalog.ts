@@ -536,8 +536,8 @@ export type CreateProductInput = z.infer<typeof createProductInput>;
 
 // `status` tampoco viaja por este procedimiento: catalog.product.update solo
 // exige catalog.product:write y no debe activar una ficha que ya tenga
-// published_at. La publicación tiene sus procedimientos propios, protegidos por
-// catalog.product:publish (RF-CAT-09, `setProductPublicationInput`).
+// published_at. Activar (`activateProductInput`, RN-CAT-04) y publicar
+// (`setProductPublicationInput`, RF-CAT-09) tienen sus procedimientos propios.
 // A diferencia de create, update NO redeclara `kind`: la vertical es fija
 // (ver el comentario de arriba de adminProductSchema). El service rechaza
 // perfumeDetails/watchDetails/accessoryDetails que no correspondan a la
@@ -577,6 +577,12 @@ export type UpdateProductInput = z.infer<typeof updateProductInput>;
 
 export const archiveProductInput = z.object({ id: idSchema }).strict();
 export const byProductIdInput = z.object({ id: idSchema }).strict();
+
+// WP-C08e · RN-CAT-04. Pasar un borrador a activo tiene su procedimiento propio:
+// `status` no viaja por `update`. Exige `write`, y además `publish` si el producto
+// tiene `published_at`, porque activarlo lo muestra en la tienda.
+export const activateProductInput = z.object({ id: idSchema }).strict();
+export type ActivateProductInput = z.infer<typeof activateProductInput>;
 
 // WP-C08g · RF-CAT-09. Publicar y despublicar mueven `published_at` y nada más,
 // con independencia del `status` interno. Los dos usan la misma entrada.

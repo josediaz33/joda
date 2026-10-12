@@ -1,4 +1,5 @@
 import {
+  activateProductInput,
   adminBomComponentSchema,
   adminCategorySchema,
   adminProductSchema,
@@ -126,6 +127,22 @@ export function createCatalogRouter(db: PrismaClient | null, deps: CatalogServic
       .output(adminProductSchema)
       .mutation(({ ctx, input }) =>
         catalogService.archiveProduct(requireDb(db), requireStaffContext(ctx), input),
+      ),
+
+    // El permiso mínimo es `write`; si el producto ya tiene `published_at`, el servicio
+    // exige además `publish` (RN-CAT-04): activarlo lo muestra en la tienda.
+    activate: staffProcedure
+      .meta(WRITE)
+      .input(activateProductInput)
+      .output(adminProductSchema)
+      .mutation(({ ctx, input }) =>
+        catalogService.activateProduct(
+          requireDb(db),
+          requireStaffContext(ctx),
+          auditOrigin(ctx),
+          { canPublish: ctx.grantedPermissions?.has("catalog.product:publish") === true },
+          input,
+        ),
       ),
 
     publish: staffProcedure

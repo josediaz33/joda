@@ -10,6 +10,7 @@ import {
   adminWatchDetailsSchema,
   createBomComponentInput,
   createProductInput,
+  activateProductInput,
   createVariantInput,
   setProductPublicationInput,
   setVariantVisibilityInput,
@@ -475,5 +476,23 @@ describe("catalog — publicación y visibilidad (RF-CAT-09)", () => {
     expect(() => setVariantVisibilityInput.parse({ id })).toThrow();
     expect(() => setVariantVisibilityInput.parse({ id, onlineVisible: "yes" })).toThrow();
     expect(() => setVariantVisibilityInput.parse({ id, onlineVisible: true, sku: "X" })).toThrow();
+  });
+});
+
+// WP-C08e · RN-CAT-04: activar un producto tiene su propia entrada, estricta y solo con el id.
+describe("catalog — activateProductInput (RN-CAT-04)", () => {
+  const id = "33333333-3333-4333-a333-333333333331";
+
+  it("acepta solo el id del producto", () => {
+    expect(activateProductInput.parse({ id })).toEqual({ id });
+  });
+
+  it("rechaza el estado y la fecha de publicación: no se eligen desde afuera", () => {
+    expect(() => activateProductInput.parse({ id, status: "active" })).toThrow();
+    expect(() => activateProductInput.parse({ id, publishedAt: "2026-01-01" })).toThrow();
+  });
+
+  it("rechaza un id que no es uuid", () => {
+    expect(() => activateProductInput.parse({ id: "layton" })).toThrow();
   });
 });
