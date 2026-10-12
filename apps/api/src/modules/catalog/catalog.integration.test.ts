@@ -2241,4 +2241,152 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(foreign.statusCode).toBe(404);
     expect(unknown.statusCode).toBe(404);
   });
+
+  // -------------------------------------------------------------------
+  // WP-C08e · RN-CAT-04. `catalog.product.activate` pasa un borrador a activo.
+  // Con `catalog.product:write` si el producto nunca se publicó; si ya tiene
+  // `published_at`, hace falta además `catalog.product:publish`, porque
+  // activarlo lo muestra en la tienda. `status` no viaja por `update`.
+  // -------------------------------------------------------------------
+  type ActivatedProduct = { status: string; publishedAt: string | null };
+
+  it("RN-CAT-04 · activar un borrador lo pasa a activo, deja la entrada en la bitácora y no lo publica", async () => {
+    const product = await createAccessory("c08e-activa");
+
+    const activated = await mutateOk<ActivatedProduct>("catalog.product.activate", {
+      id: product.id,
+    });
+
+    expect(activated).toMatchObject({ status: "active", publishedAt: null });
+    expect(await auditActions(product.id)).toEqual(["catalog.product.activate"]);
+    expect(await publicProductSlugs()).not.toContain("c08e-activa");
+  });
+
+  it("RN-CAT-04 · quien tiene write sin publish puede activar un producto que nunca se publicó", async () => {
+    const product = await createAccessory("c08e-activa-escritor");
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const response = await mutateAs(writerCookie, "catalog.product.activate", { id: product.id });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.data.status).toBe("active");
+  });
+
+  it("RN-CAT-04 · quien tiene write sin publish no puede activar un producto que ya tiene published_at; con publish sí, y recién ahí la tienda lo ve", async () => {
+    const product = await createAccessory("c08e-ya-publicado");
+    await mutateOk("catalog.product.publish", { id: product.id });
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const denied = await mutateAs(writerCookie, "catalog.product.activate", { id: product.id });
+    const stillDraft = await call<ActivatedProduct>("catalog.product.byId", { id: product.id });
+    const visibleBefore = await publicProductSlugs();
+    const allowed = await mutateOk<ActivatedProduct>("catalog.product.activate", {
+      id: product.id,
+    });
+    const visibleAfter = await publicProductSlugs();
+
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json().error.data.appCode).toBe("FORBIDDEN_INSUFFICIENT_PERMISSION");
+    expect(stillDraft.status).toBe("draft");
+    expect(visibleBefore).not.toContain("c08e-ya-publicado");
+    expect(allowed.status).toBe("active");
+    expect(visibleAfter).toContain("c08e-ya-publicado");
+  });
+
+  it("RN-CAT-04 · activar un producto que ya está activo no hace nada ni deja otra entrada en la bitácora", async () => {
+    const product = await createAccessory("c08e-ya-activo");
+    await mutateOk("catalog.product.activate", { id: product.id });
+
+    const again = await mutateOk<ActivatedProduct>("catalog.product.activate", { id: product.id });
+
+    expect(again.status).toBe("active");
+    expect(await auditActions(product.id)).toEqual(["catalog.product.activate"]);
+  });
+
+  it("RN-CAT-04 · un producto archivado no se activa: 409 y sigue archivado", async () => {
+    const product = await createAccessory("c08e-archivado");
+    await mutateOk("catalog.product.archive", { id: product.id });
+
+    const response = await mutate("catalog.product.activate", { id: product.id });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_PRODUCT_ARCHIVED");
+    const fetched = await call<ActivatedProduct>("catalog.product.byId", { id: product.id });
+    expect(fetched.status).toBe("archived");
+  });
+
+  it("RN-CAT-04 · un producto inexistente o de otro tenant da exactamente la misma respuesta", async () => {
+    await seedForeignCatalog();
+
+    const foreign = await mutate("catalog.product.activate", { id: FOREIGN_PRODUCT_ID });
+    const unknown = await mutate("catalog.product.activate", { id: UNKNOWN_ID });
+
+    expect(foreign.statusCode).toBe(404);
+    expect(unknown.statusCode).toBe(404);
+    expect(foreign.json().error.data.appCode).toBe("NOT_FOUND");
+    expect(unknown.json().error.data.appCode).toBe("NOT_FOUND");
+    expect(foreign.json().error.message).toBe("No encontrado.");
+    expect(unknown.json().error.message).toBe("No encontrado.");
+  });
+
+  it("RN-CAT-04 · si otro pedido publica el producto mientras quien no puede publicar lo activa, no se activa", async () => {
+    const product = await createAccessory("c08e-publicado-en-vuelo");
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    // Otra transacción publica el producto y todavía no confirma. La petición leyó un
+    // producto sin publicar; al desbloquearse ya está publicado, y activarlo lo mostraría
+    // en la tienda sin que esa persona tenga permiso para eso.
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutateAs> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        `UPDATE app.products SET published_at = '2025-06-15T10:00:00Z' WHERE id = $1`,
+        [product.id],
+      );
+      pending = mutateAs(writerCookie, "catalog.product.activate", { id: product.id });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+      const response = await pending;
+
+      expect(response.statusCode).toBe(403);
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    const fetched = await call<ActivatedProduct>("catalog.product.byId", { id: product.id });
+    expect(fetched.status).toBe("draft");
+    expect(await auditActions(product.id)).toEqual([]);
+  });
+
+  it("RN-CAT-04 · si otro pedido archiva el producto mientras éste espera, se rechaza como archivado", async () => {
+    const product = await createAccessory("c08e-archivado-en-vuelo");
+
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        `UPDATE app.products SET status = 'archived' WHERE id = $1`,
+        [product.id],
+      );
+      pending = mutate("catalog.product.activate", { id: product.id });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+      const response = await pending;
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.data.appCode).toBe("CONFLICT_PRODUCT_ARCHIVED");
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    expect(await auditActions(product.id)).toEqual([]);
+  });
 });

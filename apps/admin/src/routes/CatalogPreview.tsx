@@ -34,6 +34,25 @@ const statuses: Record<ProductStatus, string> = {
   archived: "Archivado",
 };
 
+function ActivateButton({
+  product,
+  onActivate,
+}: {
+  product: AdminProduct;
+  onActivate: (product: AdminProduct) => Promise<void>;
+}) {
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      aria-label={`Activar ${product.name}`}
+      onClick={() => void onActivate(product)}
+    >
+      Activar
+    </Button>
+  );
+}
+
 export default function CatalogPreview() {
   const [kind, setKind] = useState<ProductKind | undefined>();
   const [status, setStatus] = useState<ProductStatus | undefined>();
@@ -87,6 +106,13 @@ export default function CatalogPreview() {
       await refresh();
       busy.current = false;
     }
+  }
+
+  function activate(target: AdminProduct) {
+    return runPublication(target.id, () => api.activateProduct({ id: target.id }), {
+      done: `${target.name} se activó.`,
+      failure: "No se pudo activar el producto.",
+    });
   }
 
   return (
@@ -233,6 +259,19 @@ export default function CatalogPreview() {
                       </dl>
                     </DialogContent>
                   </Dialog>
+                  {/* Activar un borrador (RN-CAT-04): con `write` si nunca se publicó; si ya
+                      tiene publicación, también hace falta `publish`, porque lo muestra en la tienda. */}
+                  {product.status === "draft" && (
+                    <Can perform="catalog.product:write">
+                      {product.publishedAt ? (
+                        <Can perform="catalog.product:publish">
+                          <ActivateButton product={product} onActivate={activate} />
+                        </Can>
+                      ) : (
+                        <ActivateButton product={product} onActivate={activate} />
+                      )}
+                    </Can>
+                  )}
                   <Can perform="catalog.product:publish">
                     <Button
                       variant="outline"

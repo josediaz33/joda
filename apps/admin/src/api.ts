@@ -18,6 +18,7 @@ import {
   type CreateVariantInput,
   type CreateCategoryInput,
   type UpdateCategoryInput,
+  type ActivateProductInput,
   type SetProductPublicationInput,
   type SetVariantVisibilityInput,
   type UpdateVariantInput,
@@ -53,6 +54,8 @@ export const api = {
     adminCategorySchema.parse(await trpc.mutation("catalog.category.create", input)),
   updateCategory: async (input: UpdateCategoryInput) =>
     adminCategorySchema.parse(await trpc.mutation("catalog.category.update", input)),
+  activateProduct: async (input: ActivateProductInput) =>
+    adminProductSchema.parse(await trpc.mutation("catalog.product.activate", input)),
   publishProduct: async (input: SetProductPublicationInput) =>
     adminProductSchema.parse(await trpc.mutation("catalog.product.publish", input)),
   unpublishProduct: async (input: SetProductPublicationInput) =>

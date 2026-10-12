@@ -75,6 +75,7 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
       "catalog.category.create",
       "catalog.category.list",
       "catalog.category.update",
+      "catalog.product.activate",
       "catalog.product.archive",
       "catalog.product.byId",
       "catalog.product.create",

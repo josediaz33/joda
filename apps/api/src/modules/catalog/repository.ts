@@ -133,6 +133,24 @@ export async function publishProductRow(
   return count === 1;
 }
 
+/**
+ * WP-C08e. `status` pasa a `active` solo desde `draft`, y dice si cambió algo. Con
+ * `onlyIfUnpublished` (quien activa no puede publicar) la condición incluye `published_at
+ * IS NULL`: si otro pedido publica el producto entre la lectura y esta escritura, no se
+ * activa un producto que esa persona no tiene permiso para mostrar en la tienda.
+ */
+export async function activateProductRow(
+  tx: TenantTx,
+  id: string,
+  onlyIfUnpublished: boolean,
+): Promise<boolean> {
+  const { count } = await tx.products.updateMany({
+    where: { id, status: "draft", ...(onlyIfUnpublished ? { published_at: null } : {}) },
+    data: { status: "active" },
+  });
+  return count === 1;
+}
+
 /** Contraparte de `publishProductRow`: solo cambia un producto que está publicado. */
 export async function unpublishProductRow(tx: TenantTx, id: string): Promise<boolean> {
   const { count } = await tx.products.updateMany({
