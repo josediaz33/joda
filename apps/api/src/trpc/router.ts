@@ -19,7 +19,9 @@ export function createAppRouter(authDeps: AuthServiceDeps | null) {
   return router({
     example: createExampleRouter(authDeps?.db ?? null),
     auth: createAuthRouter(authDeps),
-    catalog: createCatalogRouter(authDeps?.db ?? null),
+    // Publicar estampa `published_at` con el reloj de `authDeps` (real en producción,
+    // fijo en los tests): el servicio no llama a `new Date()` (WP-C08g).
+    catalog: createCatalogRouter(authDeps?.db ?? null, authDeps ? { clock: authDeps.clock } : null),
     // El reloj es el mismo de `authDeps` (real en producción, fijo en los
     // tests); los ids de los lotes que nacen en una apertura los genera
     // `uuidGenerator` (WP-C11).

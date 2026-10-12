@@ -114,6 +114,35 @@ export async function updateProductRow(
 }
 
 /**
+ * WP-C08g. `published_at` solo se escribe acá y en `unpublishProductRow`:
+ * `updateProductRow` no lo recibe, para que `catalog.product.update` (que exige
+ * `write`) no pueda publicar. La escritura es condicional (`published_at IS NULL`)
+ * y dice si cambió algo: con dos pedidos simultáneos, el segundo espera el bloqueo de
+ * la fila, vuelve a evaluar la condición, no encuentra nada que cambiar y no pisa la
+ * fecha del primero ni deja otra entrada en la bitácora.
+ */
+export async function publishProductRow(
+  tx: TenantTx,
+  id: string,
+  publishedAt: Date,
+): Promise<boolean> {
+  const { count } = await tx.products.updateMany({
+    where: { id, published_at: null },
+    data: { published_at: publishedAt },
+  });
+  return count === 1;
+}
+
+/** Contraparte de `publishProductRow`: solo cambia un producto que está publicado. */
+export async function unpublishProductRow(tx: TenantTx, id: string): Promise<boolean> {
+  const { count } = await tx.products.updateMany({
+    where: { id, published_at: { not: null } },
+    data: { published_at: null },
+  });
+  return count === 1;
+}
+
+/**
  * `product_categories`/`product_tags` tienen su propio `tenant_id` desde
  * WP-B08, pero eso protege la FILA (que sea legible/escribible solo bajo
  * el tenant que la creó) — no evita por sí solo insertar una fila propia
@@ -468,6 +497,24 @@ export interface UpdateVariantPatch {
   readonly minStockAlert?: number | null;
   readonly weightG?: number | null;
   readonly position?: number;
+}
+
+/**
+ * WP-C08g. `online_visible` solo se escribe acá, por la misma razón que
+ * `published_at`. Va por SQL crudo a propósito: el CHECK de RN-CAT-02 (solo
+ * `sealed`, `decant` y `unit` se publican) llega con el cliente tipado como un
+ * error sin código que el mapeo convierte en 500, y con `$executeRaw` llega como
+ * SQLSTATE 23514, que el servicio sí puede reconocer (`hasSqlState`).
+ */
+export async function setVariantOnlineVisible(
+  tx: TenantTx,
+  id: string,
+  onlineVisible: boolean,
+): Promise<boolean> {
+  const changed = await tx.$executeRaw`
+    UPDATE app.product_variants SET online_visible = ${onlineVisible}
+    WHERE id = ${id}::uuid AND online_visible <> ${onlineVisible}`;
+  return changed === 1;
 }
 
 export async function updateVariantRow(

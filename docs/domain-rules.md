@@ -190,7 +190,21 @@ Se generan dos filas en `movement_cost_allocations`. El COGS de la venta es 4.35
 
 **Procedencia.** Regla indicada por José y registrada en el backlog como WP-B17; la lista de tres tipos es suya. Hasta WP-B17 la única defensa era la normalización que WP-E05 metió en `updateVariant` para el granel (apagaba `online_visible` al actualizar una variante `bulk`): cubría un tipo de tres y solo cuando alguien actualizaba esa variante.
 
-**Qué no dice.** No decide cuándo ni quién publica una variante: la visibilidad se administra bajo `catalog.product:publish` (RF-CAT-09, WP-C08g), nunca como campo de edición de la variante. Esta regla es el techo de lo que ese procedimiento puede encender.
+**Qué no dice.** No decide cuándo ni quién publica una variante: la visibilidad se administra bajo `catalog.product:publish` (RF-CAT-09, WP-C08g, RN-CAT-03), nunca como campo de edición de la variante. Esta regla es el techo de lo que ese procedimiento puede encender.
+
+### RN-CAT-03 · Publicar es independiente del estado interno
+
+La tienda ve un producto cuando está `active` **y** publicado (`published_at` no nulo), y de él solo las variantes con `online_visible` (RN-CAT-02 es el techo). `status` y `published_at` no se arrastran uno al otro: publicar no activa, activar no publica, y mostrar una variante no publica el producto. Un borrador publicado no se ve hasta que esté activo.
+
+- **Quién.** En la API, solo tres procedimientos tocan `published_at` y `online_visible`, y los tres exigen `catalog.product:publish` (el ETL, las migraciones y el seed escriben esas columnas con otro rol): `catalog.product.publish`, `catalog.product.unpublish` y `catalog.variant.setVisibility`. Los de edición (`catalog.product:write`) rechazan `publishedAt`, `status` y `onlineVisible`.
+- **Publicar** estampa `published_at` con la hora del servidor. Sin categoría primaria se rechaza (caso borde 17: el breadcrumb no se puede resolver), con 409 `CONFLICT_PRODUCT_WITHOUT_PRIMARY_CATEGORY`; vale tanto si no tiene categorías como si tiene y ninguna es primaria. Un producto ya publicado conserva su fecha original: `published_at` es el inicio de la publicación vigente. Dos pedidos simultáneos no se pisan: el segundo no encuentra nada que cambiar.
+- **Despublicar** deja `published_at` en nulo y no toca `status` ni la visibilidad de las variantes: al volver a publicar, se muestran las que estaban visibles. Despublicar uno que no está publicado no hace nada.
+- **Mostrar una variante** que no es `sealed`, `decant` ni `unit` se rechaza con 409 `CONFLICT_VARIANT_NOT_PUBLISHABLE`: es el CHECK de RN-CAT-02 traducido a un error en español; la lista no se repite en el servicio.
+- **Bitácora.** Cada cambio efectivo deja una entrada (`catalog.product.publish`, `catalog.product.unpublish`, `catalog.variant.setVisibility`) con el antes y el después. Repetir lo que ya está así no deja nada.
+
+**Procedencia.** El criterio de RF-CAT-09 y de WP-C08g (publicar es independiente del estado interno; solo con `catalog.product:publish`) viene del backlog. Lo demás lo derivó el desarrollo del criterio y **no lo confirmó José**: publicar con cualquier `status`, conservar la fecha de un producto ya publicado y que despublicar no toque las variantes.
+
+**Qué no dice.** (a) No exige variantes visibles, imágenes ni precio para publicar: un producto publicado y activo sin variantes visibles aparece en la tienda sin nada que comprar. (b) No dice si un producto archivado se puede publicar: el código lo permite, por la independencia del estado, y el admin avisa que no se ve. Las dos están sin decidir (WP-C08n). (c) La categoría primaria se verifica al publicar, no después: `catalog.product.update` con `categoryIds` y sin `primaryCategoryId` deja las categorías sin primaria, también en un producto ya publicado (WP-C08p). (d) Cómo se pasa un borrador a activo es WP-C08e.
 
 ---
 
