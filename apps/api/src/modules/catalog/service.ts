@@ -454,18 +454,20 @@ export async function publishProduct(
     }
 
     const publishedAt = deps.clock.now();
-    await repo.setProductPublishedAt(tx, input.id, publishedAt);
-    await recordAuditEntry(tx, {
-      tenantId: ctx.tenantId,
-      actorId: ctx.userId,
-      audience: ctx.audience,
-      action: "catalog.product.publish",
-      entity: "products",
-      entityId: input.id,
-      before: { publishedAt: null },
-      after: { publishedAt: publishedAt.toISOString() },
-      ...origin,
-    });
+    // Si otro pedido la publicó mientras tanto, no hay nada que escribir ni auditar.
+    if (await repo.publishProductRow(tx, input.id, publishedAt)) {
+      await recordAuditEntry(tx, {
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        audience: ctx.audience,
+        action: "catalog.product.publish",
+        entity: "products",
+        entityId: input.id,
+        before: { publishedAt: null },
+        after: { publishedAt: publishedAt.toISOString() },
+        ...origin,
+      });
+    }
 
     const row = await repo.findProductRow(tx, { id: input.id });
     if (!row) throw new Error(`producto ${input.id} desapareció a mitad de la transacción`);
@@ -485,18 +487,19 @@ export async function unpublishProduct(
     if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
     if (existing.published_at === null) return toAdminProduct(existing);
 
-    await repo.setProductPublishedAt(tx, input.id, null);
-    await recordAuditEntry(tx, {
-      tenantId: ctx.tenantId,
-      actorId: ctx.userId,
-      audience: ctx.audience,
-      action: "catalog.product.unpublish",
-      entity: "products",
-      entityId: input.id,
-      before: { publishedAt: existing.published_at.toISOString() },
-      after: { publishedAt: null },
-      ...origin,
-    });
+    if (await repo.unpublishProductRow(tx, input.id)) {
+      await recordAuditEntry(tx, {
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        audience: ctx.audience,
+        action: "catalog.product.unpublish",
+        entity: "products",
+        entityId: input.id,
+        before: { publishedAt: existing.published_at.toISOString() },
+        after: { publishedAt: null },
+        ...origin,
+      });
+    }
 
     const row = await repo.findProductRow(tx, { id: input.id });
     if (!row) throw new Error(`producto ${input.id} desapareció a mitad de la transacción`);
@@ -521,23 +524,26 @@ export async function setVariantVisibility(
     if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
     if (existing.online_visible === input.onlineVisible) return toAdminVariant(existing);
 
+    let changed: boolean;
     try {
-      await repo.setVariantOnlineVisible(tx, input.id, input.onlineVisible);
+      changed = await repo.setVariantOnlineVisible(tx, input.id, input.onlineVisible);
     } catch (error) {
       if (hasSqlState(error, "23514")) throw toTRPCError(VARIANT_NOT_PUBLISHABLE_ERROR);
       throw error;
     }
-    await recordAuditEntry(tx, {
-      tenantId: ctx.tenantId,
-      actorId: ctx.userId,
-      audience: ctx.audience,
-      action: "catalog.variant.setVisibility",
-      entity: "product_variants",
-      entityId: input.id,
-      before: { onlineVisible: existing.online_visible },
-      after: { onlineVisible: input.onlineVisible },
-      ...origin,
-    });
+    if (changed) {
+      await recordAuditEntry(tx, {
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        audience: ctx.audience,
+        action: "catalog.variant.setVisibility",
+        entity: "product_variants",
+        entityId: input.id,
+        before: { onlineVisible: existing.online_visible },
+        after: { onlineVisible: input.onlineVisible },
+        ...origin,
+      });
+    }
 
     const row = await repo.findVariantRow(tx, input.id);
     if (!row) throw new Error(`variante ${input.id} desapareció a mitad de la transacción`);

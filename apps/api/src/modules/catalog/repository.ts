@@ -113,13 +113,33 @@ export async function updateProductRow(
   });
 }
 
-/** WP-C08g. `published_at` solo se escribe acá: `updateProductRow` no lo recibe, para que `catalog.product.update` (que exige `write`) no pueda publicar. */
-export async function setProductPublishedAt(
+/**
+ * WP-C08g. `published_at` solo se escribe acá y en `unpublishProductRow`:
+ * `updateProductRow` no lo recibe, para que `catalog.product.update` (que exige
+ * `write`) no pueda publicar. La escritura es condicional (`published_at IS NULL`)
+ * y dice si cambió algo: con dos pedidos simultáneos, el segundo espera el bloqueo de
+ * la fila, vuelve a evaluar la condición, no encuentra nada que cambiar y no pisa la
+ * fecha del primero ni deja otra entrada en la bitácora.
+ */
+export async function publishProductRow(
   tx: TenantTx,
   id: string,
-  publishedAt: Date | null,
-): Promise<void> {
-  await tx.products.update({ where: { id }, data: { published_at: publishedAt } });
+  publishedAt: Date,
+): Promise<boolean> {
+  const { count } = await tx.products.updateMany({
+    where: { id, published_at: null },
+    data: { published_at: publishedAt },
+  });
+  return count === 1;
+}
+
+/** Contraparte de `publishProductRow`: solo cambia un producto que está publicado. */
+export async function unpublishProductRow(tx: TenantTx, id: string): Promise<boolean> {
+  const { count } = await tx.products.updateMany({
+    where: { id, published_at: { not: null } },
+    data: { published_at: null },
+  });
+  return count === 1;
 }
 
 /**
@@ -490,9 +510,11 @@ export async function setVariantOnlineVisible(
   tx: TenantTx,
   id: string,
   onlineVisible: boolean,
-): Promise<void> {
-  await tx.$executeRaw`
-    UPDATE app.product_variants SET online_visible = ${onlineVisible} WHERE id = ${id}::uuid`;
+): Promise<boolean> {
+  const changed = await tx.$executeRaw`
+    UPDATE app.product_variants SET online_visible = ${onlineVisible}
+    WHERE id = ${id}::uuid AND online_visible <> ${onlineVisible}`;
+  return changed === 1;
 }
 
 export async function updateVariantRow(

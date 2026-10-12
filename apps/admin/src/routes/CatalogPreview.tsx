@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AdminProduct, AdminVariant, ProductKind, ProductStatus } from "@joda/contracts";
 import { Button } from "@joda/ui/primitives/button";
@@ -46,10 +46,13 @@ export default function CatalogPreview() {
   } | null>(null);
   const [imageProduct, setImageProduct] = useState<AdminProduct | null>(null);
   // Publicar, despublicar y mostrar u ocultar una variante (RF-CAT-09): se anuncia el
-  // resultado en una región `aria-live` y un rechazo de la API se muestra tal cual.
-  const [busy, setBusy] = useState(false);
+  // resultado en una región `aria-live` y un rechazo de la API se muestra tal cual, junto
+  // al producto donde se intentó.
+  const busy = useRef(false);
   const [notice, setNotice] = useState("");
-  const [actionError, setActionError] = useState("");
+  const [actionError, setActionError] = useState<{ productId: string; message: string } | null>(
+    null,
+  );
   const queryClient = useQueryClient();
   const products = useQuery({
     queryKey: ["catalog-preview", kind, status, cursor],
@@ -64,21 +67,25 @@ export default function CatalogPreview() {
   // No se deshabilitan los botones mientras corre (el foco se perdería al releer la
   // lista): un segundo clic se ignora.
   async function runPublication(
+    productId: string,
     action: () => Promise<unknown>,
     messages: { readonly done: string; readonly failure: string },
   ) {
-    if (busy) return;
-    setBusy(true);
+    if (busy.current) return;
+    busy.current = true;
     setNotice("");
-    setActionError("");
+    setActionError(null);
     try {
       await action();
       setNotice(messages.done);
     } catch (cause) {
-      setActionError(cause instanceof Error ? cause.message : messages.failure);
+      setActionError({
+        productId,
+        message: cause instanceof Error ? cause.message : messages.failure,
+      });
     } finally {
       await refresh();
-      setBusy(false);
+      busy.current = false;
     }
   }
 
@@ -163,11 +170,6 @@ export default function CatalogPreview() {
       <p role="status" className="sr-only">
         {notice}
       </p>
-      {actionError && (
-        <p role="alert" className="mt-6 text-error">
-          {actionError}
-        </p>
-      )}
       {products.isPending && <p className="mt-8 text-text-secondary">Cargando productos…</p>}
       {products.isError && (
         <p role="alert" className="mt-8 text-error">
@@ -193,12 +195,17 @@ export default function CatalogPreview() {
                     <span className="text-text-secondary">Estado interno:</span>{" "}
                     {statuses[product.status]}
                     <span aria-hidden="true"> · </span>
-                    <span className="text-text-secondary">En la tienda:</span>{" "}
+                    <span className="text-text-secondary">Publicación:</span>{" "}
                     {product.publishedAt ? "Publicado" : "No publicado"}
                   </p>
-                  {product.publishedAt && product.status !== "active" && (
+                  {product.publishedAt && product.status === "draft" && (
                     <p className="text-sm text-text-secondary">
                       Publicado, pero no se ve en la tienda hasta que esté activo.
+                    </p>
+                  )}
+                  {product.publishedAt && product.status === "archived" && (
+                    <p className="text-sm text-text-secondary">
+                      Publicado, pero no se ve en la tienda porque está archivado.
                     </p>
                   )}
                 </div>
@@ -219,7 +226,7 @@ export default function CatalogPreview() {
                       <dl className="grid grid-cols-2 gap-3 text-sm">
                         <dt className="text-text-secondary">Estado interno</dt>
                         <dd>{statuses[product.status]}</dd>
-                        <dt className="text-text-secondary">En la tienda</dt>
+                        <dt className="text-text-secondary">Publicación</dt>
                         <dd>{product.publishedAt ? "Publicado" : "No publicado"}</dd>
                         <dt className="text-text-secondary">Variantes</dt>
                         <dd>{product.variants.length}</dd>
@@ -233,6 +240,7 @@ export default function CatalogPreview() {
                       aria-label={`${product.publishedAt ? "Despublicar" : "Publicar"} ${product.name}`}
                       onClick={() =>
                         void runPublication(
+                          product.id,
                           () =>
                             product.publishedAt
                               ? api.unpublishProduct({ id: product.id })
@@ -270,6 +278,11 @@ export default function CatalogPreview() {
                   </Can>
                 </div>
               </div>
+              {actionError?.productId === product.id && (
+                <p role="alert" className="mt-2 text-sm text-error">
+                  {actionError.message}
+                </p>
+              )}
               {product.variants.length > 0 && (
                 <div className="mt-2 flex flex-wrap gap-x-5 gap-y-2 text-sm">
                   {product.variants.map((variant) => (
@@ -286,9 +299,10 @@ export default function CatalogPreview() {
                         <Button
                           variant="link"
                           size="sm"
-                          aria-label={`${variant.onlineVisible ? "Ocultar" : "Mostrar"} ${variant.sku} en la tienda`}
+                          aria-label={`${variant.onlineVisible ? "Ocultar de la tienda" : "Mostrar en la tienda"} ${variant.sku}`}
                           onClick={() =>
                             void runPublication(
+                              product.id,
                               () =>
                                 api.setVariantVisibility({
                                   id: variant.id,

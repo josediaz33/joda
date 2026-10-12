@@ -1867,6 +1867,64 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     ]);
   });
 
+  it("RF-CAT-09 · despublicar no toca las variantes: siguen marcadas como visibles y reaparecen al volver a publicar", async () => {
+    const product = await createAccessory("c08g-despublica-variantes");
+    const variant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08G-DESPUBLICA",
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "100000",
+    });
+    await activate(product.id);
+    await mutateOk("catalog.product.publish", { id: product.id });
+    await mutateOk("catalog.variant.setVisibility", { id: variant.id, onlineVisible: true });
+
+    await mutateOk("catalog.product.unpublish", { id: product.id });
+    const whileUnpublished = await publicVariantSkus();
+    const variantsAfter = await call<{ onlineVisible: boolean }[]>("catalog.variant.list", {
+      productId: product.id,
+    });
+    await mutateOk("catalog.product.publish", { id: product.id });
+    const afterRepublish = await publicVariantSkus();
+
+    expect(whileUnpublished).not.toContain("C08G-DESPUBLICA");
+    expect(variantsAfter.map((item) => item.onlineVisible)).toEqual([true]);
+    expect(afterRepublish).toContain("C08G-DESPUBLICA");
+  });
+
+  it("RF-CAT-09 · si otro pedido publica el producto mientras éste espera, no le pisa la fecha ni deja otra entrada en la bitácora", async () => {
+    const product = await createAccessory("c08g-publicacion-simultanea");
+
+    // Otra transacción publica el producto y todavía no confirma. Una petición que
+    // decidiera con lo que leyó antes (sin publicar) estamparía su propia hora al
+    // desbloquearse y pisaría la del primero.
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        `UPDATE app.products SET published_at = '2025-06-15T10:00:00Z' WHERE id = $1`,
+        [product.id],
+      );
+      pending = mutate("catalog.product.publish", { id: product.id });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+      const response = await pending;
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().result.data.publishedAt).toBe("2025-06-15T10:00:00.000Z");
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    expect(await auditActions(product.id)).toEqual([]);
+  });
+
   it("RF-CAT-09 · publicar un producto ya publicado conserva la fecha original y no deja otra entrada en la bitácora", async () => {
     const product = await createAccessory("c08g-ya-publicado");
     await testDb.superuserClient.query(
@@ -1919,14 +1977,46 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(await auditActions(product.id)).toEqual([]);
   });
 
-  it("RF-CAT-09 · un producto inexistente o de otro tenant da 404, al publicar y al despublicar", async () => {
+  it("caso borde 17 · un producto con categorías pero ninguna primaria tampoco se publica", async () => {
+    const product = await createAccessory("c08g-ninguna-primaria");
+    await testDb.superuserClient.query(
+      `UPDATE app.product_categories SET is_primary = false WHERE product_id = $1`,
+      [product.id],
+    );
+
+    const response = await mutate("catalog.product.publish", { id: product.id });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_PRODUCT_WITHOUT_PRIMARY_CATEGORY");
+  });
+
+  it("RF-CAT-09 · un producto o una variante inexistente o de otro tenant da exactamente la misma respuesta, al publicar, despublicar y mostrar", async () => {
     await seedForeignCatalog();
 
-    const foreign = await mutate("catalog.product.publish", { id: FOREIGN_PRODUCT_ID });
-    const unknown = await mutate("catalog.product.unpublish", { id: UNKNOWN_ID });
+    const responses = [
+      await mutate("catalog.product.publish", { id: FOREIGN_PRODUCT_ID }),
+      await mutate("catalog.product.publish", { id: UNKNOWN_ID }),
+      await mutate("catalog.product.unpublish", { id: FOREIGN_PRODUCT_ID }),
+      await mutate("catalog.product.unpublish", { id: UNKNOWN_ID }),
+      await mutate("catalog.variant.setVisibility", {
+        id: FOREIGN_VARIANT_ID,
+        onlineVisible: true,
+      }),
+      await mutate("catalog.variant.setVisibility", { id: UNKNOWN_ID, onlineVisible: true }),
+    ];
 
-    expect(foreign.statusCode).toBe(404);
-    expect(unknown.statusCode).toBe(404);
+    expect(responses.map((response) => response.statusCode)).toEqual([
+      404, 404, 404, 404, 404, 404,
+    ]);
+    expect(responses.map((response) => response.json().error.data.appCode)).toEqual(
+      Array(6).fill("NOT_FOUND"),
+    );
+    expect(responses.map((response) => response.json().error.message)).toEqual(
+      Array(6).fill("No encontrado."),
+    );
+    expect(responses.map((response) => response.json().error.data.details)).toEqual(
+      Array(6).fill(undefined),
+    );
   });
 
   it("RF-CAT-09 · quien tiene catalog.product:write sin publish no puede publicar, despublicar ni mostrar una variante", async () => {

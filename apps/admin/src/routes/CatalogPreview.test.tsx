@@ -92,7 +92,7 @@ describe("RF-CAT-09 · el estado interno y la publicación se ven por separado",
 
     const line = (await screen.findByText("Estado interno:")).parentElement;
 
-    expect(line?.textContent).toBe("Estado interno: Activo · En la tienda: No publicado");
+    expect(line?.textContent).toBe("Estado interno: Activo · Publicación: No publicado");
   });
 
   it("un borrador publicado avisa que todavía no se ve en la tienda", async () => {
@@ -102,10 +102,21 @@ describe("RF-CAT-09 · el estado interno y la publicación se ven por separado",
 
     const line = (await screen.findByText("Estado interno:")).parentElement;
 
-    expect(line?.textContent).toBe("Estado interno: Borrador · En la tienda: Publicado");
+    expect(line?.textContent).toBe("Estado interno: Borrador · Publicación: Publicado");
     expect(
       screen.getByText("Publicado, pero no se ve en la tienda hasta que esté activo."),
     ).toBeTruthy();
+  });
+
+  it("un producto archivado y publicado dice que no se ve porque está archivado, no que falta activarlo", async () => {
+    renderCatalog(PUBLISHER, [
+      product({ status: "archived", publishedAt: "2026-01-01T12:00:00.000Z" }),
+    ]);
+
+    expect(
+      await screen.findByText("Publicado, pero no se ve en la tienda porque está archivado."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/hasta que esté activo/)).toBeNull();
   });
 
   it("un producto activo y publicado no muestra el aviso", async () => {
@@ -182,12 +193,12 @@ describe("RF-CAT-09 · publicar, despublicar y mostrar variantes", () => {
     ]);
 
     await user.click(
-      await screen.findByRole("button", { name: "Mostrar LAYTON-125 en la tienda" }),
+      await screen.findByRole("button", { name: "Mostrar en la tienda LAYTON-125" }),
     );
     await waitFor(() =>
       expect(api.setVariantVisibility).toHaveBeenCalledWith({ id: variantId, onlineVisible: true }),
     );
-    await user.click(screen.getByRole("button", { name: "Ocultar LAYTON-10ML en la tienda" }));
+    await user.click(screen.getByRole("button", { name: "Ocultar de la tienda LAYTON-10ML" }));
 
     await waitFor(() =>
       expect(api.setVariantVisibility).toHaveBeenCalledWith({
@@ -228,11 +239,13 @@ describe("RF-CAT-09 · publicar, despublicar y mostrar variantes", () => {
     ]);
 
     await user.click(
-      await screen.findByRole("button", { name: "Mostrar LAYTON-GRANEL en la tienda" }),
+      await screen.findByRole("button", { name: "Mostrar en la tienda LAYTON-GRANEL" }),
     );
 
     const alert = await screen.findByRole("alert");
     expect(within(alert).getByText(/Solo las variantes sellado, decant y unidad/)).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe("");
+    // El aviso está en el bloque del producto donde se intentó, no suelto arriba de la lista.
+    expect(alert.closest("div.border-b")?.textContent).toContain("Layton");
   });
 });
