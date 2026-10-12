@@ -118,6 +118,11 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
       "market.supplier.create",
       "market.supplier.list",
       "market.supplier.update",
+      "sales.order.byId",
+      "sales.order.create",
+      "sales.order.list",
+      "sales.order.remove",
+      "sales.order.transition",
     ]);
   });
 
@@ -168,6 +173,19 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
     expect(procedures["inventory.serial.history"]?._def.meta?.permission).toBe(
       "inventory.stock:read",
     );
+  });
+
+  // WP-C17: escribir un pedido (crear, borrar el borrador, pasarlo a espera de pago o
+  // cancelarlo) es el permiso que la política de DELETE de `sale_orders` (0034) y el
+  // mapeo de WP-B11 piden; leer, el de ver pedidos.
+  it("RF-VTA-01…03 · sales.order.* exige sales.order:write para escribir y sales.order:read para consultar", () => {
+    const procedures = flattenProcedures(createAppRouter(null));
+
+    expect(procedures["sales.order.create"]?._def.meta?.permission).toBe("sales.order:write");
+    expect(procedures["sales.order.remove"]?._def.meta?.permission).toBe("sales.order:write");
+    expect(procedures["sales.order.transition"]?._def.meta?.permission).toBe("sales.order:write");
+    expect(procedures["sales.order.list"]?._def.meta?.permission).toBe("sales.order:read");
+    expect(procedures["sales.order.byId"]?._def.meta?.permission).toBe("sales.order:read");
   });
 
   it("RF-MKT-03 · aprobar requiere el permiso de aprobación, separado del permiso de escritura", () => {

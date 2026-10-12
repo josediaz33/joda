@@ -626,6 +626,19 @@ Una línea con `serial_unit_id` mueve exactamente 1 unidad. Al confirmarse, la u
 
 Un pedido puede combinar decants (bajo pedido), sellados (con lote) y relojes (serializados). Cada línea sigue su propia lógica de consumo; la transacción es una sola.
 
+### RN-VTA-06 · Armado del pedido en la API
+
+Lo que `sales.order.create` (WP-C17) hace con un pedido de mostrador. **Ninguno de estos puntos lo confirmó José**: salen de que el schema y RN-IVA no dicen otra cosa, y cada uno se cambia en un solo lugar (`packages/domain/src/sales/orderPricing.ts` o `apps/api/src/modules/sales/service.ts`).
+
+- **El precio de cada línea es el de la variante**, nunca el que manda el cliente. El cliente puede mandar el total que mostró en pantalla: si no coincide con el calculado, se rechaza y no se escribe nada.
+- **Un solo descuento, a nivel de pedido** (`discount_pyg`; el de línea queda en 0). Para el IVA se reparte entre las líneas en proporción a su importe, por el mayor resto (`Money.allocate`), porque el IVA depende de la tasa de cada línea. `vat_10_pyg` y `vat_5_pyg` son el IVA contenido, ya con el descuento; `exempt_pyg` es el monto exento, bruto y con el descuento.
+- **Sin envío.** `shipping_pyg` queda en 0: una venta de mostrador no lo tiene y RN-IVA no dice qué tasa lleva un envío. Pendiente de José antes del checkout (WP-G11).
+- **Cantidades enteras.** Para un decant, `qty` es la cantidad de decants, no de ml; `uom` es la de la variante.
+- **Una variante serializada se vende de a una unidad y eligiéndola al crear el pedido** (RN-VTA-04). La unidad tiene que existir, ser de esa variante y estar `available`. Al crear no se reserva ni se cambia su estado; WP-C19 la vuelve a validar al confirmar.
+- **El estado del producto no se valida:** una variante de un producto en borrador o archivado se puede vender.
+- **El pedido nace en `draft` sin transición `null → draft`** (la creación queda en la bitácora): `sale_order_transitions` es append-only y con esa fila el borrador no se podría borrar. Se puede pasar a `awaiting_payment` o cancelar un borrador; cancelar desde `awaiting_payment` espera a la reserva (WP-C18) y a la cancelación de las órdenes de fraccionamiento (WP-C13c).
+- **Código `VTA-AAAA-NNNN`**, consecutivo por tenant y por año de Paraguay.
+
 ---
 
 ## RN-SEN — Señas
