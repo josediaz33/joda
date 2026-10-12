@@ -11,6 +11,8 @@ import {
   createBomComponentInput,
   createProductInput,
   createVariantInput,
+  setProductPublicationInput,
+  setVariantVisibilityInput,
   updateCategoryInput,
   updateProductInput,
   updateVariantInput,
@@ -452,5 +454,26 @@ describe("catalog — updateCategoryInput distingue «no mover» de «pasar a ra
 
   it("sigue sin aceptar el slug: no se edita después de creada la categoría", () => {
     expect(() => updateCategoryInput.parse({ id, slug: "otro" })).toThrow();
+  });
+});
+
+// WP-C08g · RF-CAT-09: publicar y mostrar variantes tienen entradas propias y estrictas.
+describe("catalog — publicación y visibilidad (RF-CAT-09)", () => {
+  const id = "33333333-3333-4333-a333-333333333331";
+
+  it("setProductPublicationInput solo acepta el id del producto", () => {
+    expect(setProductPublicationInput.parse({ id })).toEqual({ id });
+    expect(() => setProductPublicationInput.parse({ id, publishedAt: "2026-01-01" })).toThrow();
+    expect(() => setProductPublicationInput.parse({ id, status: "active" })).toThrow();
+  });
+
+  it("setVariantVisibilityInput exige el booleano y rechaza todo lo demás", () => {
+    expect(setVariantVisibilityInput.parse({ id, onlineVisible: true })).toEqual({
+      id,
+      onlineVisible: true,
+    });
+    expect(() => setVariantVisibilityInput.parse({ id })).toThrow();
+    expect(() => setVariantVisibilityInput.parse({ id, onlineVisible: "yes" })).toThrow();
+    expect(() => setVariantVisibilityInput.parse({ id, onlineVisible: true, sku: "X" })).toThrow();
   });
 });

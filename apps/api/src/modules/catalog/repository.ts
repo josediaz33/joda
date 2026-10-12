@@ -113,6 +113,15 @@ export async function updateProductRow(
   });
 }
 
+/** WP-C08g. `published_at` solo se escribe acá: `updateProductRow` no lo recibe, para que `catalog.product.update` (que exige `write`) no pueda publicar. */
+export async function setProductPublishedAt(
+  tx: TenantTx,
+  id: string,
+  publishedAt: Date | null,
+): Promise<void> {
+  await tx.products.update({ where: { id }, data: { published_at: publishedAt } });
+}
+
 /**
  * `product_categories`/`product_tags` tienen su propio `tenant_id` desde
  * WP-B08, pero eso protege la FILA (que sea legible/escribible solo bajo
@@ -468,6 +477,22 @@ export interface UpdateVariantPatch {
   readonly minStockAlert?: number | null;
   readonly weightG?: number | null;
   readonly position?: number;
+}
+
+/**
+ * WP-C08g. `online_visible` solo se escribe acá, por la misma razón que
+ * `published_at`. Va por SQL crudo a propósito: el CHECK de RN-CAT-02 (solo
+ * `sealed`, `decant` y `unit` se publican) llega con el cliente tipado como un
+ * error sin código que el mapeo convierte en 500, y con `$executeRaw` llega como
+ * SQLSTATE 23514, que el servicio sí puede reconocer (`hasSqlState`).
+ */
+export async function setVariantOnlineVisible(
+  tx: TenantTx,
+  id: string,
+  onlineVisible: boolean,
+): Promise<void> {
+  await tx.$executeRaw`
+    UPDATE app.product_variants SET online_visible = ${onlineVisible} WHERE id = ${id}::uuid`;
 }
 
 export async function updateVariantRow(

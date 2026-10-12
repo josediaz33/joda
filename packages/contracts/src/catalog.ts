@@ -184,8 +184,9 @@ const VARIANTS_WITH_SIZE = new Set<VariantType>(["sealed", "decant", "tester"]);
 const VARIANTS_IN_ML = new Set<VariantType>(["decant", "bulk"]);
 
 // onlineVisible queda fuera de create/update: esos procedimientos exigen
-// catalog.product:write. La visibilidad se administrará bajo
-// catalog.product:publish (RF-CAT-09), nunca como campo de edición común.
+// catalog.product:write. La visibilidad se administra bajo
+// catalog.product:publish (RF-CAT-09, `setVariantVisibilityInput`), nunca como
+// campo de edición común.
 // Mismos CHECK de product_variants (packages/db/migrations/0003_catalog.sql,
 // líneas 174-183) validados en la frontera para devolver VALIDATION_* con un
 // mensaje claro en vez de dejar que Postgres los rechace como
@@ -266,6 +267,14 @@ export type UpdateVariantInput = z.infer<typeof updateVariantInput>;
 
 export const listVariantsInput = z.object({ productId: idSchema }).strict();
 export const byVariantIdInput = z.object({ id: idSchema }).strict();
+
+// WP-C08g · RF-CAT-09. Mostrar u ocultar una variante en la tienda. Es el único
+// camino que toca `online_visible`, y exige catalog.product:publish. Qué tipos se
+// pueden mostrar lo decide la base (RN-CAT-02); acá no se repite la lista.
+export const setVariantVisibilityInput = z
+  .object({ id: idSchema, onlineVisible: z.boolean() })
+  .strict();
+export type SetVariantVisibilityInput = z.infer<typeof setVariantVisibilityInput>;
 
 // ---------------------------------------------------------------------
 // BOM — RF-CAT-07, lista de insumos de una variante FRACCIONADA (decant),
@@ -527,8 +536,8 @@ export type CreateProductInput = z.infer<typeof createProductInput>;
 
 // `status` tampoco viaja por este procedimiento: catalog.product.update solo
 // exige catalog.product:write y no debe activar una ficha que ya tenga
-// published_at. La transición de publicación tendrá un procedimiento propio
-// protegido por catalog.product:publish (RF-CAT-09).
+// published_at. La publicación tiene sus procedimientos propios, protegidos por
+// catalog.product:publish (RF-CAT-09, `setProductPublicationInput`).
 // A diferencia de create, update NO redeclara `kind`: la vertical es fija
 // (ver el comentario de arriba de adminProductSchema). El service rechaza
 // perfumeDetails/watchDetails/accessoryDetails que no correspondan a la
@@ -568,6 +577,11 @@ export type UpdateProductInput = z.infer<typeof updateProductInput>;
 
 export const archiveProductInput = z.object({ id: idSchema }).strict();
 export const byProductIdInput = z.object({ id: idSchema }).strict();
+
+// WP-C08g · RF-CAT-09. Publicar y despublicar mueven `published_at` y nada más,
+// con independencia del `status` interno. Los dos usan la misma entrada.
+export const setProductPublicationInput = z.object({ id: idSchema }).strict();
+export type SetProductPublicationInput = z.infer<typeof setProductPublicationInput>;
 
 export const listProductsInput = z
   .object({

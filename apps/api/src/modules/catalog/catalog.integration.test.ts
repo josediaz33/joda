@@ -19,6 +19,10 @@ import type { AuthServiceDeps } from "../auth/service.js";
 const TENANT_ID = "88888888-8888-4888-a888-888888888888";
 const STAFF_OWNER_ID = "99999999-9999-4999-a999-999999999991";
 const STAFF_OWNER_EMAIL = "owner@jodaparfums.com";
+// WP-C08g: un usuario con `catalog.product:read` y `write` pero sin `publish` (no hay rol
+// estándar con esa forma: `manager` los tiene todos), para probar que escribir no alcanza.
+const STAFF_WRITER_ID = "99999999-9999-4999-a999-999999999993";
+const STAFF_WRITER_EMAIL = "escritor@jodaparfums.com";
 const STAFF_PASSWORD = "correcta";
 const MFA_ENCRYPTION_KEY = Buffer.from("1".repeat(64), "hex");
 const PLACEHOLDER_MFA_SECRET = "placeholder-nunca-se-descifra-en-este-test";
@@ -95,6 +99,27 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       [TENANT_ID, STAFF_OWNER_ID, ownerRole.rows[0].id],
     );
 
+    await testDb.superuserClient.query(
+      `INSERT INTO app.staff_users
+         (id, tenant_id, auth_subject, email, full_name, is_active, mfa_enrolled, mfa_secret_encrypted)
+       VALUES ($1, $2, 'auth|writer-c08g', $3, 'Test Writer', true, true, $4)`,
+      [STAFF_WRITER_ID, TENANT_ID, STAFF_WRITER_EMAIL, PLACEHOLDER_MFA_SECRET],
+    );
+    const writerRole = await testDb.superuserClient.query(
+      `INSERT INTO app.roles (tenant_id, code, name)
+       VALUES ($1, 'test_catalogo_sin_publicar', 'Catálogo sin publicar (test)') RETURNING id`,
+      [TENANT_ID],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.role_permissions (tenant_id, role_id, permission_code)
+       VALUES ($1, $2, 'catalog.product:read'), ($1, $2, 'catalog.product:write')`,
+      [TENANT_ID, writerRole.rows[0].id],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.staff_user_roles (tenant_id, staff_user_id, role_id) VALUES ($1, $2, $3)`,
+      [TENANT_ID, STAFF_WRITER_ID, writerRole.rows[0].id],
+    );
+
     db = new PrismaClient({ datasourceUrl: jodaApiConnectionUrl(testDb.container) });
     redisContainer = await new RedisContainer("redis:7").start();
   }, 120_000);
@@ -111,7 +136,10 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       db,
       redis,
       authProvider: createFakeStaffAuthProvider(
-        new Map([[STAFF_OWNER_EMAIL, { password: STAFF_PASSWORD, authSubject: "auth|owner-c08" }]]),
+        new Map([
+          [STAFF_OWNER_EMAIL, { password: STAFF_PASSWORD, authSubject: "auth|owner-c08" }],
+          [STAFF_WRITER_EMAIL, { password: STAFF_PASSWORD, authSubject: "auth|writer-c08g" }],
+        ]),
       ),
       clock: createManualClock(new Date("2026-01-01T12:00:00.000Z")),
       mfaEncryptionKey: MFA_ENCRYPTION_KEY,
@@ -1717,5 +1745,344 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(moved.sourceVariantId).toBe(secondSource.id);
     expect(cleared.sourceVariantId).toBeNull();
     expect(cleared.productionMode).toBe("stocked");
+  });
+
+  // -------------------------------------------------------------------
+  // WP-C08g · RF-CAT-09, RN-CAT-03. Publicar y despublicar mueven `published_at`
+  // con independencia del `status`; mostrar u ocultar una variante mueve
+  // `online_visible`. Solo con `catalog.product:publish`. La tienda ve un
+  // producto cuando está `active` Y publicado, y de él solo las variantes
+  // visibles (public.v_catalog_*). Activar un borrador todavía no tiene
+  // procedimiento (WP-C08e): las pruebas lo hacen por SQL.
+  // -------------------------------------------------------------------
+  const PUBLISH_CLOCK_ISO = "2026-01-01T12:00:00.000Z";
+
+  /** Entra como otro usuario de personal y deja su sesión con el segundo factor satisfecho (mismo criterio que el `beforeEach`). */
+  async function loginPastMfa(email: string): Promise<string> {
+    const response = await app.inject({
+      method: "POST",
+      url: "/trpc/auth.session.login",
+      payload: { email, password: STAFF_PASSWORD },
+    });
+    const userCookie = toRequestCookie(response.headers["set-cookie"]);
+    await testDb.superuserClient.query(
+      `UPDATE app.staff_sessions SET mfa_verified_at = now()
+       WHERE id = (
+         SELECT s.id FROM app.staff_sessions s
+         JOIN app.staff_users u ON u.id = s.staff_user_id
+         WHERE u.email = $1 AND s.revoked_at IS NULL
+         ORDER BY s.created_at DESC LIMIT 1
+       )`,
+      [email],
+    );
+    await redis.flushall();
+    return userCookie;
+  }
+
+  async function mutateAs(userCookie: string, procedure: string, payload: Record<string, unknown>) {
+    return app.inject({
+      method: "POST",
+      url: `/trpc/${procedure}`,
+      headers: { cookie: userCookie },
+      payload,
+    });
+  }
+
+  async function activate(productId: string): Promise<void> {
+    await testDb.superuserClient.query(`UPDATE app.products SET status = 'active' WHERE id = $1`, [
+      productId,
+    ]);
+  }
+
+  async function publicProductSlugs(): Promise<string[]> {
+    const rows = await testDb.superuserClient.query(
+      `SELECT slug FROM public.v_catalog_products WHERE tenant_id = $1`,
+      [TENANT_ID],
+    );
+    return rows.rows.map((row: { slug: string }) => row.slug);
+  }
+
+  async function publicVariantSkus(): Promise<string[]> {
+    const rows = await testDb.superuserClient.query(
+      `SELECT sku FROM public.v_catalog_variants WHERE tenant_id = $1`,
+      [TENANT_ID],
+    );
+    return rows.rows.map((row: { sku: string }) => row.sku);
+  }
+
+  async function auditActions(entityId: string): Promise<string[]> {
+    const rows = await testDb.superuserClient.query(
+      `SELECT action FROM app.audit_log WHERE entity_id = $1 ORDER BY occurred_at, id`,
+      [entityId],
+    );
+    return rows.rows.map((row: { action: string }) => row.action);
+  }
+
+  it("RF-CAT-09 · publicar estampa published_at con el reloj y no toca el estado interno", async () => {
+    const product = await createAccessory("c08g-publica");
+
+    const published = await mutateOk<{ status: string; publishedAt: string | null }>(
+      "catalog.product.publish",
+      { id: product.id },
+    );
+
+    expect(published.publishedAt).toBe(PUBLISH_CLOCK_ISO);
+    expect(published.status).toBe("draft");
+  });
+
+  it("RF-CAT-09 · publicar un borrador no lo muestra en la tienda: hacen falta el estado activo y la publicación", async () => {
+    const product = await createAccessory("c08g-borrador");
+    await mutateOk("catalog.product.publish", { id: product.id });
+    const whileDraft = await publicProductSlugs();
+
+    await activate(product.id);
+    const whileActive = await publicProductSlugs();
+    await mutateOk("catalog.product.unpublish", { id: product.id });
+    const afterUnpublish = await publicProductSlugs();
+
+    expect(whileDraft).not.toContain("c08g-borrador");
+    expect(whileActive).toContain("c08g-borrador");
+    expect(afterUnpublish).not.toContain("c08g-borrador");
+  });
+
+  it("RF-CAT-09 · despublicar deja published_at en nulo y el producto activo; hacerlo dos veces no cambia nada", async () => {
+    const product = await createAccessory("c08g-despublica");
+    await activate(product.id);
+    await mutateOk("catalog.product.publish", { id: product.id });
+
+    const first = await mutateOk<{ status: string; publishedAt: string | null }>(
+      "catalog.product.unpublish",
+      { id: product.id },
+    );
+    const second = await mutateOk<{ status: string; publishedAt: string | null }>(
+      "catalog.product.unpublish",
+      { id: product.id },
+    );
+
+    expect(first).toMatchObject({ status: "active", publishedAt: null });
+    expect(second).toMatchObject({ status: "active", publishedAt: null });
+    expect(await auditActions(product.id)).toEqual([
+      "catalog.product.publish",
+      "catalog.product.unpublish",
+    ]);
+  });
+
+  it("RF-CAT-09 · publicar un producto ya publicado conserva la fecha original y no deja otra entrada en la bitácora", async () => {
+    const product = await createAccessory("c08g-ya-publicado");
+    await testDb.superuserClient.query(
+      `UPDATE app.products SET published_at = '2025-06-15T10:00:00Z' WHERE id = $1`,
+      [product.id],
+    );
+
+    const again = await mutateOk<{ publishedAt: string | null }>("catalog.product.publish", {
+      id: product.id,
+    });
+
+    expect(again.publishedAt).toBe("2025-06-15T10:00:00.000Z");
+    expect(await auditActions(product.id)).toEqual([]);
+  });
+
+  it("RF-CAT-09 · publicar deja en la bitácora quién, qué y el antes y el después", async () => {
+    const product = await createAccessory("c08g-bitacora");
+
+    await mutateOk("catalog.product.publish", { id: product.id });
+
+    const rows = await testDb.superuserClient.query(
+      `SELECT action, entity, actor_id, before, after FROM app.audit_log WHERE entity_id = $1`,
+      [product.id],
+    );
+    expect(rows.rows).toEqual([
+      {
+        action: "catalog.product.publish",
+        entity: "products",
+        actor_id: STAFF_OWNER_ID,
+        before: { publishedAt: null },
+        after: { publishedAt: PUBLISH_CLOCK_ISO },
+      },
+    ]);
+  });
+
+  it("caso borde 17 · un producto sin categoría primaria no se publica", async () => {
+    const product = await createAccessory("c08g-sin-primaria");
+    await testDb.superuserClient.query(`DELETE FROM app.product_categories WHERE product_id = $1`, [
+      product.id,
+    ]);
+
+    const response = await mutate("catalog.product.publish", { id: product.id });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_PRODUCT_WITHOUT_PRIMARY_CATEGORY");
+    const fetched = await call<{ publishedAt: string | null }>("catalog.product.byId", {
+      id: product.id,
+    });
+    expect(fetched.publishedAt).toBeNull();
+    expect(await auditActions(product.id)).toEqual([]);
+  });
+
+  it("RF-CAT-09 · un producto inexistente o de otro tenant da 404, al publicar y al despublicar", async () => {
+    await seedForeignCatalog();
+
+    const foreign = await mutate("catalog.product.publish", { id: FOREIGN_PRODUCT_ID });
+    const unknown = await mutate("catalog.product.unpublish", { id: UNKNOWN_ID });
+
+    expect(foreign.statusCode).toBe(404);
+    expect(unknown.statusCode).toBe(404);
+  });
+
+  it("RF-CAT-09 · quien tiene catalog.product:write sin publish no puede publicar, despublicar ni mostrar una variante", async () => {
+    const product = await createAccessory("c08g-sin-permiso");
+    const variant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08G-SIN-PERMISO",
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "100000",
+    });
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const publish = await mutateAs(writerCookie, "catalog.product.publish", { id: product.id });
+    const unpublish = await mutateAs(writerCookie, "catalog.product.unpublish", {
+      id: product.id,
+    });
+    const show = await mutateAs(writerCookie, "catalog.variant.setVisibility", {
+      id: variant.id,
+      onlineVisible: true,
+    });
+
+    expect(publish.statusCode).toBe(403);
+    expect(unpublish.statusCode).toBe(403);
+    expect(show.statusCode).toBe(403);
+    const fetched = await call<{ publishedAt: string | null }>("catalog.product.byId", {
+      id: product.id,
+    });
+    expect(fetched.publishedAt).toBeNull();
+    const variants = await call<{ onlineVisible: boolean }[]>("catalog.variant.list", {
+      productId: product.id,
+    });
+    expect(variants.map((item) => item.onlineVisible)).toEqual([false]);
+  });
+
+  it("RF-CAT-09 · editar con catalog.product:write no puede colar published_at, status ni online_visible", async () => {
+    const product = await createAccessory("c08g-no-cuela");
+    const variant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08G-NO-CUELA",
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "100000",
+    });
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const productUpdate = await mutateAs(writerCookie, "catalog.product.update", {
+      id: product.id,
+      publishedAt: PUBLISH_CLOCK_ISO,
+    });
+    const statusUpdate = await mutateAs(writerCookie, "catalog.product.update", {
+      id: product.id,
+      status: "active",
+    });
+    const variantUpdate = await mutateAs(writerCookie, "catalog.variant.update", {
+      id: variant.id,
+      onlineVisible: true,
+    });
+
+    expect(productUpdate.statusCode).toBe(400);
+    expect(statusUpdate.statusCode).toBe(400);
+    expect(variantUpdate.statusCode).toBe(400);
+  });
+
+  it("RF-CAT-09 · mostrar una variante vendible la deja visible en la tienda; ocultarla la saca, y repetirlo no cambia nada", async () => {
+    const product = await createAccessory("c08g-variante-visible");
+    const variant = await mutateOk<{ id: string; sku: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08G-VISIBLE",
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "100000",
+    });
+    await activate(product.id);
+    await mutateOk("catalog.product.publish", { id: product.id });
+    const beforeShow = await publicVariantSkus();
+
+    const shown = await mutateOk<{ onlineVisible: boolean }>("catalog.variant.setVisibility", {
+      id: variant.id,
+      onlineVisible: true,
+    });
+    const shownAgain = await mutateOk<{ onlineVisible: boolean }>("catalog.variant.setVisibility", {
+      id: variant.id,
+      onlineVisible: true,
+    });
+    const afterShow = await publicVariantSkus();
+    const hidden = await mutateOk<{ onlineVisible: boolean }>("catalog.variant.setVisibility", {
+      id: variant.id,
+      onlineVisible: false,
+    });
+    const afterHide = await publicVariantSkus();
+
+    expect(shown.onlineVisible).toBe(true);
+    expect(shownAgain.onlineVisible).toBe(true);
+    expect(hidden.onlineVisible).toBe(false);
+    expect(beforeShow).not.toContain("C08G-VISIBLE");
+    expect(afterShow).toContain("C08G-VISIBLE");
+    expect(afterHide).not.toContain("C08G-VISIBLE");
+    expect(await auditActions(variant.id)).toEqual([
+      "catalog.variant.setVisibility",
+      "catalog.variant.setVisibility",
+    ]);
+  });
+
+  it("RN-CAT-02 · una variante de granel, insumo o tester no se puede mostrar, ni con el permiso de publicar: 409 en español, no un error interno", async () => {
+    const product = await createAccessory("c08g-no-vendibles");
+    const make = (sku: string, variantType: string, uom: string, sizeMl: number | null) =>
+      mutateOk<{ id: string }>("catalog.variant.create", {
+        productId: product.id,
+        sku,
+        variantType,
+        uom,
+        sizeMl,
+        pricePyg: "0",
+      });
+    const bulk = await make("C08G-GRANEL", "bulk", "ml", null);
+    const supply = await make("C08G-INSUMO", "supply", "unit", null);
+    const tester = await make("C08G-TESTER", "tester", "unit", 100);
+
+    const responses = [
+      await mutate("catalog.variant.setVisibility", { id: bulk.id, onlineVisible: true }),
+      await mutate("catalog.variant.setVisibility", { id: supply.id, onlineVisible: true }),
+      await mutate("catalog.variant.setVisibility", { id: tester.id, onlineVisible: true }),
+    ];
+
+    expect(responses.map((response) => response.statusCode)).toEqual([409, 409, 409]);
+    expect(responses.map((response) => response.json().error.data.appCode)).toEqual([
+      "CONFLICT_VARIANT_NOT_PUBLISHABLE",
+      "CONFLICT_VARIANT_NOT_PUBLISHABLE",
+      "CONFLICT_VARIANT_NOT_PUBLISHABLE",
+    ]);
+    expect(responses[0]?.json().error.message).toBe(
+      "Solo las variantes sellado, decant y unidad se pueden mostrar en la tienda.",
+    );
+    const variants = await call<{ onlineVisible: boolean }[]>("catalog.variant.list", {
+      productId: product.id,
+    });
+    expect(variants.map((item) => item.onlineVisible)).toEqual([false, false, false]);
+  });
+
+  it("RF-CAT-09 · una variante inexistente o de otro tenant da 404 al mostrarla", async () => {
+    await seedForeignCatalog();
+
+    const foreign = await mutate("catalog.variant.setVisibility", {
+      id: FOREIGN_VARIANT_ID,
+      onlineVisible: true,
+    });
+    const unknown = await mutate("catalog.variant.setVisibility", {
+      id: UNKNOWN_ID,
+      onlineVisible: true,
+    });
+
+    expect(foreign.statusCode).toBe(404);
+    expect(unknown.statusCode).toBe(404);
   });
 });

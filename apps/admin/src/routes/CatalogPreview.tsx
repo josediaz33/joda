@@ -45,6 +45,11 @@ export default function CatalogPreview() {
     variant?: AdminVariant;
   } | null>(null);
   const [imageProduct, setImageProduct] = useState<AdminProduct | null>(null);
+  // Publicar, despublicar y mostrar u ocultar una variante (RF-CAT-09): se anuncia el
+  // resultado en una región `aria-live` y un rechazo de la API se muestra tal cual.
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState("");
+  const [actionError, setActionError] = useState("");
   const queryClient = useQueryClient();
   const products = useQuery({
     queryKey: ["catalog-preview", kind, status, cursor],
@@ -54,6 +59,27 @@ export default function CatalogPreview() {
 
   async function refresh() {
     await queryClient.invalidateQueries({ queryKey: ["catalog-preview"] });
+  }
+
+  // No se deshabilitan los botones mientras corre (el foco se perdería al releer la
+  // lista): un segundo clic se ignora.
+  async function runPublication(
+    action: () => Promise<unknown>,
+    messages: { readonly done: string; readonly failure: string },
+  ) {
+    if (busy) return;
+    setBusy(true);
+    setNotice("");
+    setActionError("");
+    try {
+      await action();
+      setNotice(messages.done);
+    } catch (cause) {
+      setActionError(cause instanceof Error ? cause.message : messages.failure);
+    } finally {
+      await refresh();
+      setBusy(false);
+    }
   }
 
   return (
@@ -134,6 +160,14 @@ export default function CatalogPreview() {
         </Popover>
       </div>
 
+      <p role="status" className="sr-only">
+        {notice}
+      </p>
+      {actionError && (
+        <p role="alert" className="mt-6 text-error">
+          {actionError}
+        </p>
+      )}
       {products.isPending && <p className="mt-8 text-text-secondary">Cargando productos…</p>}
       {products.isError && (
         <p role="alert" className="mt-8 text-error">
@@ -151,9 +185,22 @@ export default function CatalogPreview() {
                 <div>
                   <p className="font-semibold">{product.name}</p>
                   <p className="text-sm text-text-secondary">
-                    {product.brandName ?? "Sin marca"} · {kinds[product.kind]} ·{" "}
-                    {statuses[product.status]}
+                    {product.brandName ?? "Sin marca"} · {kinds[product.kind]}
                   </p>
+                  {/* El estado interno y la publicación son cosas distintas (RF-CAT-09):
+                      la tienda ve un producto cuando está activo Y publicado. */}
+                  <p className="mt-1 text-sm">
+                    <span className="text-text-secondary">Estado interno:</span>{" "}
+                    {statuses[product.status]}
+                    <span aria-hidden="true"> · </span>
+                    <span className="text-text-secondary">En la tienda:</span>{" "}
+                    {product.publishedAt ? "Publicado" : "No publicado"}
+                  </p>
+                  {product.publishedAt && product.status !== "active" && (
+                    <p className="text-sm text-text-secondary">
+                      Publicado, pero no se ve en la tienda hasta que esté activo.
+                    </p>
+                  )}
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <Dialog>
@@ -170,13 +217,38 @@ export default function CatalogPreview() {
                         </DialogDescription>
                       </DialogHeader>
                       <dl className="grid grid-cols-2 gap-3 text-sm">
-                        <dt className="text-text-secondary">Estado</dt>
+                        <dt className="text-text-secondary">Estado interno</dt>
                         <dd>{statuses[product.status]}</dd>
+                        <dt className="text-text-secondary">En la tienda</dt>
+                        <dd>{product.publishedAt ? "Publicado" : "No publicado"}</dd>
                         <dt className="text-text-secondary">Variantes</dt>
                         <dd>{product.variants.length}</dd>
                       </dl>
                     </DialogContent>
                   </Dialog>
+                  <Can perform="catalog.product:publish">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      aria-label={`${product.publishedAt ? "Despublicar" : "Publicar"} ${product.name}`}
+                      onClick={() =>
+                        void runPublication(
+                          () =>
+                            product.publishedAt
+                              ? api.unpublishProduct({ id: product.id })
+                              : api.publishProduct({ id: product.id }),
+                          {
+                            done: product.publishedAt
+                              ? `${product.name} se despublicó.`
+                              : `${product.name} se publicó.`,
+                            failure: "No se pudo cambiar la publicación.",
+                          },
+                        )
+                      }
+                    >
+                      {product.publishedAt ? "Despublicar" : "Publicar"}
+                    </Button>
+                  </Can>
                   <Can perform="catalog.product:write">
                     <Button
                       variant="outline"
@@ -203,8 +275,37 @@ export default function CatalogPreview() {
                   {product.variants.map((variant) => (
                     <div key={variant.id} className="flex items-center gap-2">
                       <span>
-                        {variant.sku} · {formatPyg(variant.pricePyg)}
+                        {variant.sku} · {formatPyg(variant.pricePyg)} ·{" "}
+                        <span className="text-text-secondary">
+                          {variant.onlineVisible
+                            ? "Visible en la tienda"
+                            : "No visible en la tienda"}
+                        </span>
                       </span>
+                      <Can perform="catalog.product:publish">
+                        <Button
+                          variant="link"
+                          size="sm"
+                          aria-label={`${variant.onlineVisible ? "Ocultar" : "Mostrar"} ${variant.sku} en la tienda`}
+                          onClick={() =>
+                            void runPublication(
+                              () =>
+                                api.setVariantVisibility({
+                                  id: variant.id,
+                                  onlineVisible: !variant.onlineVisible,
+                                }),
+                              {
+                                done: variant.onlineVisible
+                                  ? `${variant.sku} quedó oculta de la tienda.`
+                                  : `${variant.sku} quedó visible en la tienda.`,
+                                failure: "No se pudo cambiar la visibilidad.",
+                              },
+                            )
+                          }
+                        >
+                          {variant.onlineVisible ? "Ocultar de la tienda" : "Mostrar en la tienda"}
+                        </Button>
+                      </Can>
                       <Can perform="catalog.product:write">
                         <Button
                           variant="link"

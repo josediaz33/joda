@@ -11,6 +11,8 @@ import {
   type CreateTagInput,
   type CreateVariantInput,
   type ListProductsInput,
+  type SetProductPublicationInput,
+  type SetVariantVisibilityInput,
   type PaginationInput,
   type ProductKind,
   type UpdateBomComponentInput,
@@ -19,11 +21,12 @@ import {
   type UpdateTagInput,
   type UpdateVariantInput,
 } from "@joda/contracts";
-import { buildProductFacets, type ProductFacetInput } from "@joda/domain";
+import { buildProductFacets, type Clock, type ProductFacetInput } from "@joda/domain";
 import type { PrismaClient, Prisma } from "@joda/db";
+import { recordAuditEntry } from "../../db/audit.js";
 import { decodeCursor, encodeCursor } from "../../db/cursor.js";
 import { withTenantTx, type TenantTx, type TenantTxContext } from "../../db/withTenantTx.js";
-import { appError, toTRPCError } from "../../middleware/errorMapper.js";
+import { appError, hasSqlState, toTRPCError } from "../../middleware/errorMapper.js";
 import {
   toAdminBomComponent,
   toAdminCategory,
@@ -397,6 +400,148 @@ export async function archiveProduct(
     const row = await repo.findProductRow(tx, input);
     if (!row) throw new Error(`producto ${input.id} desapareció a mitad de la transacción`);
     return toAdminProduct(row);
+  });
+}
+
+// ---------------------------------------------------------------------
+// Publicación — RF-CAT-09, RN-CAT-03 (WP-C08g). Procedimientos propios, bajo
+// catalog.product:publish: `update` y `archive` (que exigen `write`) no
+// tocan `published_at` ni `online_visible`.
+// ---------------------------------------------------------------------
+export interface CatalogServiceDeps {
+  readonly clock: Clock;
+}
+
+/** De dónde vino el pedido, para la bitácora (docs/security-spec.md §7). */
+export interface AuditOrigin {
+  readonly ip: string | null;
+  readonly userAgent: string | null;
+  readonly requestId: string | null;
+}
+
+const PRODUCT_WITHOUT_PRIMARY_CATEGORY_ERROR = appError(
+  "CONFLICT_PRODUCT_WITHOUT_PRIMARY_CATEGORY",
+  409,
+  "El producto no tiene categoría primaria: sin ella no se puede armar su ruta en la tienda.",
+);
+
+const VARIANT_NOT_PUBLISHABLE_ERROR = appError(
+  "CONFLICT_VARIANT_NOT_PUBLISHABLE",
+  409,
+  "Solo las variantes sellado, decant y unidad se pueden mostrar en la tienda.",
+);
+
+/**
+ * Publica el producto: `published_at` = ahora. Es independiente del `status`: un
+ * borrador publicado no se ve en la tienda hasta que esté activo (las vistas
+ * públicas piden las dos cosas), y publicar no lo activa. Sin categoría primaria
+ * se rechaza (caso borde 17: el breadcrumb no se puede resolver). Ya publicado,
+ * no hace nada: conserva la fecha original y no deja otra entrada en la bitácora.
+ */
+export async function publishProduct(
+  db: PrismaClient,
+  deps: CatalogServiceDeps,
+  ctx: TenantTxContext,
+  origin: AuditOrigin,
+  input: SetProductPublicationInput,
+): Promise<AdminProduct> {
+  return withTenantTx(db, ctx, async (tx) => {
+    const existing = await repo.findProductRow(tx, { id: input.id });
+    if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
+    if (existing.published_at !== null) return toAdminProduct(existing);
+    if (!existing.product_categories.some((assignment) => assignment.is_primary)) {
+      throw toTRPCError(PRODUCT_WITHOUT_PRIMARY_CATEGORY_ERROR);
+    }
+
+    const publishedAt = deps.clock.now();
+    await repo.setProductPublishedAt(tx, input.id, publishedAt);
+    await recordAuditEntry(tx, {
+      tenantId: ctx.tenantId,
+      actorId: ctx.userId,
+      audience: ctx.audience,
+      action: "catalog.product.publish",
+      entity: "products",
+      entityId: input.id,
+      before: { publishedAt: null },
+      after: { publishedAt: publishedAt.toISOString() },
+      ...origin,
+    });
+
+    const row = await repo.findProductRow(tx, { id: input.id });
+    if (!row) throw new Error(`producto ${input.id} desapareció a mitad de la transacción`);
+    return toAdminProduct(row);
+  });
+}
+
+/** Despublica el producto: `published_at` vuelve a nulo. No toca `status` ni la visibilidad de sus variantes. Ya despublicado, no hace nada. */
+export async function unpublishProduct(
+  db: PrismaClient,
+  ctx: TenantTxContext,
+  origin: AuditOrigin,
+  input: SetProductPublicationInput,
+): Promise<AdminProduct> {
+  return withTenantTx(db, ctx, async (tx) => {
+    const existing = await repo.findProductRow(tx, { id: input.id });
+    if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
+    if (existing.published_at === null) return toAdminProduct(existing);
+
+    await repo.setProductPublishedAt(tx, input.id, null);
+    await recordAuditEntry(tx, {
+      tenantId: ctx.tenantId,
+      actorId: ctx.userId,
+      audience: ctx.audience,
+      action: "catalog.product.unpublish",
+      entity: "products",
+      entityId: input.id,
+      before: { publishedAt: existing.published_at.toISOString() },
+      after: { publishedAt: null },
+      ...origin,
+    });
+
+    const row = await repo.findProductRow(tx, { id: input.id });
+    if (!row) throw new Error(`producto ${input.id} desapareció a mitad de la transacción`);
+    return toAdminProduct(row);
+  });
+}
+
+/**
+ * Muestra u oculta una variante en la tienda (`online_visible`). Qué tipos se
+ * pueden mostrar lo decide la base (RN-CAT-02, `0038`): acá no se repite la
+ * lista, solo se traduce su rechazo a un error en español. Mostrar una variante
+ * no publica el producto, ni al revés.
+ */
+export async function setVariantVisibility(
+  db: PrismaClient,
+  ctx: TenantTxContext,
+  origin: AuditOrigin,
+  input: SetVariantVisibilityInput,
+): Promise<AdminVariant> {
+  return withTenantTx(db, ctx, async (tx) => {
+    const existing = await repo.findVariantRow(tx, input.id);
+    if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
+    if (existing.online_visible === input.onlineVisible) return toAdminVariant(existing);
+
+    try {
+      await repo.setVariantOnlineVisible(tx, input.id, input.onlineVisible);
+    } catch (error) {
+      if (hasSqlState(error, "23514")) throw toTRPCError(VARIANT_NOT_PUBLISHABLE_ERROR);
+      throw error;
+    }
+    await recordAuditEntry(tx, {
+      tenantId: ctx.tenantId,
+      actorId: ctx.userId,
+      audience: ctx.audience,
+      action: "catalog.variant.setVisibility",
+      entity: "product_variants",
+      entityId: input.id,
+      before: { onlineVisible: existing.online_visible },
+      after: { onlineVisible: input.onlineVisible },
+      ...origin,
+    });
+
+    const row = await repo.findVariantRow(tx, input.id);
+    if (!row) throw new Error(`variante ${input.id} desapareció a mitad de la transacción`);
+    return toAdminVariant(row);
   });
 }
 

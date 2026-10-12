@@ -20,6 +20,8 @@ import {
   listVariantsInput,
   paginationInputSchema,
   removeBomComponentInput,
+  setProductPublicationInput,
+  setVariantVisibilityInput,
   removeBomComponentOutput,
   updateBomComponentInput,
   updateCategoryInput,
@@ -34,6 +36,7 @@ import { router, staffProcedure } from "../../trpc/trpc.js";
 import type { RequestContext } from "../../trpc/context.js";
 import type { TenantTxContext } from "../../db/withTenantTx.js";
 import * as catalogService from "./service.js";
+import type { AuditOrigin, CatalogServiceDeps } from "./service.js";
 
 /** `db === null` solo pasa en apps/api/src/trpc/router.test.ts (WP-C01), que levanta `buildServer()` sin Postgres — mismo criterio que requireDb de trpc/exampleRouter.ts. */
 function requireDb(db: PrismaClient | null): PrismaClient {
@@ -60,10 +63,30 @@ function requireStaffContext(ctx: RequestContext): TenantTxContext {
   );
 }
 
+/** Igual que `requireDb`: las dependencias son `null` solo cuando no hay `authDeps` (router.test.ts). */
+function requireDeps(deps: CatalogServiceDeps | null): CatalogServiceDeps {
+  if (deps === null) {
+    throw toTRPCError(appError("INTERNAL", 500, "El servidor no tiene el reloj configurado."));
+  }
+  return deps;
+}
+
+/** De dónde vino el pedido, para la bitácora. */
+function auditOrigin(ctx: RequestContext): AuditOrigin {
+  return {
+    ip: ctx.req.ip,
+    userAgent: ctx.req.headers["user-agent"] ?? null,
+    requestId: ctx.requestId,
+  };
+}
+
 const READ = { permission: "catalog.product:read" } as const;
 const WRITE = { permission: "catalog.product:write" } as const;
+// RF-CAT-09: solo estos procedimientos exponen un producto o una variante en la
+// tienda. `WRITE` no alcanza para nada que toque `published_at` ni `online_visible`.
+const PUBLISH = { permission: "catalog.product:publish" } as const;
 
-export function createCatalogRouter(db: PrismaClient | null) {
+export function createCatalogRouter(db: PrismaClient | null, deps: CatalogServiceDeps | null) {
   const product = router({
     list: staffProcedure
       .meta(READ)
@@ -104,6 +127,33 @@ export function createCatalogRouter(db: PrismaClient | null) {
       .mutation(({ ctx, input }) =>
         catalogService.archiveProduct(requireDb(db), requireStaffContext(ctx), input),
       ),
+
+    publish: staffProcedure
+      .meta(PUBLISH)
+      .input(setProductPublicationInput)
+      .output(adminProductSchema)
+      .mutation(({ ctx, input }) =>
+        catalogService.publishProduct(
+          requireDb(db),
+          requireDeps(deps),
+          requireStaffContext(ctx),
+          auditOrigin(ctx),
+          input,
+        ),
+      ),
+
+    unpublish: staffProcedure
+      .meta(PUBLISH)
+      .input(setProductPublicationInput)
+      .output(adminProductSchema)
+      .mutation(({ ctx, input }) =>
+        catalogService.unpublishProduct(
+          requireDb(db),
+          requireStaffContext(ctx),
+          auditOrigin(ctx),
+          input,
+        ),
+      ),
   });
 
   const variant = router({
@@ -137,6 +187,19 @@ export function createCatalogRouter(db: PrismaClient | null) {
       .output(adminVariantSchema)
       .mutation(({ ctx, input }) =>
         catalogService.updateVariant(requireDb(db), requireStaffContext(ctx), input),
+      ),
+
+    setVisibility: staffProcedure
+      .meta(PUBLISH)
+      .input(setVariantVisibilityInput)
+      .output(adminVariantSchema)
+      .mutation(({ ctx, input }) =>
+        catalogService.setVariantVisibility(
+          requireDb(db),
+          requireStaffContext(ctx),
+          auditOrigin(ctx),
+          input,
+        ),
       ),
   });
 
