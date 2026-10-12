@@ -9,8 +9,11 @@ import {
   type CreateCategoryInput,
   type CreateProductInput,
   type CreateTagInput,
+  type ActivateProductInput,
   type CreateVariantInput,
   type ListProductsInput,
+  type SetProductPublicationInput,
+  type SetVariantVisibilityInput,
   type PaginationInput,
   type ProductKind,
   type UpdateBomComponentInput,
@@ -19,11 +22,12 @@ import {
   type UpdateTagInput,
   type UpdateVariantInput,
 } from "@joda/contracts";
-import { buildProductFacets, type ProductFacetInput } from "@joda/domain";
+import { buildProductFacets, type Clock, type ProductFacetInput } from "@joda/domain";
 import type { PrismaClient, Prisma } from "@joda/db";
+import { recordAuditEntry } from "../../db/audit.js";
 import { decodeCursor, encodeCursor } from "../../db/cursor.js";
 import { withTenantTx, type TenantTx, type TenantTxContext } from "../../db/withTenantTx.js";
-import { appError, toTRPCError } from "../../middleware/errorMapper.js";
+import { appError, hasSqlState, toTRPCError } from "../../middleware/errorMapper.js";
 import {
   toAdminBomComponent,
   toAdminCategory,
@@ -240,6 +244,78 @@ function assertDetailsMatchKind(kind: ProductKind, input: UpdateProductInput): v
   }
 }
 
+const requiresSerialUnitsRegisteredError = (registeredUnits: number) =>
+  appError(
+    "CONFLICT_REQUIRES_SERIAL_UNITS_REGISTERED",
+    409,
+    "Este reloj tiene unidades con número de serie registradas en sus variantes: requiresSerial no puede pasar a «no» mientras existan.",
+    { registeredUnits },
+  );
+
+/**
+ * WP-C08h, decisión de José (2026-10-11): cambiar `requires_serial` de un reloj
+ * se propaga a sus variantes, que heredan `is_serialized` de él (RN-SER-02,
+ * E05c). Decide qué variantes cambian y rechaza lo que no se puede propagar,
+ * ANTES de escribir nada:
+ *
+ *  - a «sí»: una variante que no se mide en `unit` no puede serializarse (CHECK
+ *    `NOT is_serialized OR uom = 'unit'`); se rechaza el cambio y se nombra el SKU.
+ *  - a «no»: si alguna variante tiene unidades registradas se rechaza: apagarlo
+ *    dejaría unidades de una variante que ya no las admite (RN-SER-02). Es la
+ *    regla de WP-C08d aplicada a este camino.
+ *
+ * Bloquea la fila de `watch_details` primero (`FOR NO KEY UPDATE`) y compara con
+ * el valor vigente: solo propaga si de verdad cambia, así que guardar el reloj
+ * con el mismo `requiresSerial` no revalida nada ni se frena por una variante
+ * anterior a E05c. Con el bloqueo tomado, las variantes que se crean o se
+ * actualizan al mismo tiempo esperan (`readWatchRequiresSerialShared`) y las que
+ * ya estaban leyendo terminan antes de que se listen acá.
+ *
+ * Devuelve `null` si no hay nada que propagar.
+ */
+async function planRequiresSerialPropagation(
+  tx: TenantTx,
+  productId: string,
+  requiresSerial: boolean,
+): Promise<{ readonly variantIds: string[]; readonly to: boolean } | null> {
+  const current = await repo.lockWatchRequiresSerial(tx, productId);
+  if (current === null || current === requiresSerial) return null;
+
+  const stale = (await repo.listVariantRows(tx, productId)).filter(
+    (variant) => variant.is_serialized !== requiresSerial,
+  );
+  if (stale.length === 0) return null;
+
+  if (requiresSerial) {
+    const notInUnits = stale.filter((variant) => variant.uom !== "unit");
+    if (notInUnits.length > 0) {
+      throw toTRPCError(
+        appError(
+          "CONFLICT_REQUIRES_SERIAL_VARIANT_NOT_UNIT",
+          409,
+          `requiresSerial no puede pasar a «sí»: solo una variante en unidades enteras (uom = unit) puede llevar número de serie, y estas se miden en ml: ${notInUnits.map((variant) => variant.sku).join(", ")}.`,
+          { skus: notInUnits.map((variant) => variant.sku) },
+        ),
+      );
+    }
+  } else {
+    // Primero los lotes, después el conteo: el alta de una unidad bloquea su lote antes de
+    // leer el flag de la variante (ver `lockLotsAndAssertNoSerialUnits`, WP-C08d).
+    await inventoryRepo.lockLotsOfVariants(
+      tx,
+      stale.map((variant) => variant.id),
+    );
+    const registeredUnits = await repo.countSerializedUnitsOfVariants(
+      tx,
+      stale.map((variant) => variant.id),
+    );
+    if (registeredUnits > 0) {
+      throw toTRPCError(requiresSerialUnitsRegisteredError(registeredUnits));
+    }
+  }
+  return { variantIds: stale.map((variant) => variant.id), to: requiresSerial };
+}
+
 export async function updateProduct(
   db: PrismaClient,
   ctx: TenantTxContext,
@@ -253,7 +329,15 @@ export async function updateProduct(
     await assertBrandExists(tx, input.brandId);
 
     if (input.perfumeDetails) await repo.updatePerfumeDetails(tx, input.id, input.perfumeDetails);
-    if (input.watchDetails) await repo.updateWatchDetails(tx, input.id, input.watchDetails);
+    if (input.watchDetails) {
+      // WP-C08h. Antes de escribir: los rechazos de la propagación no dejan el cambio a medias.
+      const propagation =
+        input.watchDetails.requiresSerial === undefined
+          ? null
+          : await planRequiresSerialPropagation(tx, input.id, input.watchDetails.requiresSerial);
+      await repo.updateWatchDetails(tx, input.id, input.watchDetails);
+      if (propagation) await repo.setVariantsSerialized(tx, propagation.variantIds, propagation.to);
+    }
     if (input.accessoryDetails)
       await repo.updateAccessoryDetails(tx, input.id, input.accessoryDetails);
 
@@ -305,6 +389,64 @@ function buildProductFacetsFromRow(row: repo.ProductRow): Record<string, unknown
   }
 }
 
+// ---------------------------------------------------------------------
+// Activación — RN-CAT-04 (WP-C08e). `draft` → `active` con su propio procedimiento:
+// `status` no viaja por `update`. Activar un producto que ya tiene `published_at` lo
+// muestra en la tienda, así que además de `write` exige `publish`.
+// ---------------------------------------------------------------------
+const PRODUCT_ARCHIVED_ERROR = appError(
+  "CONFLICT_PRODUCT_ARCHIVED",
+  409,
+  "Un producto archivado no se puede activar.",
+);
+
+const ACTIVATE_PUBLISHED_FORBIDDEN_ERROR = appError(
+  "FORBIDDEN_INSUFFICIENT_PERMISSION",
+  403,
+  "Este producto ya está publicado: activarlo lo muestra en la tienda y hace falta el permiso de publicar.",
+);
+
+export async function activateProduct(
+  db: PrismaClient,
+  ctx: TenantTxContext,
+  origin: AuditOrigin,
+  access: { readonly canPublish: boolean },
+  input: ActivateProductInput,
+): Promise<AdminProduct> {
+  return withTenantTx(db, ctx, async (tx) => {
+    // Una sola decisión: se intenta la escritura condicional (draft → active, y sin
+    // `published_at` si quien activa no puede publicar). Si no cambió nada, se lee el
+    // producto y se explica por qué; así una carrera con otro pedido (que lo publique, lo
+    // archive o lo active) termina igual que si hubiera ocurrido antes de este pedido.
+    if (await repo.activateProductRow(tx, input.id, !access.canPublish)) {
+      await recordAuditEntry(tx, {
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        audience: ctx.audience,
+        action: "catalog.product.activate",
+        entity: "products",
+        entityId: input.id,
+        before: { status: "draft" },
+        after: { status: "active" },
+        ...origin,
+      });
+    } else {
+      const current = await repo.findProductRow(tx, { id: input.id });
+      if (!current) throw toTRPCError(NOT_FOUND_ERROR);
+      if (current.status === "archived") throw toTRPCError(PRODUCT_ARCHIVED_ERROR);
+      // Sigue en borrador: la condición que falló es `published_at IS NULL`, o sea que
+      // está publicado y quien activa no puede publicar.
+      if (current.status === "draft") throw toTRPCError(ACTIVATE_PUBLISHED_FORBIDDEN_ERROR);
+      // Ya activo: no hay nada que hacer.
+      return toAdminProduct(current);
+    }
+
+    const row = await repo.findProductRow(tx, { id: input.id });
+    if (!row) throw new Error(`producto ${input.id} desapareció a mitad de la transacción`);
+    return toAdminProduct(row);
+  });
+}
+
 export async function archiveProduct(
   db: PrismaClient,
   ctx: TenantTxContext,
@@ -317,6 +459,157 @@ export async function archiveProduct(
     const row = await repo.findProductRow(tx, input);
     if (!row) throw new Error(`producto ${input.id} desapareció a mitad de la transacción`);
     return toAdminProduct(row);
+  });
+}
+
+// ---------------------------------------------------------------------
+// Publicación — RF-CAT-09, RN-CAT-03 (WP-C08g). Procedimientos propios, bajo
+// catalog.product:publish: `update` y `archive` (que exigen `write`) no
+// tocan `published_at` ni `online_visible`.
+// ---------------------------------------------------------------------
+export interface CatalogServiceDeps {
+  readonly clock: Clock;
+}
+
+/** De dónde vino el pedido, para la bitácora (docs/security-spec.md §7). */
+export interface AuditOrigin {
+  readonly ip: string | null;
+  readonly userAgent: string | null;
+  readonly requestId: string | null;
+}
+
+const PRODUCT_WITHOUT_PRIMARY_CATEGORY_ERROR = appError(
+  "CONFLICT_PRODUCT_WITHOUT_PRIMARY_CATEGORY",
+  409,
+  "El producto no tiene categoría primaria: sin ella no se puede armar su ruta en la tienda.",
+);
+
+const VARIANT_NOT_PUBLISHABLE_ERROR = appError(
+  "CONFLICT_VARIANT_NOT_PUBLISHABLE",
+  409,
+  "Solo las variantes sellado, decant y unidad se pueden mostrar en la tienda.",
+);
+
+/**
+ * Publica el producto: `published_at` = ahora. Es independiente del `status`: un
+ * borrador publicado no se ve en la tienda hasta que esté activo (las vistas
+ * públicas piden las dos cosas), y publicar no lo activa. Sin categoría primaria
+ * se rechaza (caso borde 17: el breadcrumb no se puede resolver). Ya publicado,
+ * no hace nada: conserva la fecha original y no deja otra entrada en la bitácora.
+ */
+export async function publishProduct(
+  db: PrismaClient,
+  deps: CatalogServiceDeps,
+  ctx: TenantTxContext,
+  origin: AuditOrigin,
+  input: SetProductPublicationInput,
+): Promise<AdminProduct> {
+  return withTenantTx(db, ctx, async (tx) => {
+    const existing = await repo.findProductRow(tx, { id: input.id });
+    if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
+    if (existing.published_at !== null) return toAdminProduct(existing);
+    if (!existing.product_categories.some((assignment) => assignment.is_primary)) {
+      throw toTRPCError(PRODUCT_WITHOUT_PRIMARY_CATEGORY_ERROR);
+    }
+
+    const publishedAt = deps.clock.now();
+    // Si otro pedido la publicó mientras tanto, no hay nada que escribir ni auditar.
+    if (await repo.publishProductRow(tx, input.id, publishedAt)) {
+      await recordAuditEntry(tx, {
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        audience: ctx.audience,
+        action: "catalog.product.publish",
+        entity: "products",
+        entityId: input.id,
+        before: { publishedAt: null },
+        after: { publishedAt: publishedAt.toISOString() },
+        ...origin,
+      });
+    }
+
+    const row = await repo.findProductRow(tx, { id: input.id });
+    if (!row) throw new Error(`producto ${input.id} desapareció a mitad de la transacción`);
+    return toAdminProduct(row);
+  });
+}
+
+/** Despublica el producto: `published_at` vuelve a nulo. No toca `status` ni la visibilidad de sus variantes. Ya despublicado, no hace nada. */
+export async function unpublishProduct(
+  db: PrismaClient,
+  ctx: TenantTxContext,
+  origin: AuditOrigin,
+  input: SetProductPublicationInput,
+): Promise<AdminProduct> {
+  return withTenantTx(db, ctx, async (tx) => {
+    const existing = await repo.findProductRow(tx, { id: input.id });
+    if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
+    if (existing.published_at === null) return toAdminProduct(existing);
+
+    if (await repo.unpublishProductRow(tx, input.id)) {
+      await recordAuditEntry(tx, {
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        audience: ctx.audience,
+        action: "catalog.product.unpublish",
+        entity: "products",
+        entityId: input.id,
+        before: { publishedAt: existing.published_at.toISOString() },
+        after: { publishedAt: null },
+        ...origin,
+      });
+    }
+
+    const row = await repo.findProductRow(tx, { id: input.id });
+    if (!row) throw new Error(`producto ${input.id} desapareció a mitad de la transacción`);
+    return toAdminProduct(row);
+  });
+}
+
+/**
+ * Muestra u oculta una variante en la tienda (`online_visible`). Qué tipos se
+ * pueden mostrar lo decide la base (RN-CAT-02, `0038`): acá no se repite la
+ * lista, solo se traduce su rechazo a un error en español. Mostrar una variante
+ * no publica el producto, ni al revés.
+ */
+export async function setVariantVisibility(
+  db: PrismaClient,
+  ctx: TenantTxContext,
+  origin: AuditOrigin,
+  input: SetVariantVisibilityInput,
+): Promise<AdminVariant> {
+  return withTenantTx(db, ctx, async (tx) => {
+    const existing = await repo.findVariantRow(tx, input.id);
+    if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
+    if (existing.online_visible === input.onlineVisible) return toAdminVariant(existing);
+
+    let changed: boolean;
+    try {
+      changed = await repo.setVariantOnlineVisible(tx, input.id, input.onlineVisible);
+    } catch (error) {
+      // Este UPDATE solo cambia `online_visible`, y hoy el único CHECK de `product_variants` que
+      // lo involucra es el de RN-CAT-02: cualquier 23514 acá es ése. Si algún día hay otro,
+      // hay que distinguirlos por el nombre de la restricción.
+      if (hasSqlState(error, "23514")) throw toTRPCError(VARIANT_NOT_PUBLISHABLE_ERROR);
+      throw error;
+    }
+    if (changed) {
+      await recordAuditEntry(tx, {
+        tenantId: ctx.tenantId,
+        actorId: ctx.userId,
+        audience: ctx.audience,
+        action: "catalog.variant.setVisibility",
+        entity: "product_variants",
+        entityId: input.id,
+        before: { onlineVisible: existing.online_visible },
+        after: { onlineVisible: input.onlineVisible },
+        ...origin,
+      });
+    }
+
+    const row = await repo.findVariantRow(tx, input.id);
+    if (!row) throw new Error(`variante ${input.id} desapareció a mitad de la transacción`);
+    return toAdminVariant(row);
   });
 }
 
@@ -357,24 +650,29 @@ const BULK_VARIANT_EXISTS_ERROR = appError(
 // recibirlo (la recepción de una variante serializada exige cargar los
 // seriales), y uno con serie no puede entrar sin registrarla. WP-C08f: la misma
 // regla rige al actualizar la variante, que no puede contradecir al producto.
-// Lo inverso, cambiar `requires_serial` del producto con variantes ya creadas,
-// espera la decisión de José (WP-C08h). Apagarlo con unidades ya registradas lo rechaza
-// `lockLotsAndAssertNoSerialUnits` (WP-C08d).
+// WP-C08h, decisión de José: lo inverso también. Cambiar `requires_serial` del
+// producto se propaga a las variantes ya creadas (`planRequiresSerialPropagation`).
+// Apagarlo en una variante suelta con unidades ya registradas lo rechaza
+// `lockLotsAndAssertNoSerialUnits` (WP-C08d), y la propagación aplica la misma
+// guarda con el mismo bloqueo previo de lotes.
+//
+// El valor del producto se lee con `FOR SHARE`: la propagación y esta lectura
+// tienen que ordenarse entre sí, o una variante creada mientras el producto
+// cambia nace con el valor viejo y nadie la corrige.
 //
 // El refine de `createVariantInput` sobre `isSerialized` solo ve lo que manda el
 // cliente, no lo que se hereda; por eso el CHECK `NOT is_serialized OR uom =
 // 'unit'` de la base se adelanta acá con un mensaje claro, en vez de llegar como
 // un conflicto genérico. `updateVariantInput` no lleva `uom` (no se edita), así
 // que al actualizar viene de la variante guardada.
-function resolveIsSerialized(
+async function resolveIsSerialized(
+  tx: TenantTx,
   product: repo.ProductRow,
   input: { readonly isSerialized?: boolean; readonly uom: CreateVariantInput["uom"] },
-): boolean | undefined {
+): Promise<boolean | undefined> {
   if (product.kind !== "watch") return input.isSerialized;
-  const details = product.watch_details_watch_details_product_id_tenant_idToproducts;
-  if (!details) throw new Error(`producto ${product.id} es kind=watch sin watch_details`);
-
-  const inherited = details.requires_serial;
+  const inherited = await repo.readWatchRequiresSerialShared(tx, product.id);
+  if (inherited === null) throw new Error(`producto ${product.id} es kind=watch sin watch_details`);
   if (input.isSerialized !== undefined && input.isSerialized !== inherited) {
     throw toTRPCError(
       appError(
@@ -404,7 +702,7 @@ export async function createVariant(
   return withTenantTx(db, ctx, async (tx) => {
     const product = await repo.findProductRow(tx, { id: input.productId });
     if (!product) throw toTRPCError(NOT_FOUND_ERROR);
-    const isSerialized = resolveIsSerialized(product, input);
+    const isSerialized = await resolveIsSerialized(tx, product, input);
     await assertSourceVariantExists(tx, input.sourceVariantId);
 
     // El índice único parcial de 0028 lo impone la base; esto adelanta el
@@ -485,7 +783,7 @@ export async function updateVariant(
     if (input.isSerialized !== undefined) {
       const product = await repo.findProductRow(tx, { id: existing.product_id });
       if (!product) throw new Error(`variante ${existing.id} sin producto ${existing.product_id}`);
-      isSerialized = resolveIsSerialized(product, {
+      isSerialized = await resolveIsSerialized(tx, product, {
         isSerialized: input.isSerialized,
         uom: existing.uom,
       });

@@ -19,6 +19,13 @@ import type { AuthServiceDeps } from "../auth/service.js";
 const TENANT_ID = "88888888-8888-4888-a888-888888888888";
 const STAFF_OWNER_ID = "99999999-9999-4999-a999-999999999991";
 const STAFF_OWNER_EMAIL = "owner@jodaparfums.com";
+// WP-C08g: un usuario con `catalog.product:read` y `write` pero sin `publish` (no hay rol
+// estándar con esa forma: `manager` los tiene todos), para probar que escribir no alcanza.
+const STAFF_WRITER_ID = "99999999-9999-4999-a999-999999999993";
+const STAFF_WRITER_EMAIL = "escritor@jodaparfums.com";
+// WP-C08e: un usuario que solo puede leer el catálogo (rol estándar `vendedor`).
+const STAFF_READER_ID = "99999999-9999-4999-a999-999999999994";
+const STAFF_READER_EMAIL = "lector@jodaparfums.com";
 const STAFF_PASSWORD = "correcta";
 const MFA_ENCRYPTION_KEY = Buffer.from("1".repeat(64), "hex");
 const PLACEHOLDER_MFA_SECRET = "placeholder-nunca-se-descifra-en-este-test";
@@ -95,6 +102,41 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       [TENANT_ID, STAFF_OWNER_ID, ownerRole.rows[0].id],
     );
 
+    await testDb.superuserClient.query(
+      `INSERT INTO app.staff_users
+         (id, tenant_id, auth_subject, email, full_name, is_active, mfa_enrolled, mfa_secret_encrypted)
+       VALUES ($1, $2, 'auth|writer-c08g', $3, 'Test Writer', true, true, $4)`,
+      [STAFF_WRITER_ID, TENANT_ID, STAFF_WRITER_EMAIL, PLACEHOLDER_MFA_SECRET],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.staff_users
+         (id, tenant_id, auth_subject, email, full_name, is_active, mfa_enrolled, mfa_secret_encrypted)
+       VALUES ($1, $2, 'auth|reader-c08e', $3, 'Test Reader', true, true, $4)`,
+      [STAFF_READER_ID, TENANT_ID, STAFF_READER_EMAIL, PLACEHOLDER_MFA_SECRET],
+    );
+    const sellerRole = await testDb.superuserClient.query(
+      `SELECT id FROM app.roles WHERE tenant_id = $1 AND code = 'vendedor'`,
+      [TENANT_ID],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.staff_user_roles (tenant_id, staff_user_id, role_id) VALUES ($1, $2, $3)`,
+      [TENANT_ID, STAFF_READER_ID, sellerRole.rows[0].id],
+    );
+    const writerRole = await testDb.superuserClient.query(
+      `INSERT INTO app.roles (tenant_id, code, name)
+       VALUES ($1, 'test_catalogo_sin_publicar', 'Catálogo sin publicar (test)') RETURNING id`,
+      [TENANT_ID],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.role_permissions (tenant_id, role_id, permission_code)
+       VALUES ($1, $2, 'catalog.product:read'), ($1, $2, 'catalog.product:write')`,
+      [TENANT_ID, writerRole.rows[0].id],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.staff_user_roles (tenant_id, staff_user_id, role_id) VALUES ($1, $2, $3)`,
+      [TENANT_ID, STAFF_WRITER_ID, writerRole.rows[0].id],
+    );
+
     db = new PrismaClient({ datasourceUrl: jodaApiConnectionUrl(testDb.container) });
     redisContainer = await new RedisContainer("redis:7").start();
   }, 120_000);
@@ -111,7 +153,11 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       db,
       redis,
       authProvider: createFakeStaffAuthProvider(
-        new Map([[STAFF_OWNER_EMAIL, { password: STAFF_PASSWORD, authSubject: "auth|owner-c08" }]]),
+        new Map([
+          [STAFF_OWNER_EMAIL, { password: STAFF_PASSWORD, authSubject: "auth|owner-c08" }],
+          [STAFF_WRITER_EMAIL, { password: STAFF_PASSWORD, authSubject: "auth|writer-c08g" }],
+          [STAFF_READER_EMAIL, { password: STAFF_PASSWORD, authSubject: "auth|reader-c08e" }],
+        ]),
       ),
       clock: createManualClock(new Date("2026-01-01T12:00:00.000Z")),
       mfaEncryptionKey: MFA_ENCRYPTION_KEY,
@@ -1051,6 +1097,294 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(turnedOff.isSerialized).toBe(false);
   });
 
+  // WP-C08h, decisión de José (2026-10-11): cambiar `requires_serial` de un reloj se
+  // propaga a las variantes que ya existen, que heredan `is_serialized` de él.
+  async function variantsOf(productId: string) {
+    return call<{ id: string; sku: string; isSerialized: boolean }[]>("catalog.variant.list", {
+      productId,
+    });
+  }
+
+  function setRequiresSerial(productId: string, requiresSerial: boolean, extra = {}) {
+    return mutate("catalog.product.update", {
+      id: productId,
+      watchDetails: { requiresSerial },
+      ...extra,
+    });
+  }
+
+  it("WP-C08h · pasar requiresSerial a «sí» serializa las variantes del reloj y no toca las de otro (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("prop-si-c08h", false);
+    const other = await createWatchProduct("prop-si-otro-c08h", false);
+    await mutateOk("catalog.variant.create", unitVariantPayload(watch.id, "RELOJ-PROP-SI-1", {}));
+    await mutateOk("catalog.variant.create", unitVariantPayload(watch.id, "RELOJ-PROP-SI-2", {}));
+    await mutateOk("catalog.variant.create", unitVariantPayload(other.id, "RELOJ-PROP-OTRO", {}));
+
+    const response = await setRequiresSerial(watch.id, true);
+    expect(response.statusCode).toBe(200);
+
+    const changed = await variantsOf(watch.id);
+    const untouched = await variantsOf(other.id);
+    expect(changed.map((variant) => variant.isSerialized)).toEqual([true, true]);
+    expect(untouched.map((variant) => variant.isSerialized)).toEqual([false]);
+  });
+
+  it("WP-C08h · pasar requiresSerial a «no» desserializa las variantes del reloj (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("prop-no-c08h", true);
+    await mutateOk("catalog.variant.create", unitVariantPayload(watch.id, "RELOJ-PROP-NO-1", {}));
+    await mutateOk("catalog.variant.create", unitVariantPayload(watch.id, "RELOJ-PROP-NO-2", {}));
+
+    const response = await setRequiresSerial(watch.id, false);
+    expect(response.statusCode).toBe(200);
+
+    const changed = await variantsOf(watch.id);
+    expect(changed.map((variant) => variant.isSerialized)).toEqual([false, false]);
+  });
+
+  it("WP-C08h · guardar el reloj con el mismo requiresSerial «sí» no propaga ni revalida una variante anterior a E05c (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("prop-igual-si-c08h", true);
+    const variant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      unitVariantPayload(watch.id, "RELOJ-PROP-IGUAL-SI", {}),
+    );
+    await testDb.superuserClient.query(
+      `UPDATE app.product_variants SET is_serialized = false WHERE id = $1`,
+      [variant.id],
+    );
+
+    const response = await setRequiresSerial(watch.id, true, { name: "Reloj renombrado" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.data.name).toBe("Reloj renombrado");
+
+    const after = await variantsOf(watch.id);
+    expect(after.map((v) => v.isSerialized)).toEqual([false]);
+  });
+
+  // El caso que justifica «solo si cambia»: el formulario del admin reenvía
+  // `watchDetails` completo en cada guardado. Con unidades registradas en una
+  // variante anterior a E05c, propagar siempre frenaría una edición del nombre.
+  it("WP-C08h · guardar el reloj con el mismo requiresSerial «no» no se frena por unidades registradas en una variante anterior a E05c (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("prop-igual-no-c08h", false);
+    const variant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      unitVariantPayload(watch.id, "RELOJ-PROP-IGUAL-NO", {}),
+    );
+    await testDb.superuserClient.query(
+      `UPDATE app.product_variants SET is_serialized = true WHERE id = $1`,
+      [variant.id],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.serialized_units (tenant_id, variant_id, serial_number)
+       VALUES ($1, $2, 'SN-PROP-IGUAL-NO')`,
+      [TENANT_ID, variant.id],
+    );
+
+    const response = await setRequiresSerial(watch.id, false, { name: "Reloj renombrado" });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.data.name).toBe("Reloj renombrado");
+
+    const after = await variantsOf(watch.id);
+    expect(after.map((v) => v.isSerialized)).toEqual([true]);
+  });
+
+  it("WP-C08h · requiresSerial a «sí» con una variante en ml se rechaza, nombra el SKU y no cambia nada (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("prop-ml-c08h", false);
+    await mutateOk("catalog.variant.create", unitVariantPayload(watch.id, "RELOJ-PROP-UNIT", {}));
+    await testDb.superuserClient.query(
+      `INSERT INTO app.product_variants (tenant_id, product_id, sku, variant_type, uom, price_pyg)
+       VALUES ($1, $2, 'RELOJ-PROP-ML', 'bulk', 'ml', 0)`,
+      [TENANT_ID, watch.id],
+    );
+
+    const response = await setRequiresSerial(watch.id, true);
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_REQUIRES_SERIAL_VARIANT_NOT_UNIT");
+    expect(response.json().error.message).toContain("RELOJ-PROP-ML");
+    expect(response.json().error.data.details).toEqual({ skus: ["RELOJ-PROP-ML"] });
+
+    const product = await call<{ watchDetails: { requiresSerial: boolean } }>(
+      "catalog.product.byId",
+      { id: watch.id },
+    );
+    const variants = await variantsOf(watch.id);
+    expect(product.watchDetails.requiresSerial).toBe(false);
+    expect(variants.map((variant) => variant.isSerialized)).toEqual([false, false]);
+  });
+
+  it("WP-C08h · requiresSerial a «no» con unidades registradas se rechaza y no cambia nada (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("prop-unidades-c08h", true);
+    const variant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      unitVariantPayload(watch.id, "RELOJ-PROP-UNIDADES", {}),
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.serialized_units (tenant_id, variant_id, serial_number)
+       VALUES ($1, $2, 'SN-PROP-UNIDADES')`,
+      [TENANT_ID, variant.id],
+    );
+
+    const response = await setRequiresSerial(watch.id, false);
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_REQUIRES_SERIAL_UNITS_REGISTERED");
+    expect(response.json().error.data.details).toEqual({ registeredUnits: 1 });
+
+    const product = await call<{ watchDetails: { requiresSerial: boolean } }>(
+      "catalog.product.byId",
+      { id: watch.id },
+    );
+    const variants = await variantsOf(watch.id);
+    expect(product.watchDetails.requiresSerial).toBe(true);
+    expect(variants.map((v) => v.isSerialized)).toEqual([true]);
+  });
+
+  it("WP-C08h · un reloj sin variantes cambia requiresSerial sin más (RN-SER-02)", async () => {
+    const watch = await createWatchProduct("prop-vacio-c08h", false);
+
+    const response = await setRequiresSerial(watch.id, true);
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.data.watchDetails.requiresSerial).toBe(true);
+  });
+
+  // La propagación lee las variantes y después escribe; crear o actualizar una
+  // variante lee `requires_serial` y después escribe. Cada prueba retiene el
+  // bloqueo del otro lado desde otra conexión (como en los movimientos de
+  // categorías) y espera a que la petición quede detenida: sin eso, «todavía no
+  // terminó» daría falso verde en una máquina lenta. Si algo falla antes del
+  // COMMIT, el ROLLBACK libera la fila y se espera a la petición pendiente, para
+  // que no siga viva durante la prueba siguiente sobre la misma conexión.
+  async function whileHolding(
+    hold: () => Promise<unknown>,
+    request: () => ReturnType<typeof mutate>,
+  ): Promise<Awaited<ReturnType<typeof mutate>>> {
+    await testDb.superuserClient.query("BEGIN");
+    let committed = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await hold();
+      pending = request();
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      committed = true;
+      return await pending;
+    } finally {
+      if (!committed) await testDb.superuserClient.query("ROLLBACK");
+      await pending?.catch(() => undefined);
+    }
+  }
+
+  // La espera del bloqueo puede tardar más que los 5 s por defecto de Vitest.
+  const RACE_TEST_TIMEOUT_MS = 20_000;
+
+  it(
+    "WP-C08h · una variante que se crea mientras el reloj cambia espera y nace con el valor nuevo (RN-SER-02)",
+    async () => {
+      const watch = await createWatchProduct("carrera-alta-c08h", false);
+
+      const response = await whileHolding(
+        () =>
+          testDb.superuserClient.query(
+            `UPDATE app.watch_details SET requires_serial = true WHERE product_id = $1`,
+            [watch.id],
+          ),
+        () =>
+          mutate("catalog.variant.create", unitVariantPayload(watch.id, "RELOJ-CARRERA-ALTA", {})),
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().result.data.isSerialized).toBe(true);
+    },
+    RACE_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "WP-C08h · una variante que se actualiza mientras el reloj cambia espera y se compara con el valor nuevo (RN-SER-02)",
+    async () => {
+      const watch = await createWatchProduct("carrera-upd-c08h", false);
+      const variant = await mutateOk<{ id: string }>(
+        "catalog.variant.create",
+        unitVariantPayload(watch.id, "RELOJ-CARRERA-UPD", {}),
+      );
+
+      const response = await whileHolding(
+        () =>
+          testDb.superuserClient.query(
+            `UPDATE app.watch_details SET requires_serial = true WHERE product_id = $1`,
+            [watch.id],
+          ),
+        () => mutate("catalog.variant.update", { id: variant.id, isSerialized: false }),
+      );
+
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.data.appCode).toBe("VALIDATION_SERIALIZED_INHERITED");
+    },
+    RACE_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "WP-C08h · el cambio del reloj espera a una variante que se está creando y la propaga también (RN-SER-02)",
+    async () => {
+      const watch = await createWatchProduct("carrera-prod-c08h", false);
+
+      const response = await whileHolding(
+        async () => {
+          // Lo que hace `createVariant` a mitad de camino: leyó `false` y todavía no confirmó.
+          await testDb.superuserClient.query(
+            `SELECT 1 FROM app.watch_details WHERE product_id = $1 FOR SHARE`,
+            [watch.id],
+          );
+          await testDb.superuserClient.query(
+            `INSERT INTO app.product_variants
+               (tenant_id, product_id, sku, variant_type, uom, price_pyg, is_serialized)
+             VALUES ($1, $2, 'RELOJ-CARRERA-PROD', 'unit', 'unit', 0, false)`,
+            [TENANT_ID, watch.id],
+          );
+        },
+        () => setRequiresSerial(watch.id, true),
+      );
+
+      expect(response.statusCode).toBe(200);
+      const variants = await variantsOf(watch.id);
+      expect(variants.map((variant) => variant.isSerialized)).toEqual([true]);
+    },
+    RACE_TEST_TIMEOUT_MS,
+  );
+
+  // Un guardado que leyó el valor viejo y esperó el bloqueo tiene que comparar con
+  // el valor VIGENTE, el que dejó el que confirmó antes. Con el valor viejo vería
+  // «igual», no propagaría y dejaría las variantes serializadas bajo un reloj que
+  // ya no lo pide: el estado contradictorio que C08f impide.
+  it(
+    "WP-C08h · un guardado que leyó el valor viejo espera, compara con el vigente y propaga el suyo (RN-SER-02)",
+    async () => {
+      const watch = await createWatchProduct("carrera-vigente-c08h", false);
+      const variant = await mutateOk<{ id: string }>(
+        "catalog.variant.create",
+        unitVariantPayload(watch.id, "RELOJ-CARRERA-VIGENTE", {}),
+      );
+
+      const response = await whileHolding(
+        async () => {
+          // Otro guardado que ya pasó el reloj a «sí» y serializó la variante, sin confirmar.
+          await testDb.superuserClient.query(
+            `UPDATE app.watch_details SET requires_serial = true WHERE product_id = $1`,
+            [watch.id],
+          );
+          await testDb.superuserClient.query(
+            `UPDATE app.product_variants SET is_serialized = true WHERE id = $1`,
+            [variant.id],
+          );
+        },
+        () => setRequiresSerial(watch.id, false),
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().result.data.watchDetails.requiresSerial).toBe(false);
+      const variants = await variantsOf(watch.id);
+      expect(variants.map((v) => v.isSerialized)).toEqual([false]);
+    },
+    RACE_TEST_TIMEOUT_MS,
+  );
+
   // WP-B17. Control de no-regresión, no un test del cambio: la normalización de
   // `updateVariant` ya no existe, y esto fija que actualizar una variante que sí
   // se publica (acá un `unit`) no le apaga el flag. La normalización original
@@ -1429,5 +1763,660 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(moved.sourceVariantId).toBe(secondSource.id);
     expect(cleared.sourceVariantId).toBeNull();
     expect(cleared.productionMode).toBe("stocked");
+  });
+
+  // -------------------------------------------------------------------
+  // WP-C08g · RF-CAT-09, RN-CAT-03. Publicar y despublicar mueven `published_at`
+  // con independencia del `status`; mostrar u ocultar una variante mueve
+  // `online_visible`. Solo con `catalog.product:publish`. La tienda ve un
+  // producto cuando está `active` Y publicado, y de él solo las variantes
+  // visibles (public.v_catalog_*). Activar un borrador tiene procedimiento propio
+  // desde WP-C08e (`catalog.product.activate`); estas pruebas lo hacen por SQL para
+  // no depender de él.
+  // -------------------------------------------------------------------
+  const PUBLISH_CLOCK_ISO = "2026-01-01T12:00:00.000Z";
+
+  /** Entra como otro usuario de personal y deja su sesión con el segundo factor satisfecho (mismo criterio que el `beforeEach`). */
+  async function loginPastMfa(email: string): Promise<string> {
+    const response = await app.inject({
+      method: "POST",
+      url: "/trpc/auth.session.login",
+      payload: { email, password: STAFF_PASSWORD },
+    });
+    const userCookie = toRequestCookie(response.headers["set-cookie"]);
+    await testDb.superuserClient.query(
+      `UPDATE app.staff_sessions SET mfa_verified_at = now()
+       WHERE id = (
+         SELECT s.id FROM app.staff_sessions s
+         JOIN app.staff_users u ON u.id = s.staff_user_id
+         WHERE u.email = $1 AND s.revoked_at IS NULL
+         ORDER BY s.created_at DESC LIMIT 1
+       )`,
+      [email],
+    );
+    await redis.flushall();
+    return userCookie;
+  }
+
+  async function mutateAs(userCookie: string, procedure: string, payload: Record<string, unknown>) {
+    return app.inject({
+      method: "POST",
+      url: `/trpc/${procedure}`,
+      headers: { cookie: userCookie },
+      payload,
+    });
+  }
+
+  async function activate(productId: string): Promise<void> {
+    await testDb.superuserClient.query(`UPDATE app.products SET status = 'active' WHERE id = $1`, [
+      productId,
+    ]);
+  }
+
+  async function publicProductSlugs(): Promise<string[]> {
+    const rows = await testDb.superuserClient.query(
+      `SELECT slug FROM public.v_catalog_products WHERE tenant_id = $1`,
+      [TENANT_ID],
+    );
+    return rows.rows.map((row: { slug: string }) => row.slug);
+  }
+
+  async function publicVariantSkus(): Promise<string[]> {
+    const rows = await testDb.superuserClient.query(
+      `SELECT sku FROM public.v_catalog_variants WHERE tenant_id = $1`,
+      [TENANT_ID],
+    );
+    return rows.rows.map((row: { sku: string }) => row.sku);
+  }
+
+  async function auditActions(entityId: string): Promise<string[]> {
+    const rows = await testDb.superuserClient.query(
+      `SELECT action FROM app.audit_log WHERE entity_id = $1 ORDER BY occurred_at, id`,
+      [entityId],
+    );
+    return rows.rows.map((row: { action: string }) => row.action);
+  }
+
+  it("RF-CAT-09 · publicar estampa published_at con el reloj y no toca el estado interno", async () => {
+    const product = await createAccessory("c08g-publica");
+
+    const published = await mutateOk<{ status: string; publishedAt: string | null }>(
+      "catalog.product.publish",
+      { id: product.id },
+    );
+
+    expect(published.publishedAt).toBe(PUBLISH_CLOCK_ISO);
+    expect(published.status).toBe("draft");
+  });
+
+  it("RF-CAT-09 · publicar un borrador no lo muestra en la tienda: hacen falta el estado activo y la publicación", async () => {
+    const product = await createAccessory("c08g-borrador");
+    await mutateOk("catalog.product.publish", { id: product.id });
+    const whileDraft = await publicProductSlugs();
+
+    await activate(product.id);
+    const whileActive = await publicProductSlugs();
+    await mutateOk("catalog.product.unpublish", { id: product.id });
+    const afterUnpublish = await publicProductSlugs();
+
+    expect(whileDraft).not.toContain("c08g-borrador");
+    expect(whileActive).toContain("c08g-borrador");
+    expect(afterUnpublish).not.toContain("c08g-borrador");
+  });
+
+  it("RF-CAT-09 · despublicar deja published_at en nulo y el producto activo; hacerlo dos veces no cambia nada", async () => {
+    const product = await createAccessory("c08g-despublica");
+    await activate(product.id);
+    await mutateOk("catalog.product.publish", { id: product.id });
+
+    const first = await mutateOk<{ status: string; publishedAt: string | null }>(
+      "catalog.product.unpublish",
+      { id: product.id },
+    );
+    const second = await mutateOk<{ status: string; publishedAt: string | null }>(
+      "catalog.product.unpublish",
+      { id: product.id },
+    );
+
+    expect(first).toMatchObject({ status: "active", publishedAt: null });
+    expect(second).toMatchObject({ status: "active", publishedAt: null });
+    expect(await auditActions(product.id)).toEqual([
+      "catalog.product.publish",
+      "catalog.product.unpublish",
+    ]);
+  });
+
+  it("RF-CAT-09 · despublicar no toca las variantes: siguen marcadas como visibles y reaparecen al volver a publicar", async () => {
+    const product = await createAccessory("c08g-despublica-variantes");
+    const variant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08G-DESPUBLICA",
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "100000",
+    });
+    await activate(product.id);
+    await mutateOk("catalog.product.publish", { id: product.id });
+    await mutateOk("catalog.variant.setVisibility", { id: variant.id, onlineVisible: true });
+
+    await mutateOk("catalog.product.unpublish", { id: product.id });
+    const whileUnpublished = await publicVariantSkus();
+    const variantsAfter = await call<{ onlineVisible: boolean }[]>("catalog.variant.list", {
+      productId: product.id,
+    });
+    await mutateOk("catalog.product.publish", { id: product.id });
+    const afterRepublish = await publicVariantSkus();
+
+    expect(whileUnpublished).not.toContain("C08G-DESPUBLICA");
+    expect(variantsAfter.map((item) => item.onlineVisible)).toEqual([true]);
+    expect(afterRepublish).toContain("C08G-DESPUBLICA");
+  });
+
+  it("RF-CAT-09 · si otro pedido publica el producto mientras éste espera, no le pisa la fecha ni deja otra entrada en la bitácora", async () => {
+    const product = await createAccessory("c08g-publicacion-simultanea");
+
+    // Otra transacción publica el producto y todavía no confirma. Una petición que
+    // decidiera con lo que leyó antes (sin publicar) estamparía su propia hora al
+    // desbloquearse y pisaría la del primero.
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        `UPDATE app.products SET published_at = '2025-06-15T10:00:00Z' WHERE id = $1`,
+        [product.id],
+      );
+      pending = mutate("catalog.product.publish", { id: product.id });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+      const response = await pending;
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().result.data.publishedAt).toBe("2025-06-15T10:00:00.000Z");
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    expect(await auditActions(product.id)).toEqual([]);
+  });
+
+  it("RF-CAT-09 · si otro pedido despublica el producto mientras éste espera, no deja otra entrada en la bitácora", async () => {
+    const product = await createAccessory("c08g-despublicacion-simultanea");
+    await testDb.superuserClient.query(
+      `UPDATE app.products SET published_at = '2025-06-15T10:00:00Z' WHERE id = $1`,
+      [product.id],
+    );
+
+    // Otra transacción lo despublica y todavía no confirma. La petición leyó el producto
+    // publicado, pero al desbloquearse ya no hay nada que despublicar.
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        `UPDATE app.products SET published_at = NULL WHERE id = $1`,
+        [product.id],
+      );
+      pending = mutate("catalog.product.unpublish", { id: product.id });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+
+      expect((await pending).statusCode).toBe(200);
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    expect(await auditActions(product.id)).toEqual([]);
+  });
+
+  it("RF-CAT-09 · si otro pedido ya mostró la variante mientras éste espera, no deja otra entrada en la bitácora", async () => {
+    const product = await createAccessory("c08g-visibilidad-simultanea");
+    const variant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08G-SIMULTANEA",
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "100000",
+    });
+
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        `UPDATE app.product_variants SET online_visible = true WHERE id = $1`,
+        [variant.id],
+      );
+      pending = mutate("catalog.variant.setVisibility", { id: variant.id, onlineVisible: true });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+
+      expect((await pending).statusCode).toBe(200);
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    expect(await auditActions(variant.id)).toEqual([]);
+  });
+
+  it("RF-CAT-09 · publicar un producto ya publicado conserva la fecha original y no deja otra entrada en la bitácora", async () => {
+    const product = await createAccessory("c08g-ya-publicado");
+    await testDb.superuserClient.query(
+      `UPDATE app.products SET published_at = '2025-06-15T10:00:00Z' WHERE id = $1`,
+      [product.id],
+    );
+
+    const again = await mutateOk<{ publishedAt: string | null }>("catalog.product.publish", {
+      id: product.id,
+    });
+
+    expect(again.publishedAt).toBe("2025-06-15T10:00:00.000Z");
+    expect(await auditActions(product.id)).toEqual([]);
+  });
+
+  it("RF-CAT-09 · publicar deja en la bitácora quién, qué y el antes y el después", async () => {
+    const product = await createAccessory("c08g-bitacora");
+
+    await mutateOk("catalog.product.publish", { id: product.id });
+
+    const rows = await testDb.superuserClient.query(
+      `SELECT action, entity, actor_id, before, after FROM app.audit_log WHERE entity_id = $1`,
+      [product.id],
+    );
+    expect(rows.rows).toEqual([
+      {
+        action: "catalog.product.publish",
+        entity: "products",
+        actor_id: STAFF_OWNER_ID,
+        before: { publishedAt: null },
+        after: { publishedAt: PUBLISH_CLOCK_ISO },
+      },
+    ]);
+  });
+
+  it("caso borde 17 · un producto sin categoría primaria no se publica", async () => {
+    const product = await createAccessory("c08g-sin-primaria");
+    await testDb.superuserClient.query(`DELETE FROM app.product_categories WHERE product_id = $1`, [
+      product.id,
+    ]);
+
+    const response = await mutate("catalog.product.publish", { id: product.id });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_PRODUCT_WITHOUT_PRIMARY_CATEGORY");
+    const fetched = await call<{ publishedAt: string | null }>("catalog.product.byId", {
+      id: product.id,
+    });
+    expect(fetched.publishedAt).toBeNull();
+    expect(await auditActions(product.id)).toEqual([]);
+  });
+
+  it("caso borde 17 · un producto con categorías pero ninguna primaria tampoco se publica", async () => {
+    const product = await createAccessory("c08g-ninguna-primaria");
+    await testDb.superuserClient.query(
+      `UPDATE app.product_categories SET is_primary = false WHERE product_id = $1`,
+      [product.id],
+    );
+
+    const response = await mutate("catalog.product.publish", { id: product.id });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_PRODUCT_WITHOUT_PRIMARY_CATEGORY");
+  });
+
+  it("RF-CAT-09 · un producto o una variante inexistente o de otro tenant da exactamente la misma respuesta, al publicar, despublicar y mostrar", async () => {
+    await seedForeignCatalog();
+
+    const responses = [
+      await mutate("catalog.product.publish", { id: FOREIGN_PRODUCT_ID }),
+      await mutate("catalog.product.publish", { id: UNKNOWN_ID }),
+      await mutate("catalog.product.unpublish", { id: FOREIGN_PRODUCT_ID }),
+      await mutate("catalog.product.unpublish", { id: UNKNOWN_ID }),
+      await mutate("catalog.variant.setVisibility", {
+        id: FOREIGN_VARIANT_ID,
+        onlineVisible: true,
+      }),
+      await mutate("catalog.variant.setVisibility", { id: UNKNOWN_ID, onlineVisible: true }),
+    ];
+
+    expect(responses.map((response) => response.statusCode)).toEqual([
+      404, 404, 404, 404, 404, 404,
+    ]);
+    expect(responses.map((response) => response.json().error.data.appCode)).toEqual(
+      Array(6).fill("NOT_FOUND"),
+    );
+    expect(responses.map((response) => response.json().error.message)).toEqual(
+      Array(6).fill("No encontrado."),
+    );
+    expect(responses.map((response) => response.json().error.data.details)).toEqual(
+      Array(6).fill(undefined),
+    );
+  });
+
+  it("RF-CAT-09 · quien tiene catalog.product:write sin publish no puede publicar, despublicar ni mostrar una variante", async () => {
+    const product = await createAccessory("c08g-sin-permiso");
+    const variant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08G-SIN-PERMISO",
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "100000",
+    });
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const publish = await mutateAs(writerCookie, "catalog.product.publish", { id: product.id });
+    const unpublish = await mutateAs(writerCookie, "catalog.product.unpublish", {
+      id: product.id,
+    });
+    const show = await mutateAs(writerCookie, "catalog.variant.setVisibility", {
+      id: variant.id,
+      onlineVisible: true,
+    });
+
+    expect(publish.statusCode).toBe(403);
+    expect(unpublish.statusCode).toBe(403);
+    expect(show.statusCode).toBe(403);
+    const fetched = await call<{ publishedAt: string | null }>("catalog.product.byId", {
+      id: product.id,
+    });
+    expect(fetched.publishedAt).toBeNull();
+    const variants = await call<{ onlineVisible: boolean }[]>("catalog.variant.list", {
+      productId: product.id,
+    });
+    expect(variants.map((item) => item.onlineVisible)).toEqual([false]);
+  });
+
+  it("RF-CAT-09 · editar con catalog.product:write no puede colar published_at, status ni online_visible", async () => {
+    const product = await createAccessory("c08g-no-cuela");
+    const variant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08G-NO-CUELA",
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "100000",
+    });
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const productUpdate = await mutateAs(writerCookie, "catalog.product.update", {
+      id: product.id,
+      publishedAt: PUBLISH_CLOCK_ISO,
+    });
+    const statusUpdate = await mutateAs(writerCookie, "catalog.product.update", {
+      id: product.id,
+      status: "active",
+    });
+    const variantUpdate = await mutateAs(writerCookie, "catalog.variant.update", {
+      id: variant.id,
+      onlineVisible: true,
+    });
+
+    expect(productUpdate.statusCode).toBe(400);
+    expect(statusUpdate.statusCode).toBe(400);
+    expect(variantUpdate.statusCode).toBe(400);
+  });
+
+  it("RF-CAT-09 · mostrar una variante vendible la deja visible en la tienda; ocultarla la saca, y repetirlo no cambia nada", async () => {
+    const product = await createAccessory("c08g-variante-visible");
+    const variant = await mutateOk<{ id: string; sku: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08G-VISIBLE",
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "100000",
+    });
+    await activate(product.id);
+    await mutateOk("catalog.product.publish", { id: product.id });
+    const beforeShow = await publicVariantSkus();
+
+    const shown = await mutateOk<{ onlineVisible: boolean }>("catalog.variant.setVisibility", {
+      id: variant.id,
+      onlineVisible: true,
+    });
+    const shownAgain = await mutateOk<{ onlineVisible: boolean }>("catalog.variant.setVisibility", {
+      id: variant.id,
+      onlineVisible: true,
+    });
+    const afterShow = await publicVariantSkus();
+    const hidden = await mutateOk<{ onlineVisible: boolean }>("catalog.variant.setVisibility", {
+      id: variant.id,
+      onlineVisible: false,
+    });
+    const afterHide = await publicVariantSkus();
+
+    expect(shown.onlineVisible).toBe(true);
+    expect(shownAgain.onlineVisible).toBe(true);
+    expect(hidden.onlineVisible).toBe(false);
+    expect(beforeShow).not.toContain("C08G-VISIBLE");
+    expect(afterShow).toContain("C08G-VISIBLE");
+    expect(afterHide).not.toContain("C08G-VISIBLE");
+    expect(await auditActions(variant.id)).toEqual([
+      "catalog.variant.setVisibility",
+      "catalog.variant.setVisibility",
+    ]);
+  });
+
+  it("RN-CAT-02 · una variante de granel, insumo o tester no se puede mostrar, ni con el permiso de publicar: 409 en español, no un error interno", async () => {
+    const product = await createAccessory("c08g-no-vendibles");
+    const make = (sku: string, variantType: string, uom: string, sizeMl: number | null) =>
+      mutateOk<{ id: string }>("catalog.variant.create", {
+        productId: product.id,
+        sku,
+        variantType,
+        uom,
+        sizeMl,
+        pricePyg: "0",
+      });
+    const bulk = await make("C08G-GRANEL", "bulk", "ml", null);
+    const supply = await make("C08G-INSUMO", "supply", "unit", null);
+    const tester = await make("C08G-TESTER", "tester", "unit", 100);
+
+    const responses = [
+      await mutate("catalog.variant.setVisibility", { id: bulk.id, onlineVisible: true }),
+      await mutate("catalog.variant.setVisibility", { id: supply.id, onlineVisible: true }),
+      await mutate("catalog.variant.setVisibility", { id: tester.id, onlineVisible: true }),
+    ];
+
+    expect(responses.map((response) => response.statusCode)).toEqual([409, 409, 409]);
+    expect(responses.map((response) => response.json().error.data.appCode)).toEqual([
+      "CONFLICT_VARIANT_NOT_PUBLISHABLE",
+      "CONFLICT_VARIANT_NOT_PUBLISHABLE",
+      "CONFLICT_VARIANT_NOT_PUBLISHABLE",
+    ]);
+    expect(responses[0]?.json().error.message).toBe(
+      "Solo las variantes sellado, decant y unidad se pueden mostrar en la tienda.",
+    );
+    const variants = await call<{ onlineVisible: boolean }[]>("catalog.variant.list", {
+      productId: product.id,
+    });
+    expect(variants.map((item) => item.onlineVisible)).toEqual([false, false, false]);
+  });
+
+  it("RF-CAT-09 · una variante inexistente o de otro tenant da 404 al mostrarla", async () => {
+    await seedForeignCatalog();
+
+    const foreign = await mutate("catalog.variant.setVisibility", {
+      id: FOREIGN_VARIANT_ID,
+      onlineVisible: true,
+    });
+    const unknown = await mutate("catalog.variant.setVisibility", {
+      id: UNKNOWN_ID,
+      onlineVisible: true,
+    });
+
+    expect(foreign.statusCode).toBe(404);
+    expect(unknown.statusCode).toBe(404);
+  });
+
+  // -------------------------------------------------------------------
+  // WP-C08e · RN-CAT-04. `catalog.product.activate` pasa un borrador a activo.
+  // Con `catalog.product:write` si el producto no está publicado; si ya tiene
+  // `published_at`, hace falta además `catalog.product:publish`, porque
+  // activarlo lo muestra en la tienda. `status` no viaja por `update`.
+  // -------------------------------------------------------------------
+  type ActivatedProduct = { status: string; publishedAt: string | null };
+
+  it("RN-CAT-04 · activar un borrador lo pasa a activo, deja la entrada en la bitácora y no lo publica", async () => {
+    const product = await createAccessory("c08e-activa");
+
+    const activated = await mutateOk<ActivatedProduct>("catalog.product.activate", {
+      id: product.id,
+    });
+
+    expect(activated).toMatchObject({ status: "active", publishedAt: null });
+    expect(await auditActions(product.id)).toEqual(["catalog.product.activate"]);
+    expect(await publicProductSlugs()).not.toContain("c08e-activa");
+  });
+
+  it("RN-CAT-04 · quien tiene write sin publish puede activar un producto que no está publicado", async () => {
+    const product = await createAccessory("c08e-activa-escritor");
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const response = await mutateAs(writerCookie, "catalog.product.activate", { id: product.id });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.data.status).toBe("active");
+  });
+
+  it("RN-CAT-04 · quien tiene write sin publish no puede activar un producto que ya tiene published_at; con publish sí, y recién ahí la tienda lo ve", async () => {
+    const product = await createAccessory("c08e-ya-publicado");
+    await mutateOk("catalog.product.publish", { id: product.id });
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const denied = await mutateAs(writerCookie, "catalog.product.activate", { id: product.id });
+    const stillDraft = await call<ActivatedProduct>("catalog.product.byId", { id: product.id });
+    const visibleBefore = await publicProductSlugs();
+    const allowed = await mutateOk<ActivatedProduct>("catalog.product.activate", {
+      id: product.id,
+    });
+    const visibleAfter = await publicProductSlugs();
+
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json().error.data.appCode).toBe("FORBIDDEN_INSUFFICIENT_PERMISSION");
+    expect(stillDraft.status).toBe("draft");
+    expect(visibleBefore).not.toContain("c08e-ya-publicado");
+    expect(allowed.status).toBe("active");
+    expect(visibleAfter).toContain("c08e-ya-publicado");
+  });
+
+  it("RN-CAT-04 · quien solo puede leer el catálogo no puede activar: 403 y el producto sigue en borrador", async () => {
+    const product = await createAccessory("c08e-solo-lectura");
+    const readerCookie = await loginPastMfa(STAFF_READER_EMAIL);
+
+    const response = await mutateAs(readerCookie, "catalog.product.activate", { id: product.id });
+
+    expect(response.statusCode).toBe(403);
+    const fetched = await call<ActivatedProduct>("catalog.product.byId", { id: product.id });
+    expect(fetched.status).toBe("draft");
+  });
+
+  it("RN-CAT-04 · activar un producto que ya está activo no hace nada ni deja otra entrada en la bitácora", async () => {
+    const product = await createAccessory("c08e-ya-activo");
+    await mutateOk("catalog.product.activate", { id: product.id });
+
+    const again = await mutateOk<ActivatedProduct>("catalog.product.activate", { id: product.id });
+
+    expect(again.status).toBe("active");
+    expect(await auditActions(product.id)).toEqual(["catalog.product.activate"]);
+  });
+
+  it("RN-CAT-04 · un producto archivado no se activa: 409 y sigue archivado", async () => {
+    const product = await createAccessory("c08e-archivado");
+    await mutateOk("catalog.product.archive", { id: product.id });
+
+    const response = await mutate("catalog.product.activate", { id: product.id });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_PRODUCT_ARCHIVED");
+    const fetched = await call<ActivatedProduct>("catalog.product.byId", { id: product.id });
+    expect(fetched.status).toBe("archived");
+  });
+
+  it("RN-CAT-04 · un producto inexistente o de otro tenant da exactamente la misma respuesta", async () => {
+    await seedForeignCatalog();
+
+    const foreign = await mutate("catalog.product.activate", { id: FOREIGN_PRODUCT_ID });
+    const unknown = await mutate("catalog.product.activate", { id: UNKNOWN_ID });
+
+    expect(foreign.statusCode).toBe(404);
+    expect(unknown.statusCode).toBe(404);
+    expect(foreign.json().error.data.appCode).toBe("NOT_FOUND");
+    expect(unknown.json().error.data.appCode).toBe("NOT_FOUND");
+    expect(foreign.json().error.message).toBe("No encontrado.");
+    expect(unknown.json().error.message).toBe("No encontrado.");
+  });
+
+  it("RN-CAT-04 · si otro pedido publica el producto mientras quien no puede publicar lo activa, no se activa", async () => {
+    const product = await createAccessory("c08e-publicado-en-vuelo");
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    // Otra transacción publica el producto y todavía no confirma. La petición se queda
+    // esperando la fila; al desbloquearse el producto ya está publicado, y activarlo lo
+    // mostraría en la tienda sin que esa persona tenga permiso para eso.
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutateAs> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        `UPDATE app.products SET published_at = '2025-06-15T10:00:00Z' WHERE id = $1`,
+        [product.id],
+      );
+      pending = mutateAs(writerCookie, "catalog.product.activate", { id: product.id });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+      const response = await pending;
+
+      expect(response.statusCode).toBe(403);
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    const fetched = await call<ActivatedProduct>("catalog.product.byId", { id: product.id });
+    expect(fetched.status).toBe("draft");
+    expect(await auditActions(product.id)).toEqual([]);
+  });
+
+  it("RN-CAT-04 · si otro pedido archiva el producto mientras éste espera, se rechaza como archivado", async () => {
+    const product = await createAccessory("c08e-archivado-en-vuelo");
+
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        `UPDATE app.products SET status = 'archived' WHERE id = $1`,
+        [product.id],
+      );
+      pending = mutate("catalog.product.activate", { id: product.id });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+      const response = await pending;
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.data.appCode).toBe("CONFLICT_PRODUCT_ARCHIVED");
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    expect(await auditActions(product.id)).toEqual([]);
   });
 });

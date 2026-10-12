@@ -32,6 +32,10 @@ Marca transversal de marketing: "Best Seller", "Edición Limitada", "San Valent�
 
 La entidad conceptual: "Layton de Parfums de Marly". **No se vende un producto**, se vende una variante.
 
+### Publicado (`products.published_at`)
+
+Que el producto esté listo para mostrarse en la tienda. **No es lo mismo que activo:** `status` (`draft`, `active`, `archived`) es el estado interno de la ficha, `published_at` es la decisión de mostrarla. La tienda ve un producto cuando está activo **y** publicado, y de él solo las variantes marcadas como visibles (`online_visible`). Publicar, despublicar y mostrar u ocultar una variante exigen `catalog.product:publish`, no el permiso de editar. RN-CAT-03. Pasar un borrador a activo es otro procedimiento (`catalog.product.activate`, RN-CAT-04): exige `publish` solo si el producto ya está publicado.
+
 ### Variante (`product_variants`)
 
 La unidad vendible y la unidad de inventario. Un mismo perfume genera varias:

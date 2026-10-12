@@ -114,6 +114,54 @@ export async function updateProductRow(
 }
 
 /**
+ * WP-C08g. `published_at` solo se escribe acá y en `unpublishProductRow`:
+ * `updateProductRow` no lo recibe, para que `catalog.product.update` (que exige
+ * `write`) no pueda publicar. La escritura es condicional (`published_at IS NULL`)
+ * y dice si cambió algo: con dos pedidos simultáneos, el segundo espera el bloqueo de
+ * la fila, vuelve a evaluar la condición, no encuentra nada que cambiar y no pisa la
+ * fecha del primero ni deja otra entrada en la bitácora.
+ */
+export async function publishProductRow(
+  tx: TenantTx,
+  id: string,
+  publishedAt: Date,
+): Promise<boolean> {
+  const { count } = await tx.products.updateMany({
+    where: { id, published_at: null },
+    data: { published_at: publishedAt },
+  });
+  return count === 1;
+}
+
+/**
+ * WP-C08e. `status` pasa a `active` solo desde `draft`, y dice si cambió algo. Con
+ * `onlyIfUnpublished` (quien activa no puede publicar) la condición incluye
+ * `published_at IS NULL`: si otro pedido publica el producto mientras esta escritura
+ * espera el bloqueo de la fila, no se activa un producto que esa persona no tiene
+ * permiso para mostrar en la tienda.
+ */
+export async function activateProductRow(
+  tx: TenantTx,
+  id: string,
+  onlyIfUnpublished: boolean,
+): Promise<boolean> {
+  const { count } = await tx.products.updateMany({
+    where: { id, status: "draft", ...(onlyIfUnpublished ? { published_at: null } : {}) },
+    data: { status: "active" },
+  });
+  return count === 1;
+}
+
+/** Contraparte de `publishProductRow`: solo cambia un producto que está publicado. */
+export async function unpublishProductRow(tx: TenantTx, id: string): Promise<boolean> {
+  const { count } = await tx.products.updateMany({
+    where: { id, published_at: { not: null } },
+    data: { published_at: null },
+  });
+  return count === 1;
+}
+
+/**
  * `product_categories`/`product_tags` tienen su propio `tenant_id` desde
  * WP-B08, pero eso protege la FILA (que sea legible/escribible solo bajo
  * el tenant que la creó) — no evita por sí solo insertar una fila propia
@@ -296,6 +344,63 @@ export async function updateWatchDetails(
   });
 }
 
+/**
+ * Lee `requires_serial` de un reloj con `FOR SHARE` (WP-C08h). Las variantes
+ * de un reloj heredan `is_serialized` de él (RN-SER-02) y cambiar el producto
+ * lo propaga a las variantes: crear o actualizar una variante lee el valor y
+ * después escribe, y sin bloqueo lee el viejo mientras el cambio del producto
+ * está en curso, y deja una variante que contradice al reloj que ya cambió. Con
+ * `FOR SHARE` la lectura espera a que termine el cambio, o el cambio espera a
+ * que termine la variante y entonces la ve al propagar. Tiene que tomarse
+ * ANTES de decidir, en la misma transacción. `null` si el producto no tiene
+ * detalle de reloj. Prisma no expone `FOR SHARE`: va por `$queryRaw`.
+ */
+export async function readWatchRequiresSerialShared(
+  tx: TenantTx,
+  productId: string,
+): Promise<boolean | null> {
+  const rows = await tx.$queryRaw<{ requires_serial: boolean }[]>`
+    SELECT w.requires_serial FROM app.watch_details w
+     WHERE w.product_id = ${productId}::uuid FOR SHARE OF w`;
+  return rows[0]?.requires_serial ?? null;
+}
+
+/**
+ * Lo mismo que `readWatchRequiresSerialShared`, para quien lo va a cambiar:
+ * `FOR NO KEY UPDATE`, que espera a toda variante que esté leyendo el valor y
+ * hace esperar a las que lleguen después. Devuelve el valor VIGENTE, no el que
+ * leyó `findProductRow` antes de bloquear.
+ */
+export async function lockWatchRequiresSerial(
+  tx: TenantTx,
+  productId: string,
+): Promise<boolean | null> {
+  const rows = await tx.$queryRaw<{ requires_serial: boolean }[]>`
+    SELECT w.requires_serial FROM app.watch_details w
+     WHERE w.product_id = ${productId}::uuid FOR NO KEY UPDATE OF w`;
+  return rows[0]?.requires_serial ?? null;
+}
+
+/** Unidades con número de serie registradas contra esas variantes, de todos los estados (RN-SER-02). */
+export async function countSerializedUnitsOfVariants(
+  tx: TenantTx,
+  variantIds: readonly string[],
+): Promise<number> {
+  return tx.serialized_units.count({ where: { variant_id: { in: [...variantIds] } } });
+}
+
+/** Fija `is_serialized` en esas variantes con una sola sentencia (WP-C08h). */
+export async function setVariantsSerialized(
+  tx: TenantTx,
+  variantIds: readonly string[],
+  isSerialized: boolean,
+): Promise<void> {
+  await tx.product_variants.updateMany({
+    where: { id: { in: [...variantIds] } },
+    data: { is_serialized: isSerialized },
+  });
+}
+
 export interface AccessoryDetailsData {
   readonly material: string | null;
   readonly color: string | null;
@@ -411,6 +516,24 @@ export interface UpdateVariantPatch {
   readonly minStockAlert?: number | null;
   readonly weightG?: number | null;
   readonly position?: number;
+}
+
+/**
+ * WP-C08g. `online_visible` solo se escribe acá, por la misma razón que
+ * `published_at`. Va por SQL crudo a propósito: el CHECK de RN-CAT-02 (solo
+ * `sealed`, `decant` y `unit` se publican) llega con el cliente tipado como un
+ * error sin código que el mapeo convierte en 500, y con `$executeRaw` llega como
+ * SQLSTATE 23514, que el servicio sí puede reconocer (`hasSqlState`).
+ */
+export async function setVariantOnlineVisible(
+  tx: TenantTx,
+  id: string,
+  onlineVisible: boolean,
+): Promise<boolean> {
+  const changed = await tx.$executeRaw`
+    UPDATE app.product_variants SET online_visible = ${onlineVisible}
+    WHERE id = ${id}::uuid AND online_visible <> ${onlineVisible}`;
+  return changed === 1;
 }
 
 export async function updateVariantRow(

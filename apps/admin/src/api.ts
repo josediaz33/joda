@@ -18,6 +18,9 @@ import {
   type CreateVariantInput,
   type CreateCategoryInput,
   type UpdateCategoryInput,
+  type ActivateProductInput,
+  type SetProductPublicationInput,
+  type SetVariantVisibilityInput,
   type UpdateVariantInput,
   type StaffLoginInput,
 } from "@joda/contracts";
@@ -51,6 +54,14 @@ export const api = {
     adminCategorySchema.parse(await trpc.mutation("catalog.category.create", input)),
   updateCategory: async (input: UpdateCategoryInput) =>
     adminCategorySchema.parse(await trpc.mutation("catalog.category.update", input)),
+  activateProduct: async (input: ActivateProductInput) =>
+    adminProductSchema.parse(await trpc.mutation("catalog.product.activate", input)),
+  publishProduct: async (input: SetProductPublicationInput) =>
+    adminProductSchema.parse(await trpc.mutation("catalog.product.publish", input)),
+  unpublishProduct: async (input: SetProductPublicationInput) =>
+    adminProductSchema.parse(await trpc.mutation("catalog.product.unpublish", input)),
+  setVariantVisibility: async (input: SetVariantVisibilityInput) =>
+    adminVariantSchema.parse(await trpc.mutation("catalog.variant.setVisibility", input)),
   createProduct: async (input: CreateProductInput) =>
     adminProductSchema.parse(await trpc.mutation("catalog.product.create", input)),
   updateProduct: async (input: UpdateProductInput) =>
