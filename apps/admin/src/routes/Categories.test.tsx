@@ -60,6 +60,8 @@ const arabes = category({
 const relojes = category({ id: relojesId, name: "Relojes", path: "relojes", position: 1 });
 
 const WRITER = ["catalog.product:read", "catalog.product:write"] as const;
+// RN-CAT-05 (WP-C08k): mostrar u ocultar una categoría es publicar.
+const PUBLISHER = [...WRITER, "catalog.product:publish"] as const;
 
 function renderCategories(permissions: readonly string[], items: AdminCategory[]) {
   vi.mocked(api.current).mockResolvedValue({
@@ -114,7 +116,7 @@ describe("RF-CAT-03 · la pantalla muestra el árbol", () => {
   });
 
   it("marca como oculta a la categoría que no es visible", async () => {
-    renderCategories(WRITER, [{ ...relojes, isVisible: false }]);
+    renderCategories(PUBLISHER, [{ ...relojes, isVisible: false }]);
 
     const item = (await screen.findAllByRole("listitem"))[0]!;
 
@@ -130,6 +132,29 @@ describe("RF-CAT-03 · la pantalla muestra el árbol", () => {
     expect(screen.queryByRole("button", { name: "Nueva categoría raíz" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Mover Nicho" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Renombrar Nicho" })).toBeNull();
+  });
+});
+
+describe("RN-CAT-05 · mostrar u ocultar una categoría es de quien publica", () => {
+  it("con write sin publish se puede reordenar, renombrar y mover, pero no mostrar ni ocultar", async () => {
+    renderCategories(WRITER, [perfumeria, { ...relojes, isVisible: false }]);
+
+    await screen.findByText("Relojes");
+
+    expect(screen.getByRole("button", { name: "Subir Relojes" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Renombrar Relojes" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Mover Relojes" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Mostrar Relojes" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Ocultar Perfumería" })).toBeNull();
+    // Saber que está oculta no es una acción: la marca se sigue viendo.
+    expect(screen.getByText("Oculta")).toBeTruthy();
+  });
+
+  it("con publish además de write se ofrece mostrar u ocultar según el estado de cada categoría", async () => {
+    renderCategories(PUBLISHER, [perfumeria, { ...relojes, isVisible: false }]);
+
+    expect(await screen.findByRole("button", { name: "Ocultar Perfumería" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Mostrar Relojes" })).toBeTruthy();
   });
 });
 
@@ -180,7 +205,7 @@ describe("RF-CAT-03 · orden y visibilidad", () => {
 
   it("si la API rechaza el cambio muestra el error, no avisa éxito y relee el árbol", async () => {
     const user = userEvent.setup();
-    renderCategories(WRITER, [relojes]);
+    renderCategories(PUBLISHER, [relojes]);
     vi.mocked(api.updateCategory).mockRejectedValue(new Error("No tenés permiso."));
 
     await user.click(await screen.findByRole("button", { name: "Ocultar Relojes" }));
@@ -192,7 +217,7 @@ describe("RF-CAT-03 · orden y visibilidad", () => {
 
   it("ocultar manda solo la visibilidad", async () => {
     const user = userEvent.setup();
-    renderCategories(WRITER, [relojes]);
+    renderCategories(PUBLISHER, [relojes]);
 
     await user.click(await screen.findByRole("button", { name: "Ocultar Relojes" }));
 

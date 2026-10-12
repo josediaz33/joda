@@ -18,8 +18,9 @@ type OpenDialog =
   | { kind: "move"; category: AdminCategory };
 
 // RF-CAT-03. El árbol de categorías comerciales (ADR-006): navegación,
-// breadcrumbs y SEO. Escribir exige catalog.product:write; la API vuelve a
-// resolver el permiso, acá `Can` solo decide qué se muestra.
+// breadcrumbs y SEO. Escribir exige catalog.product:write, y mostrar u ocultar una
+// categoría además catalog.product:publish (RN-CAT-05); la API vuelve a resolver el
+// permiso, acá `Can` solo decide qué se muestra.
 export default function Categories() {
   const queryClient = useQueryClient();
   const categories = useQuery({
@@ -185,25 +186,28 @@ export default function Categories() {
                   >
                     Bajar
                   </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    disabled={busy}
-                    id={`category-${category.id}-visibility`}
-                    aria-label={`${category.isVisible ? "Ocultar" : "Mostrar"} ${category.name}`}
-                    onClick={() =>
-                      void run(
-                        [{ id: category.id, isVisible: !category.isVisible }],
-                        {
-                          done: `${category.name} quedó ${category.isVisible ? "oculta" : "visible"}.`,
-                          failure: "No se pudo cambiar la visibilidad.",
-                        },
-                        [`category-${category.id}-visibility`],
-                      )
-                    }
-                  >
-                    {category.isVisible ? "Ocultar" : "Mostrar"}
-                  </Button>
+                  {/* RN-CAT-05: mostrar u ocultar una categoría es publicar. */}
+                  <Can perform="catalog.product:publish">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      id={`category-${category.id}-visibility`}
+                      aria-label={`${category.isVisible ? "Ocultar" : "Mostrar"} ${category.name}`}
+                      onClick={() =>
+                        void run(
+                          [{ id: category.id, isVisible: !category.isVisible }],
+                          {
+                            done: `${category.name} quedó ${category.isVisible ? "oculta" : "visible"}.`,
+                            failure: "No se pudo cambiar la visibilidad.",
+                          },
+                          [`category-${category.id}-visibility`],
+                        )
+                      }
+                    >
+                      {category.isVisible ? "Ocultar" : "Mostrar"}
+                    </Button>
+                  </Can>
                   <Button
                     variant="outline"
                     size="sm"

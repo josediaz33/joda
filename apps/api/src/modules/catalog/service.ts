@@ -995,9 +995,28 @@ async function moveCategory(
   await repo.moveCategorySubtree(tx, category.id, parentId, path);
 }
 
+const CATEGORY_VISIBILITY_FORBIDDEN_ERROR = appError(
+  "FORBIDDEN_INSUFFICIENT_PERMISSION",
+  403,
+  "Mostrar u ocultar una categoría cambia lo que ve la tienda y hace falta el permiso de publicar.",
+);
+
+/**
+ * WP-C08k, RN-CAT-05. Mostrar u ocultar una categoría (cambiar `isVisible`) es publicar:
+ * exige `catalog.product:publish`, además del `write` que declara el procedimiento.
+ * Renombrar, mover y reordenar siguen siendo de `write`. Mandar `isVisible` con el valor
+ * que la categoría ya tiene no cambia nada y no pide `publish`.
+ *
+ * Quien no puede publicar nunca escribe `is_visible`: si lo mandó igual, se descarta del
+ * UPDATE en vez de reescribirlo, así una visibilidad que otro pedido cambió entre la lectura
+ * y la escritura no la pisa alguien sin permiso. El rechazo ocurre antes de mover o escribir
+ * nada, de modo que un pedido que mezcla un cambio permitido con otro que no lo es no cambia
+ * ninguno.
+ */
 export async function updateCategory(
   db: PrismaClient,
   ctx: TenantTxContext,
+  access: { readonly canPublish: boolean },
   input: UpdateCategoryInput,
 ): Promise<AdminCategory> {
   return withTenantTx(db, ctx, async (tx) => {
@@ -1008,6 +1027,12 @@ export async function updateCategory(
     const existing = await repo.findCategoryRow(tx, input.id);
     if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
 
+    const changesVisibility =
+      input.isVisible !== undefined && input.isVisible !== existing.is_visible;
+    if (changesVisibility && !access.canPublish) {
+      throw toTRPCError(CATEGORY_VISIBILITY_FORBIDDEN_ERROR);
+    }
+
     if (input.parentId !== undefined && input.parentId !== existing.parent_id) {
       await moveCategory(tx, existing, input.parentId);
     }
@@ -1015,7 +1040,7 @@ export async function updateCategory(
     await repo.updateCategoryRow(tx, input.id, {
       name: input.name,
       position: input.position,
-      isVisible: input.isVisible,
+      isVisible: access.canPublish ? input.isVisible : undefined,
       seo: input.seo as Prisma.InputJsonValue | undefined,
     });
 

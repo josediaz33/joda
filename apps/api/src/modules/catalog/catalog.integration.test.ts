@@ -2387,6 +2387,146 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(visibleAfter).toContain("c08e-ya-publicado");
   });
 
+  // WP-C08k, RN-CAT-05. Mostrar u ocultar una categoría es publicar: `isVisible` exige
+  // `catalog.product:publish`; renombrar, mover y reordenar siguen en `write`.
+  type CategoryState = { id: string; name: string; path: string; isVisible: boolean };
+  async function categoryState(id: string): Promise<CategoryState> {
+    const result = await testDb.superuserClient.query<{
+      id: string;
+      name: string;
+      path: string;
+      is_visible: boolean;
+    }>(`SELECT id, name, path, is_visible FROM app.categories WHERE id = $1`, [id]);
+    const row = result.rows[0]!;
+    return { id: row.id, name: row.name, path: row.path, isVisible: row.is_visible };
+  }
+
+  it("RN-CAT-05 · quien tiene write sin publish renombra, mueve y reordena una categoría; con el mismo isVisible que ya tiene no pide publish", async () => {
+    const parent = await createCategory("c08k-padre");
+    const other = await createCategory("c08k-otro-padre");
+    const child = await createCategory("c08k-hija", parent.id);
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const renamed = await mutateAs(writerCookie, "catalog.category.update", {
+      id: parent.id,
+      name: "Padre renombrado",
+    });
+    const moved = await mutateAs(writerCookie, "catalog.category.update", {
+      id: child.id,
+      parentId: other.id,
+    });
+    const reordered = await mutateAs(writerCookie, "catalog.category.update", {
+      id: other.id,
+      position: 7,
+    });
+    const sameVisibility = await mutateAs(writerCookie, "catalog.category.update", {
+      id: parent.id,
+      name: "Padre, misma visibilidad",
+      isVisible: true,
+    });
+
+    expect([renamed, moved, reordered, sameVisibility].map((r) => r.statusCode)).toEqual([
+      200, 200, 200, 200,
+    ]);
+    expect(await categoryState(parent.id)).toMatchObject({
+      name: "Padre, misma visibilidad",
+      isVisible: true,
+    });
+    expect((await categoryState(child.id)).path).toBe("c08k-otro-padre/c08k-hija");
+  });
+
+  it("RN-CAT-05 · quien tiene write sin publish no puede ocultar ni mostrar una categoría: 403 y no cambia nada de lo que venía en el pedido", async () => {
+    const parent = await createCategory("c08k-bloq-padre");
+    const other = await createCategory("c08k-bloq-otro");
+    const child = await createCategory("c08k-bloq-hija", parent.id);
+    const hidden = await createCategory("c08k-bloq-oculta");
+    await mutateOk("catalog.category.update", { id: hidden.id, isVisible: false });
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const hide = await mutateAs(writerCookie, "catalog.category.update", {
+      id: parent.id,
+      isVisible: false,
+    });
+    const show = await mutateAs(writerCookie, "catalog.category.update", {
+      id: hidden.id,
+      isVisible: true,
+    });
+    // Un pedido que mezcla lo permitido con lo que no lo es no cambia ninguna de las dos cosas.
+    const renameAndHide = await mutateAs(writerCookie, "catalog.category.update", {
+      id: parent.id,
+      name: "No debería quedar",
+      isVisible: false,
+    });
+    const moveAndHide = await mutateAs(writerCookie, "catalog.category.update", {
+      id: child.id,
+      parentId: other.id,
+      isVisible: false,
+    });
+
+    for (const response of [hide, show, renameAndHide, moveAndHide]) {
+      expect(response.statusCode).toBe(403);
+      expect(response.json().error.data.appCode).toBe("FORBIDDEN_INSUFFICIENT_PERMISSION");
+    }
+    expect(await categoryState(parent.id)).toMatchObject({
+      name: "c08k-bloq-padre",
+      isVisible: true,
+    });
+    expect(await categoryState(hidden.id)).toMatchObject({ isVisible: false });
+    expect(await categoryState(child.id)).toMatchObject({
+      path: "c08k-bloq-padre/c08k-bloq-hija",
+      isVisible: true,
+    });
+  });
+
+  it("RN-CAT-05 · quien tiene publish muestra y oculta una categoría", async () => {
+    const category = await createCategory("c08k-con-publish");
+
+    const hidden = await mutateOk<{ isVisible: boolean }>("catalog.category.update", {
+      id: category.id,
+      isVisible: false,
+    });
+    const shown = await mutateOk<{ isVisible: boolean }>("catalog.category.update", {
+      id: category.id,
+      isVisible: true,
+    });
+
+    expect(hidden.isVisible).toBe(false);
+    expect(shown.isVisible).toBe(true);
+  });
+
+  it(
+    "RN-CAT-05 · si otro pedido oculta la categoría mientras la escritura de quien no puede publicar espera, esa escritura no la vuelve a mostrar",
+    async () => {
+      const category = await createCategory("c08k-carrera");
+      const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+      // Otra transacción oculta la categoría y todavía no confirma. La lectura de quien
+      // escribe todavía ve «visible» (el mismo valor que manda), así que el pedido está
+      // permitido; su UPDATE espera la fila, y al desbloquearse no tiene que reescribir
+      // `is_visible` con el valor viejo.
+      const response = await whileHolding(
+        () =>
+          testDb.superuserClient.query(
+            `UPDATE app.categories SET is_visible = false WHERE id = $1`,
+            [category.id],
+          ),
+        () =>
+          mutateAs(writerCookie, "catalog.category.update", {
+            id: category.id,
+            name: "Renombrada en la carrera",
+            isVisible: true,
+          }),
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(await categoryState(category.id)).toMatchObject({
+        name: "Renombrada en la carrera",
+        isVisible: false,
+      });
+    },
+    RACE_TEST_TIMEOUT_MS,
+  );
+
   it("RN-CAT-04 · quien solo puede leer el catálogo no puede activar: 403 y el producto sigue en borrador", async () => {
     const product = await createAccessory("c08e-solo-lectura");
     const readerCookie = await loginPastMfa(STAFF_READER_EMAIL);
