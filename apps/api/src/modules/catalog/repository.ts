@@ -126,8 +126,9 @@ export async function publishProductRow(
   id: string,
   publishedAt: Date,
 ): Promise<boolean> {
+  // WP-C08n: tampoco un archivado, si otro pedido lo archivó mientras esta escritura esperaba.
   const { count } = await tx.products.updateMany({
-    where: { id, published_at: null },
+    where: { id, published_at: null, status: { not: "archived" } },
     data: { published_at: publishedAt },
   });
   return count === 1;

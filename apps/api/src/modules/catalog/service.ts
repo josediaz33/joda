@@ -522,12 +522,31 @@ const VARIANT_NOT_PUBLISHABLE_ERROR = appError(
   "Solo las variantes sellado, decant y unidad se pueden mostrar en la tienda.",
 );
 
+const PUBLISH_ARCHIVED_ERROR = appError(
+  "CONFLICT_PRODUCT_ARCHIVED",
+  409,
+  "Un producto archivado no se puede publicar.",
+);
+
+const PRODUCT_WITHOUT_SELLABLE_VARIANT_ERROR = appError(
+  "CONFLICT_PRODUCT_WITHOUT_SELLABLE_VARIANT",
+  409,
+  "El producto no tiene ninguna variante visible en la tienda con precio mayor que cero: sin eso no hay nada que comprar.",
+);
+
 /**
- * Publica el producto: `published_at` = ahora. Es independiente del `status`: un
- * borrador publicado no se ve en la tienda hasta que esté activo (las vistas
- * públicas piden las dos cosas), y publicar no lo activa. Sin categoría primaria
- * se rechaza (caso borde 17: el breadcrumb no se puede resolver). Ya publicado,
- * no hace nada: conserva la fecha original y no deja otra entrada en la bitácora.
+ * Publica el producto: `published_at` = ahora. Es independiente del `status` para un
+ * borrador o un activo: un borrador publicado no se ve en la tienda hasta que esté activo
+ * (las vistas públicas piden las dos cosas), y publicar no lo activa.
+ *
+ * WP-C08n, RN-CAT-03. Publicar exige además (decisión de José): que el producto no esté
+ * archivado (409 `CONFLICT_PRODUCT_ARCHIVED`, también si conservó `published_at`, y antes de
+ * la salida por «ya publicado»: un archivado no se republica en silencio) y que tenga al menos
+ * una variante `online_visible` con `price_pyg` mayor que cero (409
+ * `CONFLICT_PRODUCT_WITHOUT_SELLABLE_VARIANT`). La imagen no se exige. Sin categoría primaria
+ * se rechaza (caso borde 17: el breadcrumb no se puede resolver). Es una condición del acto
+ * de publicar, no un invariante (WP-C08r): ya publicado, no hace nada: conserva la fecha original
+ * y no deja otra entrada en la bitácora.
  */
 export async function publishProduct(
   db: PrismaClient,
@@ -539,13 +558,20 @@ export async function publishProduct(
   return withTenantTx(db, ctx, async (tx) => {
     const existing = await repo.findProductRow(tx, { id: input.id });
     if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
+    if (existing.status === "archived") throw toTRPCError(PUBLISH_ARCHIVED_ERROR);
     if (existing.published_at !== null) return toAdminProduct(existing);
     if (!existing.product_categories.some((assignment) => assignment.is_primary)) {
       throw toTRPCError(PRODUCT_WITHOUT_PRIMARY_CATEGORY_ERROR);
     }
+    if (!existing.product_variants.some((v) => v.online_visible && v.price_pyg > 0n)) {
+      throw toTRPCError(PRODUCT_WITHOUT_SELLABLE_VARIANT_ERROR);
+    }
 
     const publishedAt = deps.clock.now();
-    // Si otro pedido la publicó mientras tanto, no hay nada que escribir ni auditar.
+    // La escritura es condicional (sin publicar y no archivado). Si no cambió nada, o
+    // otro pedido la publicó mientras tanto (no hay nada que escribir ni auditar), o lo
+    // archivó mientras esta escritura esperaba la fila (se rechaza como si hubiera
+    // pasado antes: un archivado no queda publicado).
     if (await repo.publishProductRow(tx, input.id, publishedAt)) {
       await recordAuditEntry(tx, {
         tenantId: ctx.tenantId,
@@ -558,6 +584,11 @@ export async function publishProduct(
         after: { publishedAt: publishedAt.toISOString() },
         ...origin,
       });
+    } else {
+      // Sin cambios: o ya estaba publicado, o lo archivaron mientras esperaba. Sin fecha
+      // de publicación solo queda lo segundo.
+      const current = await repo.findProductRow(tx, { id: input.id });
+      if (current && current.published_at === null) throw toTRPCError(PUBLISH_ARCHIVED_ERROR);
     }
 
     const row = await repo.findProductRow(tx, { id: input.id });
