@@ -23,6 +23,9 @@ const STAFF_OWNER_EMAIL = "owner@jodaparfums.com";
 // estándar con esa forma: `manager` los tiene todos), para probar que escribir no alcanza.
 const STAFF_WRITER_ID = "99999999-9999-4999-a999-999999999993";
 const STAFF_WRITER_EMAIL = "escritor@jodaparfums.com";
+// WP-C08e: un usuario que solo puede leer el catálogo (rol estándar `vendedor`).
+const STAFF_READER_ID = "99999999-9999-4999-a999-999999999994";
+const STAFF_READER_EMAIL = "lector@jodaparfums.com";
 const STAFF_PASSWORD = "correcta";
 const MFA_ENCRYPTION_KEY = Buffer.from("1".repeat(64), "hex");
 const PLACEHOLDER_MFA_SECRET = "placeholder-nunca-se-descifra-en-este-test";
@@ -105,6 +108,20 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
        VALUES ($1, $2, 'auth|writer-c08g', $3, 'Test Writer', true, true, $4)`,
       [STAFF_WRITER_ID, TENANT_ID, STAFF_WRITER_EMAIL, PLACEHOLDER_MFA_SECRET],
     );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.staff_users
+         (id, tenant_id, auth_subject, email, full_name, is_active, mfa_enrolled, mfa_secret_encrypted)
+       VALUES ($1, $2, 'auth|reader-c08e', $3, 'Test Reader', true, true, $4)`,
+      [STAFF_READER_ID, TENANT_ID, STAFF_READER_EMAIL, PLACEHOLDER_MFA_SECRET],
+    );
+    const sellerRole = await testDb.superuserClient.query(
+      `SELECT id FROM app.roles WHERE tenant_id = $1 AND code = 'vendedor'`,
+      [TENANT_ID],
+    );
+    await testDb.superuserClient.query(
+      `INSERT INTO app.staff_user_roles (tenant_id, staff_user_id, role_id) VALUES ($1, $2, $3)`,
+      [TENANT_ID, STAFF_READER_ID, sellerRole.rows[0].id],
+    );
     const writerRole = await testDb.superuserClient.query(
       `INSERT INTO app.roles (tenant_id, code, name)
        VALUES ($1, 'test_catalogo_sin_publicar', 'Catálogo sin publicar (test)') RETURNING id`,
@@ -139,6 +156,7 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
         new Map([
           [STAFF_OWNER_EMAIL, { password: STAFF_PASSWORD, authSubject: "auth|owner-c08" }],
           [STAFF_WRITER_EMAIL, { password: STAFF_PASSWORD, authSubject: "auth|writer-c08g" }],
+          [STAFF_READER_EMAIL, { password: STAFF_PASSWORD, authSubject: "auth|reader-c08e" }],
         ]),
       ),
       clock: createManualClock(new Date("2026-01-01T12:00:00.000Z")),
@@ -1753,7 +1771,7 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
   // `online_visible`. Solo con `catalog.product:publish`. La tienda ve un
   // producto cuando está `active` Y publicado, y de él solo las variantes
   // visibles (public.v_catalog_*). Activar un borrador todavía no tiene
-  // procedimiento (WP-C08e): las pruebas lo hacen por SQL.
+  // procedimiento propio desde WP-C08e (`catalog.product.activate`); estas pruebas lo hacen por SQL para no depender de él.
   // -------------------------------------------------------------------
   const PUBLISH_CLOCK_ISO = "2026-01-01T12:00:00.000Z";
 
@@ -2244,7 +2262,7 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
 
   // -------------------------------------------------------------------
   // WP-C08e · RN-CAT-04. `catalog.product.activate` pasa un borrador a activo.
-  // Con `catalog.product:write` si el producto nunca se publicó; si ya tiene
+  // Con `catalog.product:write` si el producto no está publicado; si ya tiene
   // `published_at`, hace falta además `catalog.product:publish`, porque
   // activarlo lo muestra en la tienda. `status` no viaja por `update`.
   // -------------------------------------------------------------------
@@ -2262,7 +2280,7 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(await publicProductSlugs()).not.toContain("c08e-activa");
   });
 
-  it("RN-CAT-04 · quien tiene write sin publish puede activar un producto que nunca se publicó", async () => {
+  it("RN-CAT-04 · quien tiene write sin publish puede activar un producto que no está publicado", async () => {
     const product = await createAccessory("c08e-activa-escritor");
     const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
 
@@ -2291,6 +2309,17 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(visibleBefore).not.toContain("c08e-ya-publicado");
     expect(allowed.status).toBe("active");
     expect(visibleAfter).toContain("c08e-ya-publicado");
+  });
+
+  it("RN-CAT-04 · quien solo puede leer el catálogo no puede activar: 403 y el producto sigue en borrador", async () => {
+    const product = await createAccessory("c08e-solo-lectura");
+    const readerCookie = await loginPastMfa(STAFF_READER_EMAIL);
+
+    const response = await mutateAs(readerCookie, "catalog.product.activate", { id: product.id });
+
+    expect(response.statusCode).toBe(403);
+    const fetched = await call<ActivatedProduct>("catalog.product.byId", { id: product.id });
+    expect(fetched.status).toBe("draft");
   });
 
   it("RN-CAT-04 · activar un producto que ya está activo no hace nada ni deja otra entrada en la bitácora", async () => {
@@ -2333,9 +2362,9 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     const product = await createAccessory("c08e-publicado-en-vuelo");
     const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
 
-    // Otra transacción publica el producto y todavía no confirma. La petición leyó un
-    // producto sin publicar; al desbloquearse ya está publicado, y activarlo lo mostraría
-    // en la tienda sin que esa persona tenga permiso para eso.
+    // Otra transacción publica el producto y todavía no confirma. La petición se queda
+    // esperando la fila; al desbloquearse el producto ya está publicado, y activarlo lo
+    // mostraría en la tienda sin que esa persona tenga permiso para eso.
     await testDb.superuserClient.query("BEGIN");
     let released = false;
     let pending: ReturnType<typeof mutateAs> | undefined;

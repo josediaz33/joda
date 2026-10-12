@@ -210,12 +210,12 @@ La tienda ve un producto cuando está `active` **y** publicado (`published_at` n
 
 `status` (`draft`, `active`, `archived`) no viaja por la edición: `catalog.product.update` lo rechaza. Pasar un borrador a activo tiene su propio procedimiento, `catalog.product.activate`.
 
-- **Permiso.** `catalog.product:write` si el producto nunca se publicó (`published_at` nulo). Si ya tiene `published_at`, además `catalog.product:publish`: la tienda ve lo que está activo y publicado, así que activarlo lo muestra, y mostrar es de quien publica (RN-CAT-03). Sin ese permiso, 403 `FORBIDDEN_INSUFFICIENT_PERMISSION` y el producto sigue en borrador. El admin no ofrece el botón a quien no lo puede usar.
+- **Permiso.** `catalog.product:write` si el producto no está publicado (`published_at` nulo: nunca se publicó, o se despublicó). Si ya tiene `published_at`, además `catalog.product:publish`: la tienda ve lo que está activo y publicado, así que activarlo lo muestra, y mostrar es de quien publica (RN-CAT-03). Sin ese permiso, 403 `FORBIDDEN_INSUFFICIENT_PERMISSION` y el producto sigue en borrador. El admin no ofrece el botón a quien no lo puede usar.
 - **Solo desde `draft`.** Uno ya activo no cambia nada y no deja entrada en la bitácora. Un archivado no se activa: 409 `CONFLICT_PRODUCT_ARCHIVED`.
-- **Con otros pedidos a la vez.** La escritura es condicional (`status = 'draft'`, y `published_at IS NULL` si quien activa no puede publicar). Si entre la lectura y la escritura otro pedido publica el producto, lo archiva o lo activa, el resultado es el mismo que si eso hubiera pasado antes: un producto que se publicó en el medio no queda activado por alguien sin permiso para publicar.
+- **Con otros pedidos a la vez.** La escritura es condicional (`status = 'draft'`, y `published_at IS NULL` si quien activa no puede publicar). Si mientras la escritura espera otro pedido publica el producto o lo archiva, el resultado es el mismo que si eso hubiera pasado antes (y si lo activa otro pedido, esta escritura no encuentra nada que cambiar): un producto que se publicó en el medio no queda activado por alguien sin permiso para publicar.
 - **Bitácora.** `catalog.product.activate`, con el estado antes y después.
 
-**Procedencia.** El permiso (write si nunca se publicó, publish si ya tiene `published_at`) y «de borrador a activo» vienen del criterio de WP-C08e. Que un archivado no se pueda activar es una consecuencia de esa letra, **no la confirmó José**.
+**Procedencia.** El permiso (write si no está publicado, publish si ya tiene `published_at`) y «de borrador a activo» vienen del criterio de WP-C08e. Que un archivado no se pueda activar es una consecuencia de esa letra, **no la confirmó José**.
 
 **Qué no dice.** No exige nada para activar (variantes, imágenes, precio, categoría). Tampoco dice si un producto archivado se puede reactivar, ni cómo: hoy no se puede (WP-C08q).
 

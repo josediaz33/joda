@@ -434,9 +434,11 @@ export async function activateProduct(
       const current = await repo.findProductRow(tx, { id: input.id });
       if (!current) throw toTRPCError(NOT_FOUND_ERROR);
       if (current.status === "archived") throw toTRPCError(PRODUCT_ARCHIVED_ERROR);
-      // Ya activo: no hay nada que hacer. Sigue en borrador: la condición que falló es
-      // `published_at IS NULL`, o sea que está publicado y quien activa no puede publicar.
+      // Sigue en borrador: la condición que falló es `published_at IS NULL`, o sea que
+      // está publicado y quien activa no puede publicar.
       if (current.status === "draft") throw toTRPCError(ACTIVATE_PUBLISHED_FORBIDDEN_ERROR);
+      // Ya activo: no hay nada que hacer.
+      return toAdminProduct(current);
     }
 
     const row = await repo.findProductRow(tx, { id: input.id });

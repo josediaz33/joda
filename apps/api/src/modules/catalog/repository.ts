@@ -136,7 +136,7 @@ export async function publishProductRow(
 /**
  * WP-C08e. `status` pasa a `active` solo desde `draft`, y dice si cambió algo. Con
  * `onlyIfUnpublished` (quien activa no puede publicar) la condición incluye `published_at
- * IS NULL`: si otro pedido publica el producto entre la lectura y esta escritura, no se
+ * IS NULL`: si otro pedido publica el producto mientras esta escritura espera el bloqueo de la fila, no se
  * activa un producto que esa persona no tiene permiso para mostrar en la tienda.
  */
 export async function activateProductRow(

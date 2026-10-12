@@ -339,6 +339,10 @@ La regla del 404 (§4.3) tiene una excepción: con sesión de personal válida, 
 
 Implementado en `packages/domain/src/security/authorization.ts` (`decidePermissionAccess`), con esta forma exacta cubierta por test.
 
+### 9.3 Cuando el permiso depende del estado del recurso (WP-C08e)
+
+`meta.permission` es estático: el middleware no ve el recurso. Si una acción exige un permiso más fuerte según el estado de lo que toca (activar un producto es de `catalog.product:write`, pero si ya tiene `published_at` hace falta `catalog.product:publish`), el procedimiento declara el permiso **mínimo** y el router le pasa al servicio lo que necesita saber (`canPublish`, de `ctx.grantedPermissions`). El servicio decide, y lo hace dentro de la transacción: con una escritura condicional que incluya el estado (`UPDATE ... WHERE published_at IS NULL`), no con leer, decidir y escribir, para que un cambio de estado en el medio no se cuele. Rechaza con 403 (`FORBIDDEN_INSUFFICIENT_PERMISSION`), no 404: quien llega hasta ahí ya tiene un permiso del mismo módulo (§9.2). El permiso mínimo tiene que tener su prueba (un usuario que no lo tiene recibe 403), porque si alguien lo baja, ninguna otra prueba lo nota. Ejemplo: `catalog.product.activate`.
+
 ---
 
 ## 10. Auditoría

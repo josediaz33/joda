@@ -289,7 +289,7 @@ describe("RF-CAT-09 · publicar, despublicar y mostrar variantes", () => {
   });
 });
 
-// WP-C08e · RN-CAT-04: activar un borrador. Con `write` si nunca se publicó; si ya tiene
+// WP-C08e · RN-CAT-04: activar un borrador. Con `write` si no está publicado; si ya tiene
 // publicación, también hace falta `publish`, porque activarlo lo muestra en la tienda.
 describe("RN-CAT-04 · activar un borrador", () => {
   it("un borrador sin publicar se activa con write, y la API recibe el id", async () => {
@@ -301,6 +301,25 @@ describe("RN-CAT-04 · activar un borrador", () => {
 
     await waitFor(() => expect(api.activateProduct).toHaveBeenCalledWith({ id: productId }));
     await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Layton se activó."));
+  });
+
+  it("al activar, el botón desaparece y el foco pasa al nombre del producto en vez de perderse", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.activateProduct).mockResolvedValue({} as AdminProduct);
+    renderCatalog(WRITER, [product({ status: "draft", publishedAt: null })]);
+    const button = await screen.findByRole("button", { name: "Activar Layton" });
+    // Al releer, el producto ya está activo: «Activar» deja de ofrecerse.
+    vi.mocked(api.listProducts).mockResolvedValue({
+      items: [product({ status: "active", publishedAt: null })],
+      nextCursor: null,
+    });
+
+    await user.click(button);
+
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: "Activar Layton" })).toBeNull(),
+    );
+    await waitFor(() => expect(document.activeElement?.textContent).toBe("Layton"));
   });
 
   it("un borrador que ya tiene publicación no se puede activar sin publish", async () => {

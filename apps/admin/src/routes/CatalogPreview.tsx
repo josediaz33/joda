@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AdminProduct, AdminVariant, ProductKind, ProductStatus } from "@joda/contracts";
 import { Button } from "@joda/ui/primitives/button";
@@ -72,12 +72,23 @@ export default function CatalogPreview() {
   const [actionError, setActionError] = useState<{ productId: string; message: string } | null>(
     null,
   );
+  // Al activar un borrador, el botón «Activar» desaparece de la fila (ya no es borrador): el
+  // foco que tenía se perdería en <body>. Si pasa, vuelve al nombre del producto.
+  const [refocus, setRefocus] = useState<string | null>(null);
   const queryClient = useQueryClient();
   const products = useQuery({
     queryKey: ["catalog-preview", kind, status, cursor],
     queryFn: () => api.listProducts({ kind, status, limit: 20, ...(cursor ? { cursor } : {}) }),
     retry: false,
   });
+
+  useEffect(() => {
+    if (refocus === null) return;
+    if (document.activeElement === document.body || document.activeElement === null) {
+      document.getElementById(`product-name-${refocus}`)?.focus();
+    }
+    setRefocus(null);
+  }, [refocus]);
 
   async function refresh() {
     await queryClient.invalidateQueries({ queryKey: ["catalog-preview"] });
@@ -105,6 +116,7 @@ export default function CatalogPreview() {
     } finally {
       await refresh();
       busy.current = false;
+      setRefocus(productId);
     }
   }
 
@@ -211,7 +223,13 @@ export default function CatalogPreview() {
             <div key={product.id} className="border-b border-border-subtle py-4 last:border-0">
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
-                  <p className="font-semibold">{product.name}</p>
+                  <p
+                    id={`product-name-${product.id}`}
+                    tabIndex={-1}
+                    className="font-semibold outline-none focus-visible:outline-2 focus-visible:outline-focus"
+                  >
+                    {product.name}
+                  </p>
                   <p className="text-sm text-text-secondary">
                     {product.brandName ?? "Sin marca"} · {kinds[product.kind]}
                   </p>
@@ -259,7 +277,7 @@ export default function CatalogPreview() {
                       </dl>
                     </DialogContent>
                   </Dialog>
-                  {/* Activar un borrador (RN-CAT-04): con `write` si nunca se publicó; si ya
+                  {/* Activar un borrador (RN-CAT-04): con `write` si no está publicado; si ya
                       tiene publicación, también hace falta `publish`, porque lo muestra en la tienda. */}
                   {product.status === "draft" && (
                     <Can perform="catalog.product:write">
