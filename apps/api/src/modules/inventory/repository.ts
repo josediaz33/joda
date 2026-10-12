@@ -393,6 +393,26 @@ export async function lockLotsOfVariant(tx: TenantTx, variantId: string): Promis
     FOR NO KEY UPDATE OF l`;
 }
 
+/**
+ * Lo mismo que `lockLotsOfVariant`, para varias variantes en UNA sola sentencia y
+ * en orden ascendente de `id` de lote (.claude/rules/api.md, «Concurrencia»):
+ * apagar `is_serialized` en todas las variantes de un reloj no puede consultar
+ * en un bucle, ni tomar los lotes en un orden distinto al de las altas y los
+ * ajustes. Mismos límites que `lockLotsOfVariant` (visibilidad de quien llama,
+ * lotes que nacen después): el cierre real es WP-B20. `::uuid[]` explícito
+ * porque Prisma manda el arreglo como `text[]`.
+ */
+export async function lockLotsOfVariants(
+  tx: TenantTx,
+  variantIds: readonly string[],
+): Promise<void> {
+  await tx.$queryRaw`
+    SELECT l.id FROM app.inventory_lots l
+    WHERE l.variant_id = ANY(${[...variantIds]}::uuid[])
+    ORDER BY l.id
+    FOR NO KEY UPDATE OF l`;
+}
+
 /** Unidades registradas de la variante, de TODOS los estados: las vendidas también cuentan (RN-SER-03). */
 export async function countSerializedUnitsOfVariant(
   tx: TenantTx,

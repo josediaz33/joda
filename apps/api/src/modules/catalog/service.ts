@@ -295,6 +295,12 @@ async function planRequiresSerialPropagation(
       );
     }
   } else {
+    // Primero los lotes, después el conteo: el alta de una unidad bloquea su lote antes de
+    // leer el flag de la variante (ver `lockLotsAndAssertNoSerialUnits`, WP-C08d).
+    await inventoryRepo.lockLotsOfVariants(
+      tx,
+      stale.map((variant) => variant.id),
+    );
     const registeredUnits = await repo.countSerializedUnitsOfVariants(
       tx,
       stale.map((variant) => variant.id),
