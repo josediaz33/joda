@@ -138,7 +138,7 @@ describe("RF-CAT-09 · los controles de publicación son solo para catalog.produ
 
     expect(screen.queryByRole("button", { name: /^Publicar/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Despublicar/ })).toBeNull();
-    expect(screen.queryByRole("button", { name: /en la tienda$/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^(Mostrar en|Ocultar de) la tienda/ })).toBeNull();
   });
 
   it("quien puede publicar ve Publicar en un producto sin publicar y Despublicar en uno publicado", async () => {
@@ -208,6 +208,44 @@ describe("RF-CAT-09 · publicar, despublicar y mostrar variantes", () => {
     );
   });
 
+  it("el rechazo aparece solo bajo el producto donde se intentó, no bajo los otros", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.publishProduct).mockRejectedValue(
+      new Error("El producto no tiene categoría primaria."),
+    );
+    renderCatalog(PUBLISHER, [
+      product({ id: productId, name: "Layton", publishedAt: null }),
+      product({ id: otherProductId, name: "Herod", publishedAt: null }),
+    ]);
+
+    await user.click(await screen.findByRole("button", { name: "Publicar Herod" }));
+
+    const alerts = await screen.findAllByRole("alert");
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.parentElement?.textContent).toContain("Herod");
+    expect(alerts[0]?.parentElement?.textContent).not.toContain("Layton");
+  });
+
+  it("un segundo clic mientras la primera acción sigue en curso se ignora", async () => {
+    const user = userEvent.setup();
+    let finish: () => void = () => {};
+    vi.mocked(api.publishProduct).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = () => resolve({} as AdminProduct);
+        }),
+    );
+    renderCatalog(PUBLISHER, [product({ publishedAt: null })]);
+    const button = await screen.findByRole("button", { name: "Publicar Layton" });
+
+    await user.click(button);
+    await user.click(button);
+    finish();
+
+    await waitFor(() => expect(screen.getByRole("status").textContent).toBe("Layton se publicó."));
+    expect(api.publishProduct).toHaveBeenCalledTimes(1);
+  });
+
   it("cada variante dice si está visible en la tienda", async () => {
     renderCatalog(PUBLISHER, [
       product({
@@ -246,6 +284,6 @@ describe("RF-CAT-09 · publicar, despublicar y mostrar variantes", () => {
     expect(within(alert).getByText(/Solo las variantes sellado, decant y unidad/)).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe("");
     // El aviso está en el bloque del producto donde se intentó, no suelto arriba de la lista.
-    expect(alert.closest("div.border-b")?.textContent).toContain("Layton");
+    expect(alert.parentElement?.textContent).toContain("Layton");
   });
 });

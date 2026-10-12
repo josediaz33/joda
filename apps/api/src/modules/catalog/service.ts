@@ -528,6 +528,9 @@ export async function setVariantVisibility(
     try {
       changed = await repo.setVariantOnlineVisible(tx, input.id, input.onlineVisible);
     } catch (error) {
+      // Este UPDATE solo cambia `online_visible`, y hoy el único CHECK de `product_variants` que
+      // lo involucra es el de RN-CAT-02: cualquier 23514 acá es ése. Si algún día hay otro,
+      // hay que distinguirlos por el nombre de la restricción.
       if (hasSqlState(error, "23514")) throw toTRPCError(VARIANT_NOT_PUBLISHABLE_ERROR);
       throw error;
     }

@@ -1925,6 +1925,72 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(await auditActions(product.id)).toEqual([]);
   });
 
+  it("RF-CAT-09 · si otro pedido despublica el producto mientras éste espera, no deja otra entrada en la bitácora", async () => {
+    const product = await createAccessory("c08g-despublicacion-simultanea");
+    await testDb.superuserClient.query(
+      `UPDATE app.products SET published_at = '2025-06-15T10:00:00Z' WHERE id = $1`,
+      [product.id],
+    );
+
+    // Otra transacción lo despublica y todavía no confirma. La petición leyó el producto
+    // publicado, pero al desbloquearse ya no hay nada que despublicar.
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        `UPDATE app.products SET published_at = NULL WHERE id = $1`,
+        [product.id],
+      );
+      pending = mutate("catalog.product.unpublish", { id: product.id });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+
+      expect((await pending).statusCode).toBe(200);
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    expect(await auditActions(product.id)).toEqual([]);
+  });
+
+  it("RF-CAT-09 · si otro pedido ya mostró la variante mientras éste espera, no deja otra entrada en la bitácora", async () => {
+    const product = await createAccessory("c08g-visibilidad-simultanea");
+    const variant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: "C08G-SIMULTANEA",
+      variantType: "unit",
+      uom: "unit",
+      sizeMl: null,
+      pricePyg: "100000",
+    });
+
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        `UPDATE app.product_variants SET online_visible = true WHERE id = $1`,
+        [variant.id],
+      );
+      pending = mutate("catalog.variant.setVisibility", { id: variant.id, onlineVisible: true });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+
+      expect((await pending).statusCode).toBe(200);
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    expect(await auditActions(variant.id)).toEqual([]);
+  });
+
   it("RF-CAT-09 · publicar un producto ya publicado conserva la fecha original y no deja otra entrada en la bitácora", async () => {
     const product = await createAccessory("c08g-ya-publicado");
     await testDb.superuserClient.query(
