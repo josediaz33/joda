@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, configure, render, screen } from "@testing-library/react";
+import { cleanup, configure, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Sourcing from "./Sourcing";
@@ -67,25 +67,34 @@ describe("RN-SRC-01/02 · WP-C16, vista previa de sourcing calculada en el clien
     expect(await screen.findByText("19,7%")).toBeTruthy();
   });
 
-  it("escribir sobre el campo de precio sin borrar primero no antepone un cero (segunda revisión cruzada): un click y un type de '3500000' da '3500000', no '03500000'", async () => {
-    const user = userEvent.setup();
-    renderSourcing();
+  // Los cuatro campos de texto numérico (segunda revisión cruzada): si
+  // alguno vuelve a arrancar en "0", un click y un type dan "03500000".
+  // Sin user.clear(): el campo tiene que arrancar vacío, porque a diferencia
+  // de un <input type="number"> un type="text" no sanitiza ceros a la
+  // izquierda solo. Cada campo se probó revirtiendo su valor inicial a "0".
+  it.each([
+    ["Precio del proveedor (centavos)", undefined],
+    ["Precio de venta proyectado", undefined],
+    ["Flete total", undefined],
+    ["Flete manual (centavos)", "manual"],
+  ] as const)(
+    "escribir sobre «%s» sin borrar primero no antepone un cero: un click y un type de '3500000' da '3500000', no '03500000'",
+    async (label, freightMethod) => {
+      const user = userEvent.setup();
+      renderSourcing();
 
-    await user.click(screen.getByLabelText("Id de variante"));
-    await user.paste(VARIANT_ID);
-    // Sin user.clear(): el campo arranca vacío (no en "0"), así que escribir
-    // directo sobre él no antepone nada — a diferencia de un <input
-    // type="number">, un type="text" no sanitiza ceros a la izquierda solo.
-    await user.click(screen.getByLabelText("Precio de venta proyectado"));
-    await user.type(screen.getByLabelText("Precio de venta proyectado"), "3500000");
+      if (freightMethod) {
+        // El campo de flete manual solo se dibuja con ese método de prorrateo.
+        await user.selectOptions(screen.getByLabelText("Método de prorrateo"), freightMethod);
+      }
+      await user.click(screen.getByLabelText("Id de variante"));
+      await user.paste(VARIANT_ID);
+      await user.click(screen.getByLabelText(label));
+      await user.type(screen.getByLabelText(label), "3500000");
 
-    expect((screen.getByLabelText("Precio de venta proyectado") as HTMLInputElement).value).toBe(
-      "3500000",
-    );
-    expect(
-      screen.queryByText("Línea 1: el precio de venta proyectado tiene que ser mayor a cero."),
-    ).toBeNull();
-  });
+      expect((screen.getByLabelText(label) as HTMLInputElement).value).toBe("3500000");
+    },
+  );
 
   it("RF-SRC-04 · nunca ofrece una acción que afecte inventario o caja mientras no exista la API (WP-C16b)", async () => {
     renderSourcing();
@@ -215,6 +224,13 @@ describe("RF-SRC-02 · comparación línea por línea de la misma variante", () 
     await user.clear(fxInputs[1]!);
     await user.type(fxInputs[1]!, "7300");
 
-    expect(await screen.findAllByText("Mejor opción")).toHaveLength(1);
+    // La marca cae en la fila de la segunda línea (proveedor más barato, mismo
+    // precio de venta, por lo tanto mayor ganancia), no en la primera.
+    const badges = await screen.findAllByText("Mejor opción");
+    expect(badges).toHaveLength(1);
+    const row = badges[0]!.closest("tr")!;
+    expect(
+      (within(row).getByLabelText("Precio del proveedor (centavos)") as HTMLInputElement).value,
+    ).toBe("20000");
   });
 });
