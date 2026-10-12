@@ -67,6 +67,8 @@ El redondeo se resuelve a **nivel de documento**, no de línea. Es lo que valida
 
 Cuando la suma de los IVA de línea no coincide con el IVA del documento, la diferencia se imputa **a la última línea de la tasa correspondiente**, y queda registrada.
 
+**Que pueda absorberla** (WP-C17): el IVA de una línea nunca sale de entre 0 y su importe. Una línea de importe cero (un regalo), o una tan chica que la diferencia la sacaría de ese rango, no la recibe: pasa a la anterior que sí puede. Sin esto una línea de Gs. 0 quedaba con IVA de 1 o de −1, y el CHECK `vat_pyg >= 0` rechazaba un pedido legítimo. **Esta ampliación no la confirmó José** (la agregó WP-C17 para que un regalo no rompa el CHECK, y solo cambia casos que antes daban un IVA fuera de rango): queda pendiente de su confirmación antes del posteo (WP-H01) y de la factura electrónica.
+
 **Ejemplo.** Tres líneas de Gs. 100.000 al 10%:
 
 ```
@@ -625,6 +627,19 @@ Una línea con `serial_unit_id` mueve exactamente 1 unidad. Al confirmarse, la u
 ### RN-VTA-05 · Pedido mixto
 
 Un pedido puede combinar decants (bajo pedido), sellados (con lote) y relojes (serializados). Cada línea sigue su propia lógica de consumo; la transacción es una sola.
+
+### RN-VTA-06 · Armado del pedido en la API
+
+Lo que `sales.order.create` (WP-C17) hace con un pedido de mostrador. **Ninguno de estos puntos lo confirmó José**: salen de que el schema y RN-IVA no dicen otra cosa. Cada uno se cambia en `packages/domain/src/sales/orderPricing.ts` o en `apps/api/src/modules/sales/service.ts` y, los que tocan la entrada o el DTO, también en `packages/contracts/src/sales.ts`.
+
+- **El precio de cada línea es el de la variante**, nunca el que manda el cliente. El precio por canal (`channel_listings.price_override_pyg`) no se aplica: no hay regla ni WP que lo defina (ver la nota al tope de `order.ts`). El cliente puede mandar el total que mostró en pantalla: si no coincide con el calculado, se rechaza y no se escribe nada.
+- **Un solo descuento, a nivel de pedido.** Se reparte entre las líneas en proporción a su importe, por el mayor resto (`Money.allocate`), porque el IVA depende de la tasa de cada línea, y cada parte se guarda en `sale_order_lines.discount_pyg`. Así: `subtotal_pyg = Σ (qty × precio)`; `line_total_pyg = qty × precio − discount_pyg` (lo que el cliente paga por la línea, y la base del margen `line_total − vat − cogs`); `vat_pyg` es el IVA contenido en `line_total_pyg`; `Σ line_total_pyg = subtotal − descuento` (esa identidad no la impone ningún CHECK, y con un envío pasaría a ser `Σ line_total_pyg = total − shipping`: anotarla en el invariante cuando se decida el envío, WP-G11). `vat_10_pyg` y `vat_5_pyg` del pedido son el IVA contenido ya con el descuento; `exempt_pyg` es el monto exento, bruto y con el descuento.
+- **Sin envío.** `shipping_pyg` queda en 0: una venta de mostrador no lo tiene y RN-IVA no dice qué tasa lleva un envío. Pendiente de José antes del checkout (WP-G11).
+- **Cantidades enteras.** Para un decant, `qty` es la cantidad de decants y no de ml, y `uom` es la de la variante (`ml`): una línea de `qty 3` de un decant de 10 ml son 3 decants, 30 ml. Quien la lea (C18, C19, E08) toma el volumen de `size_ml` de la variante.
+- **Se puede vender cualquier tipo de variante** (también `bulk`, `supply` y `tester`), sin mirar el estado de su producto (borrador o archivado): ninguna regla lo restringe.
+- **Una variante serializada se vende de a una unidad y eligiéndola al crear el pedido** (RN-VTA-04). La unidad tiene que existir, ser de esa variante y estar `available`. Al crear no se reserva ni se cambia su estado; WP-C19 la vuelve a validar al confirmar.
+- **El pedido nace en `draft` sin transición `null → draft`** (la creación queda en la bitácora): `sale_order_transitions` es append-only y con esa fila el borrador no se podría borrar. Se puede pasar a `awaiting_payment` o cancelar (desde `draft` o `awaiting_payment`). **Un pedido con órdenes de fraccionamiento sin cancelar no se cancela** (hoy `inventory.decant.plan` acepta una venta en cualquier estado; las cancela WP-C13c).
+- **Código `VTA-AAAA-NNNN`**, consecutivo por tenant y por año de Paraguay. Se calcula como el máximo más uno: borrar el último borrador deja su número libre para el siguiente pedido (WP-C17c).
 
 ---
 
