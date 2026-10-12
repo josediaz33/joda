@@ -1888,6 +1888,28 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     ]);
   }
 
+  /**
+   * WP-C08n, RN-CAT-03: publicar exige una variante visible con precio mayor que cero. Un
+   * accesorio con una variante en unidades de Gs. 100.000, ya mostrada, y sin imagen.
+   */
+  async function createPublishableAccessory(slug: string) {
+    const product = await createAccessory(slug);
+    const variant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      unitVariantPayload(product.id, `${slug}-v`.toUpperCase(), { pricePyg: "100000" }),
+    );
+    await mutateOk("catalog.variant.setVisibility", { id: variant.id, onlineVisible: true });
+    return product;
+  }
+
+  /** Marca el producto como publicado por SQL, sin pasar por lo que exige publicar: para las pruebas donde la publicación es solo el escenario. */
+  async function markPublished(productId: string): Promise<void> {
+    await testDb.superuserClient.query(
+      `UPDATE app.products SET published_at = '2025-06-15T10:00:00Z' WHERE id = $1`,
+      [productId],
+    );
+  }
+
   async function publicProductSlugs(): Promise<string[]> {
     const rows = await testDb.superuserClient.query(
       `SELECT slug FROM public.v_catalog_products WHERE tenant_id = $1`,
@@ -1913,7 +1935,7 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
   }
 
   it("RF-CAT-09 · publicar estampa published_at con el reloj y no toca el estado interno", async () => {
-    const product = await createAccessory("c08g-publica");
+    const product = await createPublishableAccessory("c08g-publica");
 
     const published = await mutateOk<{ status: string; publishedAt: string | null }>(
       "catalog.product.publish",
@@ -1925,7 +1947,7 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
   });
 
   it("RF-CAT-09 · publicar un borrador no lo muestra en la tienda: hacen falta el estado activo y la publicación", async () => {
-    const product = await createAccessory("c08g-borrador");
+    const product = await createPublishableAccessory("c08g-borrador");
     await mutateOk("catalog.product.publish", { id: product.id });
     const whileDraft = await publicProductSlugs();
 
@@ -1940,7 +1962,7 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
   });
 
   it("RF-CAT-09 · despublicar deja published_at en nulo y el producto activo; hacerlo dos veces no cambia nada", async () => {
-    const product = await createAccessory("c08g-despublica");
+    const product = await createPublishableAccessory("c08g-despublica");
     await activate(product.id);
     await mutateOk("catalog.product.publish", { id: product.id });
 
@@ -1972,8 +1994,8 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       pricePyg: "100000",
     });
     await activate(product.id);
-    await mutateOk("catalog.product.publish", { id: product.id });
     await mutateOk("catalog.variant.setVisibility", { id: variant.id, onlineVisible: true });
+    await mutateOk("catalog.product.publish", { id: product.id });
 
     await mutateOk("catalog.product.unpublish", { id: product.id });
     const whileUnpublished = await publicVariantSkus();
@@ -1989,7 +2011,7 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
   });
 
   it("RF-CAT-09 · si otro pedido publica el producto mientras éste espera, no le pisa la fecha ni deja otra entrada en la bitácora", async () => {
-    const product = await createAccessory("c08g-publicacion-simultanea");
+    const product = await createPublishableAccessory("c08g-publicacion-simultanea");
 
     // Otra transacción publica el producto y todavía no confirma. Una petición que
     // decidiera con lo que leyó antes (sin publicar) estamparía su propia hora al
@@ -2101,7 +2123,7 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
   });
 
   it("RF-CAT-09 · publicar deja en la bitácora quién, qué y el antes y el después", async () => {
-    const product = await createAccessory("c08g-bitacora");
+    const product = await createPublishableAccessory("c08g-bitacora");
 
     await mutateOk("catalog.product.publish", { id: product.id });
 
@@ -2149,6 +2171,116 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(response.statusCode).toBe(409);
     expect(response.json().error.data.appCode).toBe("CONFLICT_PRODUCT_WITHOUT_PRIMARY_CATEGORY");
   });
+
+  // WP-C08n, RN-CAT-03 (decisión de José, 2026-10-12). Publicar exige un producto no
+  // archivado y al menos una variante `online_visible` con `price_pyg` mayor que cero, las
+  // dos condiciones en la misma variante. La imagen no es obligatoria.
+  it("RN-CAT-03 · un producto sin variantes no se publica: 409 y sigue sin publicar", async () => {
+    const product = await createAccessory("c08n-sin-variantes");
+
+    const response = await mutate("catalog.product.publish", { id: product.id });
+
+    expect(response.statusCode).toBe(409);
+    expect(response.json().error.data.appCode).toBe("CONFLICT_PRODUCT_WITHOUT_SELLABLE_VARIANT");
+    const fetched = await call<{ publishedAt: string | null }>("catalog.product.byId", {
+      id: product.id,
+    });
+    expect(fetched.publishedAt).toBeNull();
+    expect(await auditActions(product.id)).toEqual([]);
+  });
+
+  it("RN-CAT-03 · una variante visible sin precio y otra con precio pero oculta no alcanzan: tiene que ser la misma variante; con una que cumple las dos, se publica sin imagen", async () => {
+    const product = await createAccessory("c08n-no-misma-variante");
+    const free = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      unitVariantPayload(product.id, "C08N-GRATIS", { pricePyg: "0" }),
+    );
+    const priced = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      unitVariantPayload(product.id, "C08N-CON-PRECIO", { pricePyg: "100000" }),
+    );
+    await mutateOk("catalog.variant.setVisibility", { id: free.id, onlineVisible: true });
+
+    const rejected = await mutate("catalog.product.publish", { id: product.id });
+    await mutateOk("catalog.variant.setVisibility", { id: priced.id, onlineVisible: true });
+    const published = await mutateOk<{ publishedAt: string | null }>("catalog.product.publish", {
+      id: product.id,
+    });
+
+    expect(rejected.statusCode).toBe(409);
+    expect(rejected.json().error.data.appCode).toBe("CONFLICT_PRODUCT_WITHOUT_SELLABLE_VARIANT");
+    expect(published.publishedAt).toBe(PUBLISH_CLOCK_ISO);
+  });
+
+  it("RN-CAT-03 · un borrador y un activo con una variante visible con precio se publican", async () => {
+    const draft = await createPublishableAccessory("c08n-borrador-ok");
+    const active = await createPublishableAccessory("c08n-activo-ok");
+    await activate(active.id);
+
+    const draftResult = await mutateOk<{ publishedAt: string | null; status: string }>(
+      "catalog.product.publish",
+      { id: draft.id },
+    );
+    const activeResult = await mutateOk<{ publishedAt: string | null; status: string }>(
+      "catalog.product.publish",
+      { id: active.id },
+    );
+
+    expect(draftResult).toMatchObject({ publishedAt: PUBLISH_CLOCK_ISO, status: "draft" });
+    expect(activeResult).toMatchObject({ publishedAt: PUBLISH_CLOCK_ISO, status: "active" });
+  });
+
+  it("RN-CAT-03 · un producto archivado no se publica, ni siquiera si conservó published_at: 409 y la fecha no cambia", async () => {
+    const neverPublished = await createPublishableAccessory("c08n-archivado");
+    const wasPublished = await createPublishableAccessory("c08n-archivado-publicado");
+    await mutateOk("catalog.product.publish", { id: wasPublished.id });
+    await mutateOk("catalog.product.archive", { id: neverPublished.id });
+    await mutateOk("catalog.product.archive", { id: wasPublished.id });
+
+    const first = await mutate("catalog.product.publish", { id: neverPublished.id });
+    const second = await mutate("catalog.product.publish", { id: wasPublished.id });
+
+    for (const response of [first, second]) {
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.data.appCode).toBe("CONFLICT_PRODUCT_ARCHIVED");
+    }
+    const never = await call<{ publishedAt: string | null }>("catalog.product.byId", {
+      id: neverPublished.id,
+    });
+    const was = await call<{ publishedAt: string | null }>("catalog.product.byId", {
+      id: wasPublished.id,
+    });
+    expect(never.publishedAt).toBeNull();
+    expect(was.publishedAt).toBe(PUBLISH_CLOCK_ISO);
+    expect(await auditActions(neverPublished.id)).toEqual([]);
+  });
+
+  it(
+    "RN-CAT-03 · si otro pedido archiva el producto mientras la publicación espera, se rechaza como archivado y no queda publicado",
+    async () => {
+      const product = await createPublishableAccessory("c08n-archivado-en-vuelo");
+
+      // Otra transacción lo archiva y todavía no confirma: la lectura de quien publica ve
+      // el producto sin archivar, y su escritura espera la fila.
+      const response = await whileHolding(
+        () =>
+          testDb.superuserClient.query(
+            `UPDATE app.products SET status = 'archived' WHERE id = $1`,
+            [product.id],
+          ),
+        () => mutate("catalog.product.publish", { id: product.id }),
+      );
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.data.appCode).toBe("CONFLICT_PRODUCT_ARCHIVED");
+      const fetched = await call<{ publishedAt: string | null }>("catalog.product.byId", {
+        id: product.id,
+      });
+      expect(fetched.publishedAt).toBeNull();
+      expect(await auditActions(product.id)).toEqual([]);
+    },
+    RACE_TEST_TIMEOUT_MS,
+  );
 
   it("RF-CAT-09 · un producto o una variante inexistente o de otro tenant da exactamente la misma respuesta, al publicar, despublicar y mostrar", async () => {
     await seedForeignCatalog();
@@ -2254,7 +2386,7 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       pricePyg: "100000",
     });
     await activate(product.id);
-    await mutateOk("catalog.product.publish", { id: product.id });
+    await markPublished(product.id);
     const beforeShow = await publicVariantSkus();
 
     const shown = await mutateOk<{ onlineVisible: boolean }>("catalog.variant.setVisibility", {
@@ -2368,7 +2500,7 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
 
   it("RN-CAT-04 · quien tiene write sin publish no puede activar un producto que ya tiene published_at; con publish sí, y recién ahí la tienda lo ve", async () => {
     const product = await createAccessory("c08e-ya-publicado");
-    await mutateOk("catalog.product.publish", { id: product.id });
+    await markPublished(product.id);
     const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
 
     const denied = await mutateAs(writerCookie, "catalog.product.activate", { id: product.id });
