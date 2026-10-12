@@ -47,6 +47,11 @@ export const findSerialUnits = (tx: TenantTx, tenantId: string, ids: string[]) =
  * Órdenes de fraccionamiento del pedido que no están canceladas: pendientes, en
  * curso o ejecutadas. Cancelar el pedido las dejaría colgadas de una venta que
  * ya no va a ocurrir (RN-EST-03; WP-C13c es quien las cancela).
+ *
+ * Se lee bajo RLS: hoy `decant_work_orders` solo tiene la política de tenant y el
+ * vendedor la ve. Si una política futura la restringe por permiso, este conteo
+ * daría 0 para él y la cancelación pasaría en silencio; la prueba de
+ * `sales.integration.test.ts` que cancela como vendedor es la red.
  */
 export const countOpenDecantOrders = (tx: TenantTx, tenantId: string, saleOrderId: string) =>
   tx.decant_work_orders.count({

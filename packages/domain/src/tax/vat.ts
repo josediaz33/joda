@@ -57,8 +57,8 @@ export interface DocumentVatLine {
   readonly base: Money;
   /**
    * RN-IVA-03 · la diferencia de redondeo "queda registrada": el monto
-   * que esta línea recibió por ser la última de su tasa, ya incluido en
-   * `vat`. Cero cuando la línea no recibió ajuste (incluidas todas las
+   * que esta línea recibió por ser la última de su tasa que podía
+   * absorberlo, ya incluido en `vat`. Cero cuando la línea no recibió ajuste (incluidas todas las
    * de `exenta`, que nunca lo reciben).
    * `vatFromGross(gross, rate).plus(roundingAdjustment) === vat`, siempre.
    */

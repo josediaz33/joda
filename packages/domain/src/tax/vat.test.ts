@@ -274,6 +274,34 @@ describe("RN-IVA-03 · la diferencia va a la última línea de la tasa que puede
     expect(result.totalVat.minor).toBe(36_367n);
   });
 
+  it("en una nota de crédito (importes negativos) la línea de importe cero tampoco recibe la diferencia, sea positiva o negativa", () => {
+    // −99.995 / 11 = −9.090,45 → −9.090 por línea (−18.180); el documento, −199.990 / 11, es −18.181: sobra −1.
+    const negativeDifference = [
+      { gross: Money.pyg(-99_995n), rate: "iva_10" as const },
+      { gross: Money.pyg(-99_995n), rate: "iva_10" as const },
+      { gross: Money.pyg(0n), rate: "iva_10" as const },
+    ];
+    // −100.008 / 11 = −9.091,6 → −9.092 por línea (−27.276); el documento, −300.024 / 11, es −27.275: sobra +1.
+    const positiveDifference = [
+      { gross: Money.pyg(-100_008n), rate: "iva_10" as const },
+      { gross: Money.pyg(-100_008n), rate: "iva_10" as const },
+      { gross: Money.pyg(-100_008n), rate: "iva_10" as const },
+      { gross: Money.pyg(0n), rate: "iva_10" as const },
+    ];
+
+    expect(breakdownDocument(negativeDifference).lines.map((l) => l.vat.minor)).toEqual([
+      -9_090n,
+      -9_091n,
+      0n,
+    ]);
+    expect(breakdownDocument(positiveDifference).lines.map((l) => l.vat.minor)).toEqual([
+      -9_092n,
+      -9_092n,
+      -9_091n,
+      0n,
+    ]);
+  });
+
   it("una diferencia mayor que lo que una línea puede absorber se reparte hacia atrás: la última se lleva lo que le cabe y el resto, la anterior", () => {
     // Dos líneas de Gs. 3 y una de Gs. 1 al 10%: el IVA de cada una es 0 y el del documento, 7 / 11 = 0,63 → 1.
     // Sobra +1: la última (Gs. 1) absorbe hasta su importe, o sea 1.
