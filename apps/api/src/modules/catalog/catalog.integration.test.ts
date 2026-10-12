@@ -1805,8 +1805,9 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       pricePyg: "0",
     });
     // Un insumo y no un segundo granel: el índice único de 0028 permite un solo granel por
-    // producto. Qué variantes valen como origen es la pregunta abierta de WP-C08m; si se
-    // restringe a `bulk`, esta prueba se reescribe sin que haya una regresión.
+    // producto. El tipo de la variante de origen no se valida todavía (RN-CAT-06, WP-C08m: la
+    // decisión de José, tomada al pie de la letra, contradice RN-FRA-07); si se restringe, esta
+    // prueba se reescribe sin que haya una regresión. Lo que sí se valida es el producto.
     const secondSource = await mutateOk<{ id: string }>("catalog.variant.create", {
       productId: product.id,
       sku: "C08B-ORIGEN-2",
@@ -1838,6 +1839,140 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(moved.sourceVariantId).toBe(secondSource.id);
     expect(cleared.sourceVariantId).toBeNull();
     expect(cleared.productionMode).toBe("stocked");
+  });
+
+  // WP-C08m, RN-CAT-06 (decisión de José, 2026-10-12, en lo que es aplicable): el origen de una
+  // variante bajo pedido es una variante del MISMO producto, no la propia, y de un producto que no
+  // esté archivado. El tipo de la variante de origen no se valida todavía (ver RN-CAT-06).
+  async function createProductWithBulk(slug: string) {
+    const product = await createAccessory(slug);
+    const bulk = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: product.id,
+      sku: `${slug}-granel`.toUpperCase(),
+      variantType: "bulk",
+      uom: "ml",
+      sizeMl: null,
+      pricePyg: "0",
+    });
+    return { product, bulk };
+  }
+
+  function decantPayload(productId: string, sku: string, sourceVariantId: string) {
+    return {
+      productId,
+      sku,
+      variantType: "decant",
+      uom: "ml",
+      sizeMl: 10,
+      pricePyg: "285000",
+      productionMode: "made_to_order",
+      sourceVariantId,
+    };
+  }
+
+  it("RN-CAT-06 · el origen de una variante bajo pedido tiene que ser de su mismo producto: 400 al crear y al actualizar, y no se crea ni se cambia nada", async () => {
+    const own = await createProductWithBulk("c08m-propio");
+    const other = await createProductWithBulk("c08m-otro");
+    const decant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      decantPayload(own.product.id, "C08M-DECANT", own.bulk.id),
+    );
+
+    const created = await mutate(
+      "catalog.variant.create",
+      decantPayload(own.product.id, "C08M-DECANT-AJENO", other.bulk.id),
+    );
+    const updated = await mutate("catalog.variant.update", {
+      id: decant.id,
+      sourceVariantId: other.bulk.id,
+    });
+
+    for (const response of [created, updated]) {
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.data.appCode).toBe("VALIDATION_SOURCE_VARIANT_OTHER_PRODUCT");
+      expect(response.json().error.message).toBe(
+        "El origen de una variante bajo pedido tiene que ser una variante del mismo producto.",
+      );
+    }
+    const variants = await call<{ sku: string; sourceVariantId: string | null }[]>(
+      "catalog.variant.list",
+      { productId: own.product.id },
+    );
+    expect(variants.map((variant) => variant.sku).sort()).toEqual([
+      "C08M-DECANT",
+      "C08M-PROPIO-GRANEL",
+    ]);
+    expect(variants.find((variant) => variant.sku === "C08M-DECANT")?.sourceVariantId).toBe(
+      own.bulk.id,
+    );
+  });
+
+  it("RN-CAT-06 · una variante no puede ser su propio origen: 400 y conserva el suyo", async () => {
+    const own = await createProductWithBulk("c08m-propia");
+    const decant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      decantPayload(own.product.id, "C08M-AUTO", own.bulk.id),
+    );
+
+    const response = await mutate("catalog.variant.update", {
+      id: decant.id,
+      sourceVariantId: decant.id,
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error.data.appCode).toBe("VALIDATION_SOURCE_VARIANT_SELF");
+    const fetched = await call<{ sourceVariantId: string | null }>("catalog.variant.byId", {
+      id: decant.id,
+    });
+    expect(fetched.sourceVariantId).toBe(own.bulk.id);
+  });
+
+  it("RN-CAT-06 · no se fija un origen en un producto archivado, pero editar el resto de la variante sigue siendo posible", async () => {
+    const own = await createProductWithBulk("c08m-archivado");
+    const decant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      decantPayload(own.product.id, "C08M-ARCH-DECANT", own.bulk.id),
+    );
+    await mutateOk("catalog.product.archive", { id: own.product.id });
+
+    const created = await mutate(
+      "catalog.variant.create",
+      decantPayload(own.product.id, "C08M-ARCH-NUEVO", own.bulk.id),
+    );
+    const updatedSource = await mutate("catalog.variant.update", {
+      id: decant.id,
+      sourceVariantId: own.bulk.id,
+    });
+    const repriced = await mutate("catalog.variant.update", {
+      id: decant.id,
+      pricePyg: "300000",
+    });
+
+    for (const response of [created, updatedSource]) {
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.data.appCode).toBe("VALIDATION_SOURCE_VARIANT_PRODUCT_ARCHIVED");
+    }
+    expect(repriced.statusCode).toBe(200);
+    const variants = await call<{ sku: string }[]>("catalog.variant.list", {
+      productId: own.product.id,
+    });
+    expect(variants.map((variant) => variant.sku)).not.toContain("C08M-ARCH-NUEVO");
+  });
+
+  it("RN-CAT-06 · el granel del mismo producto sigue siendo un origen válido, al crear y al actualizar", async () => {
+    const own = await createProductWithBulk("c08m-valido");
+
+    const decant = await mutateOk<{ id: string; sourceVariantId: string | null }>(
+      "catalog.variant.create",
+      decantPayload(own.product.id, "C08M-VALIDO-DECANT", own.bulk.id),
+    );
+    const again = await mutateOk<{ sourceVariantId: string | null }>("catalog.variant.update", {
+      id: decant.id,
+      sourceVariantId: own.bulk.id,
+    });
+
+    expect(decant.sourceVariantId).toBe(own.bulk.id);
+    expect(again.sourceVariantId).toBe(own.bulk.id);
   });
 
   // -------------------------------------------------------------------

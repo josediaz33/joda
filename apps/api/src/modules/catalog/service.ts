@@ -170,12 +170,47 @@ async function assertBrandExists(tx: TenantTx, brandId: string | null | undefine
  * Solo comprueba que la variante sea del tenant: no que sea un granel, ni del mismo producto,
  * ni que no sea la propia variante. Esa regla de negocio está sin decidir (WP-C08m).
  */
-async function assertSourceVariantExists(
+const SOURCE_VARIANT_OTHER_PRODUCT_ERROR = appError(
+  "VALIDATION_SOURCE_VARIANT_OTHER_PRODUCT",
+  400,
+  "El origen de una variante bajo pedido tiene que ser una variante del mismo producto.",
+);
+
+const SOURCE_VARIANT_SELF_ERROR = appError(
+  "VALIDATION_SOURCE_VARIANT_SELF",
+  400,
+  "Una variante no puede ser su propio origen.",
+);
+
+const SOURCE_VARIANT_PRODUCT_ARCHIVED_ERROR = appError(
+  "VALIDATION_SOURCE_VARIANT_PRODUCT_ARCHIVED",
+  400,
+  "El producto de la variante de origen está archivado.",
+);
+
+/**
+ * WP-C08b + WP-C08m (RN-CAT-06). El origen de una variante bajo pedido tiene que existir bajo RLS
+ * (si no, 404, con la misma respuesta para uno inexistente y uno de otro tenant), ser del MISMO
+ * producto (un producto es un solo líquido), no ser la propia variante y estar en un producto
+ * que no esté archivado. Solo se mira cuando el pedido fija un origen: editar el resto de una
+ * variante de un producto archivado no pasa por acá.
+ *
+ * **El tipo de la variante de origen no se valida**: José dijo «sealed con size_ml no nulo»,
+ * que contradice RN-FRA-07 (el decant se sirve de un lote `bulk`) y el CHECK de 0003; queda
+ * como estaba hasta que lo confirme (RN-CAT-06, WP-C08m).
+ */
+async function assertSourceVariantUsable(
   tx: TenantTx,
   sourceVariantId: string | null | undefined,
+  owner: { readonly productId: string; readonly variantId?: string },
 ): Promise<void> {
   if (sourceVariantId == null) return;
-  if (!(await repo.findVariantRow(tx, sourceVariantId))) throw toTRPCError(NOT_FOUND_ERROR);
+  const source = await repo.findVariantRow(tx, sourceVariantId);
+  if (!source) throw toTRPCError(NOT_FOUND_ERROR);
+  if (source.id === owner.variantId) throw toTRPCError(SOURCE_VARIANT_SELF_ERROR);
+  if (source.product_id !== owner.productId) throw toTRPCError(SOURCE_VARIANT_OTHER_PRODUCT_ERROR);
+  const product = await repo.findProductRow(tx, { id: owner.productId });
+  if (product?.status === "archived") throw toTRPCError(SOURCE_VARIANT_PRODUCT_ARCHIVED_ERROR);
 }
 
 export async function createProduct(
@@ -744,7 +779,7 @@ export async function createVariant(
     const product = await repo.findProductRow(tx, { id: input.productId });
     if (!product) throw toTRPCError(NOT_FOUND_ERROR);
     const isSerialized = await resolveIsSerialized(tx, product, input);
-    await assertSourceVariantExists(tx, input.sourceVariantId);
+    await assertSourceVariantUsable(tx, input.sourceVariantId, { productId: product.id });
 
     // El índice único parcial de 0028 lo impone la base; esto adelanta el
     // mensaje, en vez de dejar que llegue como un error interno.
@@ -817,7 +852,10 @@ export async function updateVariant(
   return withTenantTx(db, ctx, async (tx) => {
     const existing = await repo.findVariantRow(tx, input.id);
     if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
-    await assertSourceVariantExists(tx, input.sourceVariantId);
+    await assertSourceVariantUsable(tx, input.sourceVariantId, {
+      productId: existing.product_id,
+      variantId: existing.id,
+    });
 
     // WP-C08f. Solo si el pedido toca `isSerialized`: el producto no se lee de más.
     let isSerialized: boolean | undefined;
