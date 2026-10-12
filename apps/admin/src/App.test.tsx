@@ -97,6 +97,18 @@ describe("docs/security-spec.md §3.4 · permisos de presentación (WP-E04)", ()
     await waitFor(() => expect(window.location.pathname).toBe("/"));
   });
 
+  it("sin market.sourcing:read no ve el enlace de sourcing y una URL directa vuelve al inicio (WP-C16)", async () => {
+    vi.mocked(api.current).mockResolvedValue({
+      profile: { ...profile, mfaStatus: "satisfied" },
+      permissions: ["catalog.product:read"],
+    });
+    renderApp("/sourcing");
+
+    expect(await screen.findByRole("heading", { name: "Buen día, Vendedor" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Sourcing" })).toBeNull();
+    await waitFor(() => expect(window.location.pathname).toBe("/"));
+  });
+
   it("con permiso de lectura del catálogo ve el enlace de categorías", async () => {
     vi.mocked(api.current).mockResolvedValue({
       profile: { ...profile, mfaStatus: "satisfied" },

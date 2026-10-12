@@ -430,6 +430,12 @@ La pantalla que más se va a usar. Órdenes pendientes **agrupadas por frasco de
 
 Al cargar flete y despacho, la tabla recalcula el costo puesto y el margen proyectado **en vivo**, antes de confirmar. Es el momento en que se detecta que una compra no cerraba, y hay que verlo antes de contabilizarla, no después.
 
+### 8.8 Admin puede ejecutar `packages/domain` en el navegador
+
+**Precedente: WP-C16 (vista previa de escenarios de sourcing), anticipado por la trampa de WP-E09** ("reusá `allocateFreight` y `computeLandedCost` de `packages/domain` para la vista previa en el navegador; el dominio es puro y puede ejecutarse allí" — `docs/runbooks/prompts-playbook.md`, Sesión E09). No había quedado anotado en ningún documento normativo hasta la revisión cruzada de WP-C16; esta sección lo registra.
+
+`apps/admin` puede depender de `@joda/domain` (no solo de `@joda/contracts`) para recalcular costo puesto, margen y cualquier otra proyección puramente aritmética **en vivo, antes de confirmar** — el mismo patrón de 8.7. El dominio no hace I/O, así que ejecutarlo en el cliente no abre ningún camino de escritura nuevo; el servidor sigue siendo la única fuente de verdad y recalcula al confirmar. Esto NO autoriza que `apps/admin` reimplemente una regla de negocio por su cuenta — siempre reusa la función exportada por `packages/domain`, nunca una copia.
+
 ---
 
 ## 9. Formularios
@@ -472,6 +478,7 @@ Reglas: validación al desenfocar y luego en cada cambio; el botón de envío no
 - [ ] Framer Motion fuera del camino crítico del storefront.
 - [ ] Formateo de guaraníes, cantidades y fechas solo desde `packages/ui/format`.
 - [ ] Los formularios usan los esquemas de `packages/contracts`, nunca una copia.
+- [ ] Un cálculo en vivo en el admin reusa la función de `packages/domain`, nunca una reimplementación.
 - [ ] El stock se muestra como estado, nunca como cantidad exacta.
 - [ ] Datos estructurados coincidentes con lo que ve el usuario.
 - [ ] Facetas combinadas siempre `noindex` con canónica a la ruta base.

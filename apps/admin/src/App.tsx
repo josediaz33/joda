@@ -12,6 +12,7 @@ const Home = lazy(() => import("./routes/Home"));
 const CatalogPreview = lazy(() => import("./routes/CatalogPreview"));
 const Categories = lazy(() => import("./routes/Categories"));
 const Accounting = lazy(() => import("./routes/Accounting"));
+const Sourcing = lazy(() => import("./routes/Sourcing"));
 
 function Loading() {
   return <main className="p-8 text-text-secondary">Cargando…</main>;
@@ -74,6 +75,9 @@ function SessionBoundary() {
             <Can perform="accounting.journal:read">
               <Link to="/contabilidad">Contabilidad</Link>
             </Can>
+            <Can perform="market.sourcing:read">
+              <Link to="/sourcing">Sourcing</Link>
+            </Can>
           </nav>
           <div className="flex items-center gap-3 text-sm">
             <span className="hidden text-text-secondary sm:inline">
@@ -119,6 +123,14 @@ function SessionBoundary() {
             element={
               <Guard perform="accounting.journal:read">
                 <Accounting />
+              </Guard>
+            }
+          />
+          <Route
+            path="/sourcing"
+            element={
+              <Guard perform="market.sourcing:read">
+                <Sourcing />
               </Guard>
             }
           />

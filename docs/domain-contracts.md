@@ -539,14 +539,15 @@ Esto permite refactorizar el esquema sin tocar el dominio, y viceversa.
 
 ## 8. Obligaciones de prueba
 
-| Módulo                            | Cobertura mínima | Por qué                                  |
-| --------------------------------- | ---------------- | ---------------------------------------- |
-| `shared/money`, `shared/quantity` | 100%             | Todo lo demás depende de esto            |
-| `tax/vat`                         | 100%             | Un error acá rechaza documentos fiscales |
-| `inventory/costing`               | 100%             | Un error acá descuadra la contabilidad   |
-| `decant/*`                        | 100%             | Es la ventaja competitiva del negocio    |
-| `procurement/freight`             | 100%             | Determina el margen de todo              |
-| Resto del paquete                 | ≥ 90%            |                                          |
+| Módulo                            | Cobertura mínima | Por qué                                                           |
+| --------------------------------- | ---------------- | ----------------------------------------------------------------- |
+| `shared/money`, `shared/quantity` | 100%             | Todo lo demás depende de esto                                     |
+| `tax/vat`                         | 100%             | Un error acá rechaza documentos fiscales                          |
+| `inventory/costing`               | 100%             | Un error acá descuadra la contabilidad                            |
+| `decant/*`                        | 100%             | Es la ventaja competitiva del negocio                             |
+| `procurement/freight`             | 100%             | Determina el margen de todo                                       |
+| `sourcing/scenario`               | 100%             | Decide qué compra se aprueba, antes de gastar un guaraní (WP-C16) |
+| Resto del paquete                 | ≥ 90%            |                                                                   |
 
 Cada test referencia la regla que verifica:
 

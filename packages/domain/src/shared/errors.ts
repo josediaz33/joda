@@ -142,3 +142,10 @@ export class InvalidDepositInputError extends DomainError {
     super("INVALID_DEPOSIT_INPUT", message);
   }
 }
+
+/** projectScenarioLines() (sourcing/scenario.ts, RN-SRC-02) con un projectedPricePyg cero o negativo: no hay margen que calcular, argumento fuera de rango. */
+export class InvalidSourcingInputError extends DomainError {
+  constructor(message: string) {
+    super("INVALID_SOURCING_INPUT", message);
+  }
+}

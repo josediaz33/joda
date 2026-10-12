@@ -170,6 +170,97 @@ Se generan dos filas en `movement_cost_allocations`. El COGS de la venta es 4.35
 
 ---
 
+## RN-SRC — Sourcing (WP-C16)
+
+**Qué decidió José explícitamente, 2026-10-09** (las tres preguntas abiertas de WP-C16, ninguna cubierta hasta ahora en este documento): el margen se calcula neto de IVA, igual que RN-FRA-04 (RN-SRC-02); el arancel se modela ad valorem, cargado como `other` de `LandedCostComponents` (RN-SRC-01); `projected_landed_pyg` y `projected_price_pyg` son por unidad, no el total de la línea (RN-SRC-02).
+
+**Qué decidió José explícitamente, 2026-10-11** (segunda revisión cruzada): el criterio de "mejor opción" de `compareScenarioLines` es la mayor **ganancia absoluta** por unidad, no el mayor margen porcentual — el margen % se muestra como dato auxiliar, pero no decide (RN-SRC-04).
+
+**Qué quedó como decisión técnica propia, no confirmada palabra por palabra con José** (corrección de la revisión cruzada de WP-C16, §7: una versión anterior de este encabezado las presentaba juntas, sin distinguir): que un precio proyectado inválido es excepción y no `Result` (RN-SRC-02, por el mismo precedente que `fxRateToPyg` en RN-COS-01, `procurement/landedCost.ts`); y el redondeo a milésimas del margen (RN-SRC-02).
+
+### RN-SRC-01 · Costo puesto proyectado de una línea
+
+Un escenario (`sourcing_scenarios`) no recibe `customs_minor` separado como una recepción (RN-COS-01): sus tres supuestos son fx, flete y aranceles (RF-SRC-01). El arancel se modela **ad valorem** — un porcentaje sobre el valor de proveedor de la línea, nunca un monto fijo — porque es como en la práctica se cotiza (una tasa, no una cifra en guaraníes que alguien ya calculó):
+
+```
+valor_línea      = unit_price × qty                         (moneda extranjera de la línea)
+arancel_línea    = valor_línea × tasa_arancel                (misma moneda; Percentage, rango [0, 1])
+flete_línea      = allocateFreight(flete_total, método, líneas)[línea]   (RN-COS-02, sin cambios)
+costo_puesto_línea   = computeLandedCost({ supplierPrice: valor_línea, freight: flete_línea, other: arancel_línea }, fx_asumido_línea)
+costo_puesto_unitario = computeUnitLandedCost(costo_puesto_línea, qty)
+```
+
+Reusa `procurement/landedCost.ts` y `procurement/freight.ts` de WP-A05 sin duplicarlos — `other` ya está documentado ahí para "impuestos, aranceles y comisiones". El flete se prorratea entre TODAS las líneas del escenario con el mismo algoritmo de RN-COS-02 (mayor resto, sin caso especial); el arancel no se prorratea porque ya es proporcional al valor de cada línea por construcción.
+
+**Precondición heredada de WP-A05 (limitación conocida, `GLOSARIO.md` "Flete prorrateado"):** `flete_total` tiene que venir ya expresado en la moneda de las líneas. Si no coincide, `computeLandedCost` lanza `CurrencyMismatchError` al sumar — no hay conversión implícita, igual que en una recepción real.
+
+**Ejemplo verificado.** Una línea de un reloj importado, fx asumido 7.300, arancel 10%:
+
+| Concepto                     | USD        | Gs. (fx 7.300) |
+| ---------------------------- | ---------- | -------------- |
+| Precio proveedor (qty 1)     | 300,00     | —              |
+| Flete asignado a la línea    | 20,00      | —              |
+| Arancel (10% de 300,00)      | 30,00      | —              |
+| **Costo puesto de la línea** | **350,00** | **2.555.000**  |
+
+Con `qty = 1`, el costo puesto unitario es el mismo: **Gs. 2.555.000/unidad**.
+
+### RN-SRC-02 · Margen proyectado, neto de IVA
+
+`sourcing_scenario_lines` no tiene columna `vat_rate` (a diferencia de `product_variants`): la tasa entra como parámetro de la función de dominio, nunca se persiste en la línea. El margen se calcula **neto de IVA**, con el mismo criterio que el margen del decant (RN-FRA-04, "Precio de venta Gs. 245.000, IVA 22.273 → margen 41,1%") — reusa `tax/vat.ts::taxBase(gross, rate)`, no reimplementa la extracción del IVA:
+
+```
+precio_neto_unitario = taxBase(projected_price_pyg, vat_rate)     (RN-IVA-01/04)
+margen_pct            = round3((precio_neto_unitario − costo_puesto_unitario) / precio_neto_unitario × 100)
+```
+
+`projected_landed_pyg` y `projected_price_pyg` (`sourcing_scenario_lines`) son **por unidad**, no el total de la línea — comparables directamente entre sí y con el precio de catálogo, sin que `qty` distorsione la comparación entre escenarios A/B.
+
+El redondeo a 3 decimales (`round3`, nuevo y exclusivo de este módulo) **no es** `round_pyg`: `round_pyg` redondea guaraníes enteros (RN-DIN-02) y un porcentaje no es un importe en guaraníes. `round3` usa el mismo criterio de desempate — media unidad hacia +infinito — por consistencia con el resto del dominio, no porque la regla de Gs. se extienda a esto.
+
+**Precio o costo que no permite calcular un margen (precio proyectado cero o negativo) es un argumento fuera de rango** (§4.2), no un fallo que el negocio contemple: lanza excepción, igual que un `fxRateToPyg` inválido en RN-COS-01.
+
+**Ejemplo verificado (continúa RN-SRC-01).** Costo puesto unitario Gs. 2.555.000, precio de venta proyectado Gs. 3.500.000 con IVA 10%:
+
+```
+IVA           = vatFromGross(3.500.000, iva_10) = round_pyg(3.500.000 / 11) = 318.182
+precio_neto   = 3.500.000 − 318.182 = 3.181.818
+margen        = (3.181.818 − 2.555.000) / 3.181.818 × 100 ≈ 19,700%
+```
+
+### RN-SRC-03 · Alerta de margen bajo umbral configurable
+
+El umbral (RF-SRC-03) es un parámetro de la función de comparación, nunca una constante en el código — no hay columna ni tabla que lo persista todavía (sin fila en el esquema de Bloque B para esto). Se modela como `Percentage` (rango `[0, 1]`, igual que `waste_factor`): nadie configura "alertar por debajo de −10%" o "por encima de 100%", así que el rango de `Percentage` es la restricción correcta, no una coincidencia de tipo.
+
+```
+bajo_umbral = margen_pct < round3(umbral.value × 100)
+```
+
+El `round3` del umbral **no es cosmético**: `0,07 × 100` da `7.000000000000001` en punto flotante (JavaScript), así que un margen que iguala EXACTAMENTE el umbral (7,000%) daba `belowThreshold = true` sin redondearlo a la misma grilla de milésimas que `marginPct`. Bug encontrado en la revisión cruzada de WP-C16, con test de regresión en `scenario.test.ts`.
+
+**Siguiendo el ejemplo de RN-SRC-02:** con un umbral del 25%, un margen de 19,7% dispara la alerta.
+
+### RN-SRC-04 · Criterio de "mejor opción" al comparar: ganancia absoluta
+
+`compareScenarioLines` elige, dentro de cada variante, la línea con mayor **ganancia por unidad** (`profitPyg = precio_neto_unitario − costo_puesto_unitario`, el mismo numerador de RN-SRC-02 antes de dividir por el precio) — no la de mayor margen porcentual. `marginPct` sigue siendo parte de la proyección y se muestra en la comparación, pero como dato **auxiliar**: no decide cuál opción gana.
+
+**Por qué no el margen %:** dos alternativas de precio o cantidad muy distintos pueden tener el margen % y la ganancia absoluta apuntando a líneas diferentes — la plata entra en guaraníes, no en puntos porcentuales, y una línea con margen alto sobre un monto chico puede dejar menos plata que una de margen bajo sobre un monto grande.
+
+**Ejemplo que distingue los dos criterios.** Dos líneas de distinta escala, sin flete ni arancel:
+
+| Línea                        | Costo puesto | Precio neto | Ganancia   | Margen % |
+| ---------------------------- | ------------ | ----------- | ---------- | -------- |
+| Margen alto, ganancia chica  | 95           | 100         | **5**      | 5%       |
+| Margen bajo, ganancia grande | 990.000      | 1.000.000   | **10.000** | 1%       |
+
+Por margen % ganaría la primera (5% > 1%); por ganancia absoluta (RN-SRC-04) gana la segunda — es la que efectivamente deja más plata. `compareScenarioLines` devuelve la segunda.
+
+El desempate entre dos líneas con ganancia EXACTAMENTE igual es determinístico: gana la primera vista, por orden de entrada.
+
+**Fuera de alcance de WP-C16 (RF-SRC-04/05, anotado para WP-C16b).** Que un escenario no afecte inventario, caja ni cuentas por pagar es una garantía arquitectónica, no una regla con fórmula: `packages/domain` no tiene I/O, así que ninguna función de este módulo puede escribir en el ledger aunque quisiera (RF-SRC-04). Convertir un escenario en orden de compra (RF-SRC-05) es una escritura — pertenece a `apps/api`, fuera del alcance de `packages/domain` y de este WP; ver la fila de WP-C16b en `docs/backlog.md`.
+
+---
+
 ## RN-CAT — Catálogo
 
 ### RN-CAT-01 · El BOM solo se define sobre una variante fraccionada

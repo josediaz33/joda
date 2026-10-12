@@ -36,4 +36,4 @@ enteras. El redondeo vive solo en `shared/money.ts`. IVA con impuesto incluido:
 
 100% de líneas y ramas en `shared/money`, `shared/quantity`, `tax/vat`,
 `inventory/costing`, `inventory/allocation`, `decant/*`, `procurement/freight`,
-`accounting/posting`. Cada `describe` referencia su regla: `RN-XXX-nn`.
+`sourcing/*`, `accounting/posting`. Cada `describe` referencia su regla: `RN-XXX-nn`.

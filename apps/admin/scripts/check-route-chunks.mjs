@@ -24,6 +24,7 @@ for (const route of [
   "CatalogPreview",
   "Categories",
   "Accounting",
+  "Sourcing",
 ]) {
   const key = `src/routes/${route}.tsx`;
   if (

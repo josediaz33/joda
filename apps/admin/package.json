@@ -34,6 +34,7 @@
     "@fontsource/ibm-plex-sans": "5.3.0",
     "@hookform/resolvers": "5.9.1",
     "@joda/contracts": "workspace:*",
+    "@joda/domain": "workspace:*",
     "@joda/ui": "workspace:*",
     "@tanstack/react-query": "5.104.0",
     "@trpc/client": "11.19.0",
