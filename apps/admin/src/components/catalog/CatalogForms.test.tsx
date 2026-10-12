@@ -412,6 +412,163 @@ describe("RN-SER · un reloj sin elegir si lleva serie no se puede guardar (WP-E
   });
 });
 
+// WP-E05e. Cambiar `requiresSerial` de un reloj se propaga a todas sus variantes (WP-C08h):
+// el formulario lo manda solo si el operador lo cambió, y avisa antes de guardar.
+describe("RN-SER-02 · el formulario del reloj manda requiresSerial solo si se tocó y avisa que se propaga (WP-E05e)", () => {
+  const WATCH_ID = "22222222-2222-4222-a222-222222222299";
+
+  function watchProduct(variantCount: number) {
+    return {
+      id: WATCH_ID,
+      kind: "watch",
+      slug: "submariner",
+      name: "Submariner",
+      description: null,
+      brandId: null,
+      brandName: null,
+      categoryIds: [categoryA],
+      primaryCategoryId: categoryA,
+      tagIds: [],
+      status: "active",
+      publishedAt: null,
+      seo: {},
+      facets: {},
+      variants: Array.from({ length: variantCount }, (_, index) => ({ id: `variante-${index}` })),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      watchDetails: {
+        movement: "automatic",
+        caseMaterial: "acero",
+        caseDiameterMm: 40,
+        waterResistanceM: 300,
+        strapMaterial: null,
+        crystal: null,
+        warrantyMonths: 12,
+        requiresSerial: true,
+      },
+    } as unknown as Parameters<typeof ProductEditor>[0]["product"];
+  }
+
+  function renderWatchEditor(variantCount: number) {
+    vi.mocked(api.listCategories).mockResolvedValue({
+      items: [{ id: categoryA, path: "relojes", name: "Relojes" }],
+      nextCursor: null,
+    } as Awaited<ReturnType<typeof api.listCategories>>);
+    vi.mocked(api.updateProduct).mockResolvedValue({ id: "saved" } as Awaited<
+      ReturnType<typeof api.updateProduct>
+    >);
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ProductEditor
+          kind="watch"
+          product={watchProduct(variantCount)}
+          onSaved={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+  }
+
+  function sentWatchDetails() {
+    return vi.mocked(api.updateProduct).mock.calls[0]?.[0].watchDetails;
+  }
+
+  it("abrir el reloj, que otra persona cambie requiresSerial, corregir solo el nombre y guardar no manda el campo: no lo revierte", async () => {
+    const user = userEvent.setup();
+    renderWatchEditor(2);
+
+    // El servidor ya tiene otro valor (lo cambió otra persona); este formulario cargó `true`.
+    await user.clear(await screen.findByLabelText("Nombre *"));
+    await user.type(screen.getByLabelText("Nombre *"), "Submariner Date");
+    await user.click(screen.getByRole("button", { name: "Guardar cambios" }));
+
+    await waitFor(() => expect(api.updateProduct).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(api.updateProduct).mock.calls[0]?.[0]).toMatchObject({
+      id: WATCH_ID,
+      name: "Submariner Date",
+    });
+    expect(sentWatchDetails()).toBeDefined();
+    expect(sentWatchDetails()).not.toHaveProperty("requiresSerial");
+    // El resto del detalle sí viaja.
+    expect(sentWatchDetails()).toMatchObject({ caseMaterial: "acero", warrantyMonths: 12 });
+  });
+
+  it("cambiar el campo lo manda, con el valor nuevo", async () => {
+    const user = userEvent.setup();
+    renderWatchEditor(2);
+
+    await user.click(await screen.findByRole("radio", { name: "No" }));
+    await user.click(screen.getByRole("button", { name: "Guardar cambios" }));
+
+    await waitFor(() => expect(api.updateProduct).toHaveBeenCalledTimes(1));
+    expect(sentWatchDetails()).toMatchObject({ requiresSerial: false });
+  });
+
+  it("cambiarlo y volver al valor que se cargó es no haberlo tocado: no se manda", async () => {
+    const user = userEvent.setup();
+    renderWatchEditor(2);
+
+    await user.click(await screen.findByRole("radio", { name: "No" }));
+    await user.click(screen.getByRole("radio", { name: "Sí" }));
+    await user.click(screen.getByRole("button", { name: "Guardar cambios" }));
+
+    await waitFor(() => expect(api.updateProduct).toHaveBeenCalledTimes(1));
+    expect(sentWatchDetails()).not.toHaveProperty("requiresSerial");
+  });
+
+  it("antes de guardar, al cambiar el campo avisa a cuántas variantes llega y por qué la API puede rechazarlo, y el aviso se va si se vuelve al valor cargado", async () => {
+    const user = userEvent.setup();
+    renderWatchEditor(3);
+
+    await user.click(await screen.findByRole("radio", { name: "No" }));
+    const notice = screen.getByRole("status");
+    expect(notice.textContent).toBe(
+      "Las 3 variantes de este reloj dejan de llevar número de serie al guardar. Si alguna ya tiene unidades registradas, el guardado se rechaza y no cambia nada.",
+    );
+    expect(api.updateProduct).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("radio", { name: "Sí" }));
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+
+  it("el aviso concuerda con una sola variante y con el cambio a «Sí»", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.listCategories).mockResolvedValue({
+      items: [{ id: categoryA, path: "relojes", name: "Relojes" }],
+      nextCursor: null,
+    } as Awaited<ReturnType<typeof api.listCategories>>);
+    const sinSerie = watchProduct(1) as unknown as {
+      watchDetails: { requiresSerial: boolean };
+    };
+    sinSerie.watchDetails.requiresSerial = false;
+    render(
+      <QueryClientProvider client={new QueryClient()}>
+        <ProductEditor
+          kind="watch"
+          product={sinSerie as unknown as Parameters<typeof ProductEditor>[0]["product"]}
+          onSaved={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </QueryClientProvider>,
+    );
+
+    await user.click(await screen.findByRole("radio", { name: "Sí" }));
+
+    expect(screen.getByRole("status").textContent).toBe(
+      "La variante de este reloj pasa a llevar número de serie al guardar. Si alguna se mide en ml, el guardado se rechaza y no cambia nada.",
+    );
+  });
+
+  it("un reloj sin variantes no tiene nada que propagar: no avisa", async () => {
+    const user = userEvent.setup();
+    renderWatchEditor(0);
+
+    await user.click(await screen.findByRole("radio", { name: "No" }));
+
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+});
+
 describe("RN-SER-02 · solo una variante en unit se serializa (WP-E05)", () => {
   it("no ofrece 'Requiere serie' al cambiar a granel y no lo envía", async () => {
     vi.mocked(api.createVariant).mockResolvedValue({ id: "saved" } as Awaited<
