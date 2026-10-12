@@ -18,6 +18,8 @@ const pygInput = z.string().regex(/^(0|[1-9]\d{0,14})$/);
 const wholeQuantity = z.string().regex(/^[1-9]\d{0,5}$/);
 
 export const MAX_SALE_ORDER_LINES = 100;
+export const MAX_SALE_ORDER_NOTES_LENGTH = 1000;
+export const MAX_TRANSITION_REASON_LENGTH = 500;
 
 const saleOrderStatus = z.enum([
   "draft",
@@ -39,6 +41,9 @@ export const saleOrderLineSchema = z
     qty: z.string(),
     uom: z.enum(["unit", "ml"]),
     unitPricePyg: pygAmountSchema,
+    /** La parte del descuento del pedido que le toca a la línea; la suma de todas es el descuento del pedido. */
+    discountPyg: pygAmountSchema,
+    /** Lo que el cliente paga por la línea: `qty × unitPricePyg − discountPyg`. Es la base del IVA y del margen. */
     lineTotalPyg: pygAmountSchema,
     vatRate: z.enum(["iva_10", "iva_5", "exenta"]),
     vatPyg: pygAmountSchema,
@@ -97,7 +102,7 @@ export const createSaleOrderInput = z
     customerId: uuid.nullable().optional(),
     discountPyg: pygInput.optional(),
     totalPyg: pygInput.optional(),
-    notes: z.string().trim().min(1).nullable().optional(),
+    notes: z.string().trim().min(1).max(MAX_SALE_ORDER_NOTES_LENGTH).nullable().optional(),
     lines: z
       .array(
         z
@@ -124,13 +129,14 @@ export const listSaleOrdersOutput = paginatedOutputSchema(saleOrderSchema);
 
 /**
  * Solo las transiciones que no tocan inventario ni cobro (RN-VTA-02): pasar a
- * `awaiting_payment` y cancelar. Cobrar es de WP-C19; devolver, de WP-C21.
+ * `awaiting_payment` y cancelar (un pedido con órdenes de fraccionamiento sin
+ * cancelar no se cancela). Cobrar es de WP-C19; devolver, de WP-C21.
  */
 export const transitionSaleOrderInput = z
   .object({
     id: uuid,
     toStatus: z.enum(["awaiting_payment", "cancelled"]),
-    reason: z.string().trim().min(1).nullable().optional(),
+    reason: z.string().trim().min(1).max(MAX_TRANSITION_REASON_LENGTH).nullable().optional(),
   })
   .strict();
 export type TransitionSaleOrderInput = z.infer<typeof transitionSaleOrderInput>;

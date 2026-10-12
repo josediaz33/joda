@@ -220,3 +220,85 @@ describe("breakdownDocument — entrada inválida", () => {
     expect(() => breakdownDocument(lines)).toThrow(CurrencyMismatchError);
   });
 });
+
+// Hallazgo de la revisión de WP-C17: la diferencia de RN-IVA-03 iba SIEMPRE a la
+// última línea de la tasa, aunque no pudiera absorberla. Con una línea de
+// importe cero (un regalo) quedaba con IVA ≠ 0, y el CHECK `vat_pyg >= 0` de
+// `sale_order_lines` rechazaba un pedido legítimo.
+describe("RN-IVA-03 · la diferencia va a la última línea de la tasa que puede absorberla", () => {
+  it("una última línea de importe cero no recibe la diferencia: el IVA de un regalo es cero y la diferencia pasa a la línea anterior", () => {
+    const lines = [
+      { gross: Money.pyg(99_995n), rate: "iva_10" as const },
+      { gross: Money.pyg(99_995n), rate: "iva_10" as const },
+      { gross: Money.pyg(0n), rate: "iva_10" as const },
+    ];
+
+    const result = breakdownDocument(lines);
+
+    // 99.995 / 11 = 9.090,45 → 9.090 por línea (18.180); el documento, 199.990 / 11 = 18.180,9 → 18.181.
+    expect(result.lines.map((l) => l.vat.minor)).toEqual([9_090n, 9_091n, 0n]);
+    expect(result.lines.map((l) => l.roundingAdjustment.minor)).toEqual([0n, 1n, 0n]);
+    expect(result.totalVat.minor).toBe(18_181n);
+  });
+
+  it("una diferencia negativa tampoco deja una línea de importe cero con IVA negativo", () => {
+    const lines = [
+      { gross: Money.pyg(100_008n), rate: "iva_10" as const },
+      { gross: Money.pyg(100_008n), rate: "iva_10" as const },
+      { gross: Money.pyg(100_008n), rate: "iva_10" as const },
+      { gross: Money.pyg(0n), rate: "iva_10" as const },
+    ];
+
+    const result = breakdownDocument(lines);
+
+    // 100.008 / 11 = 9.091,6 → 9.092 por línea (27.276); el documento, 300.024 / 11 = 27.274,9 → 27.275.
+    expect(result.lines.map((l) => l.vat.minor)).toEqual([9_092n, 9_092n, 9_091n, 0n]);
+    expect(result.lines.map((l) => l.roundingAdjustment.minor)).toEqual([0n, 0n, -1n, 0n]);
+    expect(result.totalVat.minor).toBe(27_275n);
+  });
+
+  it("una línea final chica que no alcanza para la diferencia deja el resto a la anterior, y el IVA nunca supera el importe", () => {
+    // Cuatro líneas de Gs. 100.008 y una de Gs. 1 al 10%: 4 × 9.092 = 36.368 y la de Gs. 1 da 0.
+    // El documento, 400.033 / 11 = 36.366,6 → 36.367: sobran −1, y la de Gs. 1 (IVA 0) no puede restar.
+    const lines = [
+      { gross: Money.pyg(100_008n), rate: "iva_10" as const },
+      { gross: Money.pyg(100_008n), rate: "iva_10" as const },
+      { gross: Money.pyg(100_008n), rate: "iva_10" as const },
+      { gross: Money.pyg(100_008n), rate: "iva_10" as const },
+      { gross: Money.pyg(1n), rate: "iva_10" as const },
+    ];
+
+    const result = breakdownDocument(lines);
+
+    expect(result.lines.map((l) => l.vat.minor)).toEqual([9_092n, 9_092n, 9_092n, 9_091n, 0n]);
+    expect(result.totalVat.minor).toBe(36_367n);
+  });
+
+  it("una diferencia mayor que lo que una línea puede absorber se reparte hacia atrás: la última se lleva lo que le cabe y el resto, la anterior", () => {
+    // Dos líneas de Gs. 3 y una de Gs. 1 al 10%: el IVA de cada una es 0 y el del documento, 7 / 11 = 0,63 → 1.
+    // Sobra +1: la última (Gs. 1) absorbe hasta su importe, o sea 1.
+    const small = [
+      { gross: Money.pyg(3n), rate: "iva_10" as const },
+      { gross: Money.pyg(3n), rate: "iva_10" as const },
+      { gross: Money.pyg(1n), rate: "iva_10" as const },
+    ];
+    // Cuatro líneas de Gs. 6 y una de Gs. 0: 6 / 11 = 0,55 → 1 por línea (4); el documento, 24 / 11 = 2,18 → 2: sobran −2.
+    // La de Gs. 0 no puede restar; la anterior resta 1 (llega a 0) y la anterior a esa, 1.
+    const shrinking = [
+      { gross: Money.pyg(6n), rate: "iva_10" as const },
+      { gross: Money.pyg(6n), rate: "iva_10" as const },
+      { gross: Money.pyg(6n), rate: "iva_10" as const },
+      { gross: Money.pyg(6n), rate: "iva_10" as const },
+      { gross: Money.pyg(0n), rate: "iva_10" as const },
+    ];
+
+    expect(breakdownDocument(small).lines.map((l) => l.vat.minor)).toEqual([0n, 0n, 1n]);
+    expect(breakdownDocument(shrinking).lines.map((l) => l.vat.minor)).toEqual([
+      1n,
+      1n,
+      0n,
+      0n,
+      0n,
+    ]);
+  });
+});

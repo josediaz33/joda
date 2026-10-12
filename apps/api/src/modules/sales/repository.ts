@@ -44,6 +44,16 @@ export const findSerialUnits = (tx: TenantTx, tenantId: string, ids: string[]) =
   });
 
 /**
+ * Órdenes de fraccionamiento del pedido que no están canceladas: pendientes, en
+ * curso o ejecutadas. Cancelar el pedido las dejaría colgadas de una venta que
+ * ya no va a ocurrir (RN-EST-03; WP-C13c es quien las cancela).
+ */
+export const countOpenDecantOrders = (tx: TenantTx, tenantId: string, saleOrderId: string) =>
+  tx.decant_work_orders.count({
+    where: { tenant_id: tenantId, sale_order_id: saleOrderId, status: { not: "cancelled" } },
+  });
+
+/**
  * Siguiente número de pedido del año, `VTA-2026-0001`. Toma un bloqueo de
  * asesoramiento por tenant hasta el final de la transacción: dos pedidos que
  * se crean a la vez no pueden leer el mismo máximo. Solo cuenta los códigos con

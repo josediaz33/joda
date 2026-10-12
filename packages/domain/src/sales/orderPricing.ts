@@ -11,10 +11,12 @@
 //     el IVA del envío queda como decisión pendiente del checkout (bloque G):
 //     `docs/backlog.md`, fila de WP-C17. `computeSaleOrderTotals` ya lo admite
 //     cuando se decida.
-//   · El descuento por línea (`sale_order_lines.discount_pyg` queda en cero) y
-//     cómo se CALCULA un descuento: no hay ninguna regla que lo cubra (ver la
+//   · Cómo se CALCULA un descuento: no hay ninguna regla que lo cubra (ver la
 //     nota al tope de `order.ts`). Entra uno solo, a nivel de pedido, ya
-//     resuelto desde afuera: es el `discount_pyg` de RN-VTA-01.
+//     resuelto desde afuera: es el `discount_pyg` de RN-VTA-01. Se devuelve
+//     repartido entre las líneas (`sale_order_lines.discount_pyg`) para que
+//     `line_total_pyg` sea lo que el cliente paga por cada una: es la base
+//     del margen por línea (`line_total_pyg − vat_pyg − cogs_pyg`).
 import { InvalidSaleOrderInputError } from "../shared/errors.js";
 import { Money } from "../shared/money.js";
 import type { Quantity } from "../shared/quantity.js";
@@ -41,9 +43,11 @@ export interface SaleOrderLineDraft {
 }
 
 export interface PricedSaleOrderLine {
-  /** `qty × unitPrice`, antes del descuento del pedido: lo que se guarda en `sale_order_lines.line_total_pyg`. */
+  /** La parte del descuento del pedido que le toca a esta línea (`sale_order_lines.discount_pyg`). La suma de todas es el descuento del pedido. */
+  readonly discountPyg: Money;
+  /** Lo que el cliente paga por la línea: `qty × unitPrice − discountPyg` (`sale_order_lines.line_total_pyg`). La suma de todas es `subtotal − descuento`. */
   readonly lineTotalPyg: Money;
-  /** IVA contenido en lo que el cliente paga por esta línea, ya con el descuento y con el ajuste de redondeo de RN-IVA-03. */
+  /** IVA contenido en `lineTotalPyg`, con el ajuste de redondeo de RN-IVA-03. Siempre entre 0 y `lineTotalPyg`. */
   readonly vatPyg: Money;
 }
 
@@ -95,7 +99,8 @@ function allocateDiscount(lineTotals: readonly Money[], discount: Money, subtota
  * RN-IVA-02/03: el IVA se resuelve a nivel de documento. Cada línea se toma por
  * lo que realmente paga el cliente (importe menos su parte del descuento), se
  * desglosa con `breakdownDocument` y la diferencia de redondeo va a la última
- * línea de su tasa. El IVA de cada línea suma exactamente el del pedido.
+ * línea de su tasa que pueda absorberla (no a un regalo de importe cero). El IVA
+ * de cada línea suma exactamente el del pedido y nunca supera lo que se paga.
  *
  * Caso borde 19: un descuento que deja el total negativo se rechaza con
  * `NEGATIVE_TOTAL`, nunca se trunca a cero.
@@ -124,11 +129,9 @@ export function priceSaleOrder(input: {
   if (!totals.ok) return err(totals.error);
 
   const shares = allocateDiscount(lineTotals, input.discountPyg, subtotalPyg);
+  const paid = lineTotals.map((total, index) => total.minus(shares[index]!));
   const document = breakdownDocument(
-    input.lines.map((line, index) => ({
-      gross: lineTotals[index]!.minus(shares[index]!),
-      rate: line.vatRate,
-    })),
+    input.lines.map((line, index) => ({ gross: paid[index]!, rate: line.vatRate })),
   );
 
   const sumOf = (rate: VatRate, pick: "vat" | "gross"): Money =>
@@ -138,7 +141,8 @@ export function priceSaleOrder(input: {
 
   return ok({
     lines: document.lines.map((line, index) => ({
-      lineTotalPyg: lineTotals[index]!,
+      discountPyg: shares[index]!,
+      lineTotalPyg: paid[index]!,
       vatPyg: line.vat,
     })),
     subtotalPyg,

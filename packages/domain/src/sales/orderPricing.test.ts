@@ -19,7 +19,13 @@ describe("RN-VTA-01 · total_pyg = subtotal_pyg − discount_pyg + shipping_pyg,
     expect(result).toEqual({
       ok: true,
       value: {
-        lines: [{ lineTotalPyg: Money.pyg(490_000n), vatPyg: Money.pyg(44_545n) }],
+        lines: [
+          {
+            discountPyg: Money.pyg(0n),
+            lineTotalPyg: Money.pyg(490_000n),
+            vatPyg: Money.pyg(44_545n),
+          },
+        ],
         subtotalPyg: Money.pyg(490_000n),
         discountPyg: Money.pyg(0n),
         shippingPyg: Money.pyg(0n),
@@ -58,8 +64,16 @@ describe("RN-VTA-01 · total_pyg = subtotal_pyg − discount_pyg + shipping_pyg,
       ok: true,
       value: {
         lines: [
-          { lineTotalPyg: Money.pyg(100_000n), vatPyg: Money.pyg(0n) },
-          { lineTotalPyg: Money.pyg(50_000n), vatPyg: Money.pyg(0n) },
+          {
+            discountPyg: Money.pyg(100_000n),
+            lineTotalPyg: Money.pyg(0n),
+            vatPyg: Money.pyg(0n),
+          },
+          {
+            discountPyg: Money.pyg(50_000n),
+            lineTotalPyg: Money.pyg(0n),
+            vatPyg: Money.pyg(0n),
+          },
         ],
         subtotalPyg: Money.pyg(150_000n),
         discountPyg: Money.pyg(150_000n),
@@ -133,7 +147,7 @@ describe("RN-IVA-02/03 · el IVA se resuelve a nivel de documento y la diferenci
     });
   });
 
-  it("el descuento se reparte entre las líneas en proporción a su importe y el IVA sale de lo que se paga", () => {
+  it("el descuento se reparte entre las líneas en proporción a su importe: cada línea guarda su parte, lo que paga y el IVA de lo que paga", () => {
     const result = priceSaleOrder({
       lines: [line(100_000n, 1, "iva_10"), line(50_000n, 1, "iva_5")],
       discountPyg: Money.pyg(15_000n),
@@ -144,8 +158,16 @@ describe("RN-IVA-02/03 · el IVA se resuelve a nivel de documento y la diferenci
       ok: true,
       value: {
         lines: [
-          { lineTotalPyg: Money.pyg(100_000n), vatPyg: Money.pyg(8_182n) },
-          { lineTotalPyg: Money.pyg(50_000n), vatPyg: Money.pyg(2_143n) },
+          {
+            discountPyg: Money.pyg(10_000n),
+            lineTotalPyg: Money.pyg(90_000n),
+            vatPyg: Money.pyg(8_182n),
+          },
+          {
+            discountPyg: Money.pyg(5_000n),
+            lineTotalPyg: Money.pyg(45_000n),
+            vatPyg: Money.pyg(2_143n),
+          },
         ],
         vat10Pyg: Money.pyg(8_182n),
         vat5Pyg: Money.pyg(2_143n),
@@ -163,9 +185,68 @@ describe("RN-IVA-02/03 · el IVA se resuelve a nivel de documento y la diferenci
     expect(result).toMatchObject({
       ok: true,
       value: {
-        lines: [{ vatPyg: Money.pyg(9_085n) }, { vatPyg: Money.pyg(4_542n) }],
+        lines: [
+          {
+            discountPyg: Money.pyg(67n),
+            lineTotalPyg: Money.pyg(99_933n),
+            vatPyg: Money.pyg(9_085n),
+          },
+          {
+            discountPyg: Money.pyg(33n),
+            lineTotalPyg: Money.pyg(49_967n),
+            vatPyg: Money.pyg(4_542n),
+          },
+        ],
         totalPyg: Money.pyg(149_900n),
         vat10Pyg: Money.pyg(13_627n),
+      },
+    });
+  });
+});
+
+// Revisión de WP-C17: la diferencia de redondeo iba a la última línea aunque fuera
+// de importe cero, y el IVA de un regalo quedaba en 1 o en −1 (el CHECK
+// `vat_pyg >= 0` de `sale_order_lines` rechazaba el pedido).
+describe("RN-IVA-03 · una línea de importe cero (un regalo) no recibe la diferencia de redondeo", () => {
+  it("con un descuento que deja una diferencia positiva, la línea de cero queda con IVA cero y la diferencia va a la línea anterior", () => {
+    const result = priceSaleOrder({
+      lines: [line(100_000n), line(100_000n), line(0n)],
+      discountPyg: Money.pyg(10n),
+    });
+
+    // Partes del descuento 5, 5 y 0; se pagan 99.995, 99.995 y 0. El IVA de cada una es 9.090, 9.090 y 0 (18.180) y el del documento, 199.990 / 11, es 18.181.
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        lines: [
+          { lineTotalPyg: Money.pyg(99_995n), vatPyg: Money.pyg(9_090n) },
+          { lineTotalPyg: Money.pyg(99_995n), vatPyg: Money.pyg(9_091n) },
+          { lineTotalPyg: Money.pyg(0n), vatPyg: Money.pyg(0n) },
+        ],
+        totalPyg: Money.pyg(199_990n),
+        vat10Pyg: Money.pyg(18_181n),
+      },
+    });
+  });
+
+  it("sin descuento y con una diferencia negativa, la línea de cero no queda con IVA negativo", () => {
+    const result = priceSaleOrder({
+      lines: [line(100_008n), line(100_008n), line(100_008n), line(0n)],
+      discountPyg: noDiscount,
+    });
+
+    // 100.008 / 11 = 9.091,6 → 9.092 por línea (27.276); el documento, 300.024 / 11 = 27.274,9 → 27.275.
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        lines: [
+          { vatPyg: Money.pyg(9_092n) },
+          { vatPyg: Money.pyg(9_092n) },
+          { vatPyg: Money.pyg(9_091n) },
+          { lineTotalPyg: Money.pyg(0n), vatPyg: Money.pyg(0n) },
+        ],
+        totalPyg: Money.pyg(300_024n),
+        vat10Pyg: Money.pyg(27_275n),
       },
     });
   });
@@ -193,6 +274,35 @@ describe("RN-IVA-02 · el límite del subtotal es el del reparto exacto de Money
     expect(result).toEqual({
       ok: false,
       error: { code: "SUBTOTAL_TOO_LARGE", subtotalPyg: Money.pyg(9_000_000_001n) },
+    });
+  });
+
+  it("con un descuento en el subtotal del límite, el reparto sigue siendo exacto: las partes suman el descuento y ninguna supera su línea", () => {
+    const result = priceSaleOrder({
+      lines: [line(3_000_000_000n, 2), line(3_000_000_000n)],
+      discountPyg: Money.pyg(3_000_000_001n),
+    });
+
+    // Reparto por el mayor resto, calculado aparte: 2.000.000.000,67 y 1.000.000.000,33 → 2.000.000.001 y 1.000.000.000.
+    // Se pagan 3.999.999.999 y 2.000.000.000; su IVA suma 545.454.546 y el del documento (5.999.999.999 / 11) es 545.454.545.
+    expect(result).toMatchObject({
+      ok: true,
+      value: {
+        lines: [
+          {
+            discountPyg: Money.pyg(2_000_000_001n),
+            lineTotalPyg: Money.pyg(3_999_999_999n),
+            vatPyg: Money.pyg(363_636_364n),
+          },
+          {
+            discountPyg: Money.pyg(1_000_000_000n),
+            lineTotalPyg: Money.pyg(2_000_000_000n),
+            vatPyg: Money.pyg(181_818_181n),
+          },
+        ],
+        totalPyg: Money.pyg(5_999_999_999n),
+        vat10Pyg: Money.pyg(545_454_545n),
+      },
     });
   });
 });

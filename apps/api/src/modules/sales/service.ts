@@ -283,6 +283,7 @@ export async function createOrder(
           qty: line.qty,
           uom: variant.uom,
           unit_price_pyg: variant.price_pyg,
+          discount_pyg: pricedLine.discountPyg.minor,
           line_total_pyg: pricedLine.lineTotalPyg.minor,
           vat_rate: variant.vat_rate,
           vat_pyg: pricedLine.vatPyg.minor,
@@ -355,11 +356,15 @@ export async function removeOrder(db: PrismaClient, ctx: SalesContext, id: strin
 
 /**
  * Transiciones que no tocan inventario ni cobro (RN-VTA-02): `draft →
- * awaiting_payment` y `draft → cancelled`. La máquina de estados es la de
- * `packages/domain` (RN-EST-02); acá se agrega que cancelar un pedido que ya
- * espera el pago todavía no se puede: tendrá que soltar la reserva de stock
- * (WP-C18) y cancelar sus órdenes de fraccionamiento abiertas (WP-C13c), y sin
- * eso quedarían colgadas de un pedido cancelado.
+ * awaiting_payment` y la cancelación desde `draft` o `awaiting_payment`. La
+ * máquina de estados es la de `packages/domain` (RN-EST-02).
+ *
+ * Cancelar no se hace con órdenes de fraccionamiento sin cancelar: quedarían
+ * colgadas de un pedido que no va a ocurrir, y hoy `inventory.decant.plan`
+ * acepta una venta en cualquier estado (solo verifica que exista; C19 lo
+ * restringe a `awaiting_payment` o `paid`). Cancelar las órdenes es de
+ * WP-C13c. Tampoco suelta ninguna reserva: no hay (WP-C18); cuando C18 las
+ * cree, soltarlas al cancelar es suyo.
  */
 export async function transitionOrder(
   db: PrismaClient,
@@ -382,13 +387,15 @@ export async function transitionOrder(
         ),
       );
     }
-    if (before.status !== "draft" && result.value === "cancelled") {
+    if (
+      result.value === "cancelled" &&
+      (await repo.countOpenDecantOrders(tx, ctx.tenantId, input.id)) > 0
+    ) {
       throw toTRPCError(
         appError(
-          "CONFLICT_SALE_ORDER_CANCEL_UNAVAILABLE",
+          "CONFLICT_SALE_ORDER_HAS_DECANT_ORDERS",
           409,
-          "Un pedido que espera el pago todavía no se puede cancelar.",
-          { from: before.status, to: result.value },
+          "No se puede cancelar el pedido porque tiene órdenes de fraccionamiento sin cancelar.",
         ),
       );
     }

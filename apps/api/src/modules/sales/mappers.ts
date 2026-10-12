@@ -29,6 +29,7 @@ export function toSaleOrder(row: SaleOrderRow): SaleOrderDto {
       qty: line.qty.toString(),
       uom: line.uom,
       unitPricePyg: line.unit_price_pyg.toString(),
+      discountPyg: line.discount_pyg.toString(),
       lineTotalPyg: line.line_total_pyg.toString(),
       vatRate: line.vat_rate,
       vatPyg: line.vat_pyg.toString(),

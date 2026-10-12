@@ -64,6 +64,24 @@ describe("docs/api-conventions.md §3 · contrato de entrada de ventas", () => {
     );
   });
 
+  it("limita el largo de las notas y del motivo de una transición", () => {
+    expect(createSaleOrderInput.safeParse({ ...order, notes: "a".repeat(1000) }).success).toBe(
+      true,
+    );
+    expect(createSaleOrderInput.safeParse({ ...order, notes: "a".repeat(1001) }).success).toBe(
+      false,
+    );
+    const id = "33333333-3333-4333-a333-333333333381";
+    expect(
+      transitionSaleOrderInput.safeParse({ id, toStatus: "cancelled", reason: "a".repeat(500) })
+        .success,
+    ).toBe(true);
+    expect(
+      transitionSaleOrderInput.safeParse({ id, toStatus: "cancelled", reason: "a".repeat(501) })
+        .success,
+    ).toBe(false);
+  });
+
   it("la unidad serializada es opcional y se rechaza si no es un uuid", () => {
     const withSerial = (serialUnitId: string | null) => ({
       ...order,
