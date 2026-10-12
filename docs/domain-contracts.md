@@ -373,7 +373,7 @@ export function taxBase(gross: Money, rate: VatRate): Money;
 
 /**
  * Desglosa un documento completo, imputando la diferencia de redondeo
- * a la última línea de cada tasa. Ver RN-IVA-03.
+ * a la última línea de cada tasa que pueda absorberla. Ver RN-IVA-03.
  */
 export function breakdownDocument(
   lines: readonly { gross: Money; rate: VatRate }[],

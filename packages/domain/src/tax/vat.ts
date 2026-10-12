@@ -57,8 +57,8 @@ export interface DocumentVatLine {
   readonly base: Money;
   /**
    * RN-IVA-03 · la diferencia de redondeo "queda registrada": el monto
-   * que esta línea recibió por ser la última de su tasa, ya incluido en
-   * `vat`. Cero cuando la línea no recibió ajuste (incluidas todas las
+   * que esta línea recibió por ser la última de su tasa que podía
+   * absorberlo, ya incluido en `vat`. Cero cuando la línea no recibió ajuste (incluidas todas las
    * de `exenta`, que nunca lo reciben).
    * `vatFromGross(gross, rate).plus(roundingAdjustment) === vat`, siempre.
    */
@@ -96,10 +96,19 @@ function groupIndexesByRate(lines: readonly { rate: VatRate }[]): Map<VatRate, n
  * RN-IVA-02/03 · Ajusta, en el lugar (`vats` y `adjustments`), los IVA de
  * línea de UNA tasa gravada: el que manda es el IVA del TOTAL gravado por
  * esa tasa (RN-IVA-02), no la suma de los IVA de línea ya redondeados. La
- * diferencia entre ambos se imputa íntegra a la última línea de esa tasa
+ * diferencia entre ambos se imputa a la última línea de esa tasa
  * (RN-IVA-03) — y queda registrada aparte en `adjustments`, no solo sumada
  * a `vats`, para que "queda registrada" sea auditable y no haya que
  * volver a calcular `vatFromGross` para reconstruirla.
+ *
+ * "La última línea" es la última que PUEDE absorberla: el IVA de una línea
+ * nunca queda fuera de [0, importe] (o de [importe, 0] en una nota de
+ * crédito). Una línea de importe cero (un regalo) no puede recibir ni restar
+ * nada, y una de importe chico tampoco una diferencia grande; lo que no le cabe
+ * pasa a la línea anterior. Sin esto, la diferencia dejaba un IVA negativo o
+ * mayor que el importe, y el CHECK `vat_pyg >= 0` de `sale_order_lines`
+ * rechazaba un pedido legítimo (revisión de WP-C17). Cuando la última línea sí
+ * puede, es la única que se ajusta, igual que antes.
  */
 function reconcileRateGroup(
   lines: readonly { gross: Money }[],
@@ -113,13 +122,21 @@ function reconcileRateGroup(
   const documentVat = vatFromGross(grossForRate, rate);
   const lineVatSum = indexes.reduce((sum, i) => sum.plus(vats[i]!), zero);
 
-  const roundingDiff = documentVat.minus(lineVatSum);
-  if (!roundingDiff.isZero()) {
-    const lastIndex = indexes[indexes.length - 1]!;
-    vats[lastIndex] = vats[lastIndex]!.plus(roundingDiff);
-    adjustments[lastIndex] = adjustments[lastIndex]!.plus(roundingDiff);
+  let remaining = documentVat.minor - lineVatSum.minor;
+  for (const index of [...indexes].reverse()) {
+    if (remaining === 0n) break;
+    const gross = lines[index]!.gross.minor;
+    const vat = vats[index]!.minor;
+    const room = remaining > 0n ? maxOf(gross, 0n) - vat : vat - minOf(gross, 0n);
+    const shift = remaining > 0n ? minOf(remaining, room) : -minOf(-remaining, room);
+    vats[index] = vats[index]!.plus(Money.of(shift, zero.currency));
+    adjustments[index] = adjustments[index]!.plus(Money.of(shift, zero.currency));
+    remaining -= shift;
   }
 }
+
+const maxOf = (a: bigint, b: bigint): bigint => (a > b ? a : b);
+const minOf = (a: bigint, b: bigint): bigint => (a < b ? a : b);
 
 /** RN-IVA-04 · une cada línea con su IVA ya ajustado, su base derivada (bruto − iva) y el ajuste que registra RN-IVA-03. */
 function buildDocumentLines(

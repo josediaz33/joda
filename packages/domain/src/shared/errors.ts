@@ -149,3 +149,10 @@ export class InvalidSourcingInputError extends DomainError {
     super("INVALID_SOURCING_INPUT", message);
   }
 }
+
+/** priceSaleOrder() (sales/orderPricing.ts, RN-VTA-01, RN-IVA-02) sin líneas, o con una cantidad que no es un entero positivo: argumento fuera de rango, no un fallo que el negocio contemple (el contrato de la API ya lo rechazó antes de llegar acá). */
+export class InvalidSaleOrderInputError extends DomainError {
+  constructor(message: string) {
+    super("INVALID_SALE_ORDER_INPUT", message);
+  }
+}
