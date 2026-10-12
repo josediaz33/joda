@@ -664,13 +664,27 @@ const BULK_VARIANT_EXISTS_ERROR = appError(
 // cliente, no lo que se hereda; por eso el CHECK `NOT is_serialized OR uom =
 // 'unit'` de la base se adelanta acá con un mensaje claro, en vez de llegar como
 // un conflicto genérico. `updateVariantInput` no lleva `uom` (no se edita), así
-// que al actualizar viene de la variante guardada.
+// que al actualizar viene de la variante guardada. WP-C08i: vale para cualquier
+// producto, no solo para un reloj: un `decant` o un `bulk` se miden en ml y no se
+// serializan, y sin este chequeo `isSerialized: true` sobre ellos llegaba a la base
+// y salía como un error interno (500).
+function serializedRequiresUnitError(message: string) {
+  return toTRPCError(appError("VALIDATION_SERIALIZED_REQUIRES_UNIT", 400, message));
+}
+
 async function resolveIsSerialized(
   tx: TenantTx,
   product: repo.ProductRow,
   input: { readonly isSerialized?: boolean; readonly uom: CreateVariantInput["uom"] },
 ): Promise<boolean | undefined> {
-  if (product.kind !== "watch") return input.isSerialized;
+  if (product.kind !== "watch") {
+    if (input.isSerialized === true && input.uom !== "unit") {
+      throw serializedRequiresUnitError(
+        "Una variante con número de serie se mide en unidades enteras (uom = unit).",
+      );
+    }
+    return input.isSerialized;
+  }
   const inherited = await repo.readWatchRequiresSerialShared(tx, product.id);
   if (inherited === null) throw new Error(`producto ${product.id} es kind=watch sin watch_details`);
   if (input.isSerialized !== undefined && input.isSerialized !== inherited) {
@@ -683,12 +697,8 @@ async function resolveIsSerialized(
     );
   }
   if (inherited && input.uom !== "unit") {
-    throw toTRPCError(
-      appError(
-        "VALIDATION_SERIALIZED_REQUIRES_UNIT",
-        400,
-        "Un reloj con número de serie se mide en unidades enteras (uom = unit).",
-      ),
+    throw serializedRequiresUnitError(
+      "Un reloj con número de serie se mide en unidades enteras (uom = unit).",
     );
   }
   return inherited;

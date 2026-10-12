@@ -1067,6 +1067,81 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(after.isSerialized).toBe(false);
   });
 
+  // WP-C08i. `resolveIsSerialized` solo mira la unidad de medida cuando el producto
+  // es un reloj con serie; en cualquier otro producto devolvía lo que mandaba el
+  // cliente, y el CHECK `NOT is_serialized OR uom = 'unit'` de 0003 llegaba como un
+  // error interno. El granel y el decant se miden en ml y no se serializan.
+  it("WP-C08i · isSerialized: true sobre una variante en ml de un producto que no es reloj se rechaza con un 400 claro y sin cambios (RN-SER-02)", async () => {
+    const category = await createCategory("perfumeria-c08i");
+    const perfume = await mutateOk<{ id: string }>("catalog.product.create", {
+      kind: "perfume",
+      slug: "perfume-c08i",
+      name: "Perfume C08i",
+      categoryIds: [category.id],
+      primaryCategoryId: category.id,
+      perfumeDetails: {
+        concentration: "extrait",
+        nominalVolumeMl: 125,
+        olfactoryFamily: "amaderado",
+        notesTop: [],
+        notesHeart: [],
+        notesBase: [],
+        isDecantable: true,
+        wasteFactor: 0.05,
+        unusableResidueMl: 2,
+        evaporationMlYear: 0.5,
+      },
+    });
+    const sealed = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: perfume.id,
+      sku: "PERFUME-C08I-SELLADO",
+      variantType: "sealed",
+      uom: "unit",
+      sizeMl: 125,
+      pricePyg: "2850000",
+    });
+    const bulk = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: perfume.id,
+      sku: "PERFUME-C08I-GRANEL",
+      variantType: "bulk",
+      uom: "ml",
+      sizeMl: null,
+      pricePyg: "0",
+    });
+    const decant = await mutateOk<{ id: string }>("catalog.variant.create", {
+      productId: perfume.id,
+      sku: "PERFUME-C08I-DECANT-10",
+      variantType: "decant",
+      uom: "ml",
+      sizeMl: 10,
+      pricePyg: "245000",
+      productionMode: "made_to_order",
+      sourceVariantId: bulk.id,
+    });
+
+    for (const variant of [bulk, decant]) {
+      const response = await mutate("catalog.variant.update", {
+        id: variant.id,
+        isSerialized: true,
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.data.appCode).toBe("VALIDATION_SERIALIZED_REQUIRES_UNIT");
+
+      const after = await call<{ isSerialized: boolean }>("catalog.variant.byId", {
+        id: variant.id,
+      });
+      expect(after.isSerialized).toBe(false);
+    }
+
+    // Control: el rechazo es por la unidad de medida, no por el producto. Una variante
+    // en unidades de un perfume sí se serializa.
+    const serialized = await mutateOk<{ isSerialized: boolean }>("catalog.variant.update", {
+      id: sealed.id,
+      isSerialized: true,
+    });
+    expect(serialized.isSerialized).toBe(true);
+  });
+
   it("WP-C08f · las variantes de un accesorio se serializan y se desserializan al actualizar: no heredan nada (RN-SER-02)", async () => {
     const category = await mutateOk<{ id: string }>("catalog.category.create", {
       slug: "accesorios-c08f",
