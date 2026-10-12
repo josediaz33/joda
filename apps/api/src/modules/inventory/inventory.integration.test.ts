@@ -1445,4 +1445,55 @@ describe("módulo inventario · WP-C10 (RF-INV-03…05), WP-C11 (RF-INV-08) y WP
     }
     expect(await variantIsSerialized(variant.id)).toBe(true);
   });
+
+  it("RN-SER-02 · pasar el reloj a «no» espera a un alta de unidad en curso, la ve al terminar y se rechaza (WP-C08h)", async () => {
+    const variantId = await createSerializedVariant();
+    const product = await testDb.superuserClient.query(
+      `SELECT product_id FROM app.product_variants WHERE id = $1`,
+      [variantId],
+    );
+    const productId: string = product.rows[0].product_id;
+    const lotId = await seedSealedLot(variantId, { qtyInitial: 3, unitCostPyg: 100_000 });
+
+    // Un alta de unidad en vuelo, como en la prueba de C08d: tiene el lote tomado y la unidad
+    // insertada, sin confirmar. Si la propagación contara las unidades antes de tomar los lotes
+    // vería cero, apagaría la variante, y al confirmarse el alta quedaría una unidad en una
+    // variante que ya no las admite.
+    await testDb.superuserClient.query("BEGIN");
+    let released = false;
+    let pending: ReturnType<typeof mutate> | undefined;
+    try {
+      await testDb.superuserClient.query(
+        "SELECT id FROM app.inventory_lots WHERE id = $1 FOR UPDATE",
+        [lotId],
+      );
+      await testDb.superuserClient.query(
+        `INSERT INTO app.serialized_units (tenant_id, variant_id, lot_id, serial_number)
+         VALUES ($1, $2, $3, 'SN-C08H-EN-VUELO')`,
+        [TENANT_ID, variantId, lotId],
+      );
+      pending = mutate("catalog.product.update", {
+        id: productId,
+        watchDetails: { requiresSerial: false },
+      });
+      await waitUntilABackendIsBlockedOnALock();
+      await testDb.superuserClient.query("COMMIT");
+      released = true;
+      const response = await pending;
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json().error.data.appCode).toBe("CONFLICT_REQUIRES_SERIAL_UNITS_REGISTERED");
+    } finally {
+      if (!released) {
+        await testDb.superuserClient.query("ROLLBACK");
+        await pending?.catch(() => undefined);
+      }
+    }
+    expect(await variantIsSerialized(variantId)).toBe(true);
+    const details = await testDb.superuserClient.query(
+      `SELECT requires_serial FROM app.watch_details WHERE product_id = $1`,
+      [productId],
+    );
+    expect(details.rows[0].requires_serial).toBe(true);
+  });
 });

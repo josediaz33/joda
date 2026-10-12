@@ -240,6 +240,78 @@ function assertDetailsMatchKind(kind: ProductKind, input: UpdateProductInput): v
   }
 }
 
+const requiresSerialUnitsRegisteredError = (registeredUnits: number) =>
+  appError(
+    "CONFLICT_REQUIRES_SERIAL_UNITS_REGISTERED",
+    409,
+    "Este reloj tiene unidades con número de serie registradas en sus variantes: requiresSerial no puede pasar a «no» mientras existan.",
+    { registeredUnits },
+  );
+
+/**
+ * WP-C08h, decisión de José (2026-10-11): cambiar `requires_serial` de un reloj
+ * se propaga a sus variantes, que heredan `is_serialized` de él (RN-SER-02,
+ * E05c). Decide qué variantes cambian y rechaza lo que no se puede propagar,
+ * ANTES de escribir nada:
+ *
+ *  - a «sí»: una variante que no se mide en `unit` no puede serializarse (CHECK
+ *    `NOT is_serialized OR uom = 'unit'`); se rechaza el cambio y se nombra el SKU.
+ *  - a «no»: si alguna variante tiene unidades registradas se rechaza: apagarlo
+ *    dejaría unidades de una variante que ya no las admite (RN-SER-02). Es la
+ *    regla de WP-C08d aplicada a este camino.
+ *
+ * Bloquea la fila de `watch_details` primero (`FOR NO KEY UPDATE`) y compara con
+ * el valor vigente: solo propaga si de verdad cambia, así que guardar el reloj
+ * con el mismo `requiresSerial` no revalida nada ni se frena por una variante
+ * anterior a E05c. Con el bloqueo tomado, las variantes que se crean o se
+ * actualizan al mismo tiempo esperan (`readWatchRequiresSerialShared`) y las que
+ * ya estaban leyendo terminan antes de que se listen acá.
+ *
+ * Devuelve `null` si no hay nada que propagar.
+ */
+async function planRequiresSerialPropagation(
+  tx: TenantTx,
+  productId: string,
+  requiresSerial: boolean,
+): Promise<{ readonly variantIds: string[]; readonly to: boolean } | null> {
+  const current = await repo.lockWatchRequiresSerial(tx, productId);
+  if (current === null || current === requiresSerial) return null;
+
+  const stale = (await repo.listVariantRows(tx, productId)).filter(
+    (variant) => variant.is_serialized !== requiresSerial,
+  );
+  if (stale.length === 0) return null;
+
+  if (requiresSerial) {
+    const notInUnits = stale.filter((variant) => variant.uom !== "unit");
+    if (notInUnits.length > 0) {
+      throw toTRPCError(
+        appError(
+          "CONFLICT_REQUIRES_SERIAL_VARIANT_NOT_UNIT",
+          409,
+          `requiresSerial no puede pasar a «sí»: solo una variante en unidades enteras (uom = unit) puede llevar número de serie, y estas se miden en ml: ${notInUnits.map((variant) => variant.sku).join(", ")}.`,
+          { skus: notInUnits.map((variant) => variant.sku) },
+        ),
+      );
+    }
+  } else {
+    // Primero los lotes, después el conteo: el alta de una unidad bloquea su lote antes de
+    // leer el flag de la variante (ver `lockLotsAndAssertNoSerialUnits`, WP-C08d).
+    await inventoryRepo.lockLotsOfVariants(
+      tx,
+      stale.map((variant) => variant.id),
+    );
+    const registeredUnits = await repo.countSerializedUnitsOfVariants(
+      tx,
+      stale.map((variant) => variant.id),
+    );
+    if (registeredUnits > 0) {
+      throw toTRPCError(requiresSerialUnitsRegisteredError(registeredUnits));
+    }
+  }
+  return { variantIds: stale.map((variant) => variant.id), to: requiresSerial };
+}
+
 export async function updateProduct(
   db: PrismaClient,
   ctx: TenantTxContext,
@@ -253,7 +325,15 @@ export async function updateProduct(
     await assertBrandExists(tx, input.brandId);
 
     if (input.perfumeDetails) await repo.updatePerfumeDetails(tx, input.id, input.perfumeDetails);
-    if (input.watchDetails) await repo.updateWatchDetails(tx, input.id, input.watchDetails);
+    if (input.watchDetails) {
+      // WP-C08h. Antes de escribir: los rechazos de la propagación no dejan el cambio a medias.
+      const propagation =
+        input.watchDetails.requiresSerial === undefined
+          ? null
+          : await planRequiresSerialPropagation(tx, input.id, input.watchDetails.requiresSerial);
+      await repo.updateWatchDetails(tx, input.id, input.watchDetails);
+      if (propagation) await repo.setVariantsSerialized(tx, propagation.variantIds, propagation.to);
+    }
     if (input.accessoryDetails)
       await repo.updateAccessoryDetails(tx, input.id, input.accessoryDetails);
 
@@ -357,24 +437,29 @@ const BULK_VARIANT_EXISTS_ERROR = appError(
 // recibirlo (la recepción de una variante serializada exige cargar los
 // seriales), y uno con serie no puede entrar sin registrarla. WP-C08f: la misma
 // regla rige al actualizar la variante, que no puede contradecir al producto.
-// Lo inverso, cambiar `requires_serial` del producto con variantes ya creadas,
-// espera la decisión de José (WP-C08h). Apagarlo con unidades ya registradas lo rechaza
-// `lockLotsAndAssertNoSerialUnits` (WP-C08d).
+// WP-C08h, decisión de José: lo inverso también. Cambiar `requires_serial` del
+// producto se propaga a las variantes ya creadas (`planRequiresSerialPropagation`).
+// Apagarlo en una variante suelta con unidades ya registradas lo rechaza
+// `lockLotsAndAssertNoSerialUnits` (WP-C08d), y la propagación aplica la misma
+// guarda con el mismo bloqueo previo de lotes.
+//
+// El valor del producto se lee con `FOR SHARE`: la propagación y esta lectura
+// tienen que ordenarse entre sí, o una variante creada mientras el producto
+// cambia nace con el valor viejo y nadie la corrige.
 //
 // El refine de `createVariantInput` sobre `isSerialized` solo ve lo que manda el
 // cliente, no lo que se hereda; por eso el CHECK `NOT is_serialized OR uom =
 // 'unit'` de la base se adelanta acá con un mensaje claro, en vez de llegar como
 // un conflicto genérico. `updateVariantInput` no lleva `uom` (no se edita), así
 // que al actualizar viene de la variante guardada.
-function resolveIsSerialized(
+async function resolveIsSerialized(
+  tx: TenantTx,
   product: repo.ProductRow,
   input: { readonly isSerialized?: boolean; readonly uom: CreateVariantInput["uom"] },
-): boolean | undefined {
+): Promise<boolean | undefined> {
   if (product.kind !== "watch") return input.isSerialized;
-  const details = product.watch_details_watch_details_product_id_tenant_idToproducts;
-  if (!details) throw new Error(`producto ${product.id} es kind=watch sin watch_details`);
-
-  const inherited = details.requires_serial;
+  const inherited = await repo.readWatchRequiresSerialShared(tx, product.id);
+  if (inherited === null) throw new Error(`producto ${product.id} es kind=watch sin watch_details`);
   if (input.isSerialized !== undefined && input.isSerialized !== inherited) {
     throw toTRPCError(
       appError(
@@ -404,7 +489,7 @@ export async function createVariant(
   return withTenantTx(db, ctx, async (tx) => {
     const product = await repo.findProductRow(tx, { id: input.productId });
     if (!product) throw toTRPCError(NOT_FOUND_ERROR);
-    const isSerialized = resolveIsSerialized(product, input);
+    const isSerialized = await resolveIsSerialized(tx, product, input);
     await assertSourceVariantExists(tx, input.sourceVariantId);
 
     // El índice único parcial de 0028 lo impone la base; esto adelanta el
@@ -485,7 +570,7 @@ export async function updateVariant(
     if (input.isSerialized !== undefined) {
       const product = await repo.findProductRow(tx, { id: existing.product_id });
       if (!product) throw new Error(`variante ${existing.id} sin producto ${existing.product_id}`);
-      isSerialized = resolveIsSerialized(product, {
+      isSerialized = await resolveIsSerialized(tx, product, {
         isSerialized: input.isSerialized,
         uom: existing.uom,
       });
