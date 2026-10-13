@@ -427,12 +427,14 @@ function buildProductFacetsFromRow(row: repo.ProductRow): Record<string, unknown
 // ---------------------------------------------------------------------
 // Activación — RN-CAT-04 (WP-C08e). `draft` → `active` con su propio procedimiento:
 // `status` no viaja por `update`. Activar un producto que ya tiene `published_at` lo
-// muestra en la tienda, así que además de `write` exige `publish`.
+// muestra en la tienda, así que además de `write` exige `publish`. WP-C08q (decisión de
+// José): un `archived` también se reactiva por acá, con `write`, y vuelve a `active` SIN
+// publicar (`published_at` en nulo), por eso no necesita `publish`: no queda nada que mostrar.
 // ---------------------------------------------------------------------
-const PRODUCT_ARCHIVED_ERROR = appError(
+const PRODUCT_RE_ARCHIVED_ERROR = appError(
   "CONFLICT_PRODUCT_ARCHIVED",
   409,
-  "Un producto archivado no se puede activar.",
+  "El producto se archivó de nuevo mientras se lo reactivaba: volvé a intentarlo.",
 );
 
 const ACTIVATE_PUBLISHED_FORBIDDEN_ERROR = appError(
@@ -440,6 +442,32 @@ const ACTIVATE_PUBLISHED_FORBIDDEN_ERROR = appError(
   403,
   "Este producto ya está publicado: activarlo lo muestra en la tienda y hace falta el permiso de publicar.",
 );
+
+/** WP-C08q, RN-CAT-04. `archived` → `active` sin publicar; deja la bitácora con el `published_at` que pisó. */
+async function reactivate(
+  tx: TenantTx,
+  ctx: TenantTxContext,
+  origin: AuditOrigin,
+  id: string,
+): Promise<boolean> {
+  const previous = await repo.reactivateArchivedProductRow(tx, id);
+  if (previous === null) return false;
+  await recordAuditEntry(tx, {
+    tenantId: ctx.tenantId,
+    actorId: ctx.userId,
+    audience: ctx.audience,
+    action: "catalog.product.activate",
+    entity: "products",
+    entityId: id,
+    before: {
+      status: "archived",
+      publishedAt: previous.previousPublishedAt?.toISOString() ?? null,
+    },
+    after: { status: "active", publishedAt: null },
+    ...origin,
+  });
+  return true;
+}
 
 export async function activateProduct(
   db: PrismaClient,
@@ -450,9 +478,10 @@ export async function activateProduct(
 ): Promise<AdminProduct> {
   return withTenantTx(db, ctx, async (tx) => {
     // Una sola decisión: se intenta la escritura condicional (draft → active, y sin
-    // `published_at` si quien activa no puede publicar). Si no cambió nada, se lee el
-    // producto y se explica por qué; así una carrera con otro pedido (que lo publique, lo
-    // archive o lo active) termina igual que si hubiera ocurrido antes de este pedido.
+    // `published_at` si quien activa no puede publicar), y si el producto está archivado, la
+    // reactivación (archived → active sin publicar). Si ninguna cambió nada, se lee el producto
+    // y se explica por qué; así una carrera con otro pedido (que lo publique, lo archive o lo
+    // active) termina igual que si hubiera ocurrido antes de este pedido.
     if (await repo.activateProductRow(tx, input.id, !access.canPublish)) {
       await recordAuditEntry(tx, {
         tenantId: ctx.tenantId,
@@ -465,10 +494,13 @@ export async function activateProduct(
         after: { status: "active" },
         ...origin,
       });
+    } else if (await reactivate(tx, ctx, origin, input.id)) {
+      // Reactivado: ya quedó auditado.
     } else {
       const current = await repo.findProductRow(tx, { id: input.id });
       if (!current) throw toTRPCError(NOT_FOUND_ERROR);
-      if (current.status === "archived") throw toTRPCError(PRODUCT_ARCHIVED_ERROR);
+      // Otro pedido lo reactivó y un tercero lo archivó de nuevo entre las dos escrituras.
+      if (current.status === "archived") throw toTRPCError(PRODUCT_RE_ARCHIVED_ERROR);
       // Sigue en borrador: la condición que falló es `published_at IS NULL`, o sea que
       // está publicado y quien activa no puede publicar.
       if (current.status === "draft") throw toTRPCError(ACTIVATE_PUBLISHED_FORBIDDEN_ERROR);

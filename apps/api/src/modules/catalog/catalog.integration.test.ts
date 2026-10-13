@@ -2815,17 +2815,116 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(await auditActions(product.id)).toEqual(["catalog.product.activate"]);
   });
 
-  it("RN-CAT-04 · un producto archivado no se activa: 409 y sigue archivado", async () => {
-    const product = await createAccessory("c08e-archivado");
+  // WP-C08q, RN-CAT-04 (decisión de José, 2026-10-12). Un archivado se reactiva con `write` y
+  // vuelve activo SIN publicar; publicarlo de nuevo exige `publish`.
+  type ProductPublication = ActivatedProduct & { publishedAt: string | null };
+
+  it("RN-CAT-04 · un archivado se reactiva con write, vuelve activo y sin publicar aunque conservara published_at, y deja la bitácora con el antes y el después", async () => {
+    const product = await createPublishableAccessory("c08q-reactiva-escritor");
+    await mutateOk("catalog.product.publish", { id: product.id });
+    await activate(product.id);
+    await mutateOk("catalog.product.archive", { id: product.id });
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const response = await mutateAs(writerCookie, "catalog.product.activate", { id: product.id });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.data).toMatchObject({ status: "active", publishedAt: null });
+    const fetched = await call<ProductPublication>("catalog.product.byId", { id: product.id });
+    expect(fetched).toMatchObject({ status: "active", publishedAt: null });
+    expect(await publicProductSlugs()).not.toContain("c08q-reactiva-escritor");
+    const rows = await testDb.superuserClient.query(
+      `SELECT action, actor_id, before, after FROM app.audit_log
+       WHERE entity_id = $1 AND action = 'catalog.product.activate'`,
+      [product.id],
+    );
+    expect(rows.rows).toEqual([
+      {
+        action: "catalog.product.activate",
+        actor_id: STAFF_WRITER_ID,
+        before: { status: "archived", publishedAt: PUBLISH_CLOCK_ISO },
+        after: { status: "active", publishedAt: null },
+      },
+    ]);
+  });
+
+  it("RN-CAT-04 · un archivado que nunca se publicó se reactiva igual, y la bitácora dice que no tenía publicación", async () => {
+    const product = await createAccessory("c08q-reactiva-nunca-publicado");
     await mutateOk("catalog.product.archive", { id: product.id });
 
-    const response = await mutate("catalog.product.activate", { id: product.id });
+    const reactivated = await mutateOk<ProductPublication>("catalog.product.activate", {
+      id: product.id,
+    });
 
-    expect(response.statusCode).toBe(409);
-    expect(response.json().error.data.appCode).toBe("CONFLICT_PRODUCT_ARCHIVED");
+    expect(reactivated).toMatchObject({ status: "active", publishedAt: null });
+    const rows = await testDb.superuserClient.query(
+      `SELECT before, after FROM app.audit_log WHERE entity_id = $1`,
+      [product.id],
+    );
+    expect(rows.rows).toEqual([
+      {
+        before: { status: "archived", publishedAt: null },
+        after: { status: "active", publishedAt: null },
+      },
+    ]);
+  });
+
+  it("RN-CAT-04 · publicar de nuevo el reactivado exige publish: con solo write es 403, con publish se publica y recién ahí la tienda lo ve", async () => {
+    const product = await createPublishableAccessory("c08q-republica");
+    await mutateOk("catalog.product.publish", { id: product.id });
+    await mutateOk("catalog.product.archive", { id: product.id });
+    await mutateOk("catalog.product.activate", { id: product.id });
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const denied = await mutateAs(writerCookie, "catalog.product.publish", { id: product.id });
+    const visibleBefore = await publicProductSlugs();
+    const allowed = await mutateOk<ProductPublication>("catalog.product.publish", {
+      id: product.id,
+    });
+    const visibleAfter = await publicProductSlugs();
+
+    expect(denied.statusCode).toBe(403);
+    expect(visibleBefore).not.toContain("c08q-republica");
+    expect(allowed.publishedAt).toBe(PUBLISH_CLOCK_ISO);
+    expect(visibleAfter).toContain("c08q-republica");
+  });
+
+  it("RN-CAT-04 · quien solo puede leer el catálogo no reactiva un archivado: 403 y sigue archivado", async () => {
+    const product = await createAccessory("c08q-reactiva-lector");
+    await mutateOk("catalog.product.archive", { id: product.id });
+    const readerCookie = await loginPastMfa(STAFF_READER_EMAIL);
+
+    const response = await mutateAs(readerCookie, "catalog.product.activate", { id: product.id });
+
+    expect(response.statusCode).toBe(403);
     const fetched = await call<ActivatedProduct>("catalog.product.byId", { id: product.id });
     expect(fetched.status).toBe("archived");
+    expect(await auditActions(product.id)).toEqual([]);
   });
+
+  it(
+    "RN-CAT-04 · si otro pedido reactiva el archivado mientras éste espera, no hace nada ni deja otra entrada en la bitácora",
+    async () => {
+      const product = await createAccessory("c08q-reactivado-en-vuelo");
+      await mutateOk("catalog.product.archive", { id: product.id });
+
+      // Otra transacción lo reactiva y todavía no confirma: este pedido espera la fila y, al
+      // desbloquearse, ya no hay nada que cambiar (ni activar un borrador ni reactivar un archivado).
+      const response = await whileHolding(
+        () =>
+          testDb.superuserClient.query(
+            `UPDATE app.products SET status = 'active', published_at = NULL WHERE id = $1`,
+            [product.id],
+          ),
+        () => mutate("catalog.product.activate", { id: product.id }),
+      );
+
+      expect(response.statusCode).toBe(200);
+      expect(response.json().result.data.status).toBe("active");
+      expect(await auditActions(product.id)).toEqual([]);
+    },
+    RACE_TEST_TIMEOUT_MS,
+  );
 
   it("RN-CAT-04 · un producto inexistente o de otro tenant da exactamente la misma respuesta", async () => {
     await seedForeignCatalog();
@@ -2874,7 +2973,9 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(await auditActions(product.id)).toEqual([]);
   });
 
-  it("RN-CAT-04 · si otro pedido archiva el producto mientras éste espera, se rechaza como archivado", async () => {
+  // Antes de WP-C08q un archivado se rechazaba (409). Ahora el resultado es el mismo que si el
+  // pedido de archivar hubiera llegado antes: activar un archivado es reactivarlo.
+  it("RN-CAT-04 · si otro pedido archiva el producto mientras éste espera, el resultado es el mismo que si lo hubiera archivado antes: se reactiva sin publicar", async () => {
     const product = await createAccessory("c08e-archivado-en-vuelo");
 
     await testDb.superuserClient.query("BEGIN");
@@ -2891,14 +2992,14 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       released = true;
       const response = await pending;
 
-      expect(response.statusCode).toBe(409);
-      expect(response.json().error.data.appCode).toBe("CONFLICT_PRODUCT_ARCHIVED");
+      expect(response.statusCode).toBe(200);
+      expect(response.json().result.data).toMatchObject({ status: "active", publishedAt: null });
     } finally {
       if (!released) {
         await testDb.superuserClient.query("ROLLBACK");
         await pending?.catch(() => undefined);
       }
     }
-    expect(await auditActions(product.id)).toEqual([]);
+    expect(await auditActions(product.id)).toEqual(["catalog.product.activate"]);
   });
 });

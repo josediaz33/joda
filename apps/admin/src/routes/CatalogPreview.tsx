@@ -53,6 +53,26 @@ function ActivateButton({
   );
 }
 
+// WP-C08q, RN-CAT-04: un archivado se reactiva con `write` y vuelve a activo SIN publicar.
+function ReactivateButton({
+  product,
+  onReactivate,
+}: {
+  product: AdminProduct;
+  onReactivate: (product: AdminProduct) => Promise<void>;
+}) {
+  return (
+    <Button
+      variant="outline"
+      size="sm"
+      aria-label={`Reactivar ${product.name}`}
+      onClick={() => void onReactivate(product)}
+    >
+      Reactivar
+    </Button>
+  );
+}
+
 export default function CatalogPreview() {
   const [kind, setKind] = useState<ProductKind | undefined>();
   const [status, setStatus] = useState<ProductStatus | undefined>();
@@ -129,6 +149,13 @@ export default function CatalogPreview() {
     return runPublication(target.id, () => api.activateProduct({ id: target.id }), {
       done: `${target.name} se activó.`,
       failure: "No se pudo activar el producto.",
+    });
+  }
+
+  function reactivate(target: AdminProduct) {
+    return runPublication(target.id, () => api.activateProduct({ id: target.id }), {
+      done: `${target.name} se reactivó y vuelve sin publicar.`,
+      failure: "No se pudo reactivar el producto.",
     });
   }
 
@@ -299,6 +326,13 @@ export default function CatalogPreview() {
                       ) : (
                         <ActivateButton product={product} onActivate={activate} />
                       )}
+                    </Can>
+                  )}
+                  {/* Reactivar un archivado (RN-CAT-04): con `write`; vuelve activo y sin publicar,
+                      así que publicarlo de nuevo sigue siendo de quien tiene `publish`. */}
+                  {product.status === "archived" && (
+                    <Can perform="catalog.product:write">
+                      <ReactivateButton product={product} onReactivate={reactivate} />
                     </Can>
                   )}
                   <Can perform="catalog.product:publish">
