@@ -374,3 +374,58 @@ describe("RN-CAT-04 · activar un borrador", () => {
     expect(screen.queryByRole("button", { name: /^Activar/ })).toBeNull();
   });
 });
+
+// WP-C08q · RN-CAT-04: un archivado se reactiva con `write` y vuelve activo y SIN publicar;
+// publicarlo de nuevo es de quien tiene `publish`.
+describe("RN-CAT-04 · reactivar un archivado", () => {
+  it("un archivado se reactiva con write, aunque conserve la publicación: la API recibe el id y se avisa que vuelve sin publicar", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.activateProduct).mockResolvedValue({} as AdminProduct);
+    renderCatalog(WRITER, [
+      product({ status: "archived", publishedAt: "2026-01-01T12:00:00.000Z" }),
+    ]);
+
+    await user.click(await screen.findByRole("button", { name: "Reactivar Layton" }));
+
+    await waitFor(() => expect(api.activateProduct).toHaveBeenCalledWith({ id: productId }));
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe(
+        "Layton se reactivó y vuelve sin publicar.",
+      ),
+    );
+  });
+
+  it("solo un archivado ofrece Reactivar: ni un borrador, ni un activo", async () => {
+    renderCatalog(PUBLISHER, [
+      product({ id: productId, name: "Layton", status: "archived" }),
+      product({ id: otherProductId, name: "Herod", status: "active" }),
+      product({ id: "22222222-2222-4222-a222-222222222223", name: "Percival", status: "draft" }),
+    ]);
+
+    await screen.findByRole("button", { name: "Reactivar Layton" });
+
+    expect(screen.queryByRole("button", { name: "Reactivar Herod" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reactivar Percival" })).toBeNull();
+    // El borrador sí ofrece Activar: el control correcto para su estado.
+    expect(screen.getByRole("button", { name: "Activar Percival" })).toBeTruthy();
+  });
+
+  it("quien solo puede leer no ve Reactivar", async () => {
+    renderCatalog(["catalog.product:read"], [product({ status: "archived" })]);
+
+    await screen.findByText("Layton");
+
+    expect(screen.queryByRole("button", { name: /^Reactivar/ })).toBeNull();
+  });
+
+  it("si la API rechaza la reactivación, muestra el rechazo junto al producto y no avisa éxito", async () => {
+    const user = userEvent.setup();
+    vi.mocked(api.activateProduct).mockRejectedValue(new Error("No tenés permiso."));
+    renderCatalog(WRITER, [product({ status: "archived" })]);
+
+    await user.click(await screen.findByRole("button", { name: "Reactivar Layton" }));
+
+    expect(await screen.findByText("No tenés permiso.")).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("");
+  });
+});

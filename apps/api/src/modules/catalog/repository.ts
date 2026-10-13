@@ -153,6 +153,32 @@ export async function activateProductRow(
   return count === 1;
 }
 
+/**
+ * WP-C08q, RN-CAT-04. Reactivar un archivado: pasa a `active` SIN publicar, o sea que
+ * `published_at` queda en nulo en la misma escritura aunque lo hubiera conservado al archivarse.
+ * La escritura es condicional (`status = 'archived'`) y devuelve el `published_at` que pisó,
+ * para la bitácora: la fila se toma con `FOR UPDATE` dentro de la misma sentencia, de modo que
+ * el valor que se audita es el que esta escritura reemplaza y no uno leído antes. Sin fila (no
+ * estaba archivado, o ya lo reactivó otro pedido), devuelve `null`.
+ */
+export async function reactivateArchivedProductRow(
+  tx: TenantTx,
+  id: string,
+): Promise<{ readonly previousPublishedAt: Date | null } | null> {
+  const rows = await tx.$queryRaw<{ previous_published_at: Date | null }[]>`
+    WITH previous AS (
+      SELECT id, published_at FROM app.products
+      WHERE id = ${id}::uuid AND status = 'archived'
+      FOR UPDATE
+    )
+    UPDATE app.products AS p SET status = 'active', published_at = NULL
+    FROM previous
+    WHERE p.id = previous.id
+    RETURNING previous.published_at AS previous_published_at`;
+  const row = rows[0];
+  return row ? { previousPublishedAt: row.previous_published_at } : null;
+}
+
 /** Contraparte de `publishProductRow`: solo cambia un producto que está publicado. */
 export async function unpublishProductRow(tx: TenantTx, id: string): Promise<boolean> {
   const { count } = await tx.products.updateMany({

@@ -92,7 +92,7 @@ Forma: `recurso.subrecurso:acción`.
 - **`deposito` no ve precios de compra.** Mueve mercadería. `inventory.stock:read` incluye costos de lote y del ledger (los movimientos y sus capas de costo, desde 0037), así que si más adelante hace falta un depósito sin acceso a costos, se separa en `inventory.stock:read` e `inventory.cost:read`.
 - **`vendedor` planifica decants sin leer lotes.** Al vender un decant tiene que poder planificar la orden (WP-C19), y para eso hace falta ver qué granel hay. Darle `inventory.stock:read` está descartado porque expone costos de lote; tendrá `inventory.decant:plan` (como el `deposito`) y los lotes candidatos le llegan por una función acotada que no devuelve costos (§3.1, «Planificar un decant sin leer lotes»).
 
-**`catalog.product:publish` cubre más que el producto.** Es el permiso de cualquier cambio que decide qué ve el visitante: publicar y despublicar, mostrar u ocultar una variante, y mostrar u ocultar una categoría (WP-C08k, implementado). Volver a publicar un producto archivado que se reactivó también (WP-C08q, decidido, pendiente de implementación). El `vendedor` y el `deposito` no lo tienen; ver §3.3 por cómo se comprueba cuando el procedimiento solo declara `write`.
+**`catalog.product:publish` cubre más que el producto.** Es el permiso de cualquier cambio que decide qué ve el visitante: publicar y despublicar, mostrar u ocultar una variante, y mostrar u ocultar una categoría (WP-C08k, implementado). Volver a publicar un producto archivado que se reactivó también (WP-C08q, implementado). El `vendedor` y el `deposito` no lo tienen; ver §3.3 por cómo se comprueba cuando el procedimiento solo declara `write`.
 
 ---
 
