@@ -399,11 +399,15 @@ describe("RN-CAT-04 · reactivar un archivado", () => {
     renderCatalog(PUBLISHER, [
       product({ id: productId, name: "Layton", status: "archived" }),
       product({ id: otherProductId, name: "Herod", status: "active" }),
+      product({ id: "22222222-2222-4222-a222-222222222223", name: "Percival", status: "draft" }),
     ]);
 
     await screen.findByRole("button", { name: "Reactivar Layton" });
 
     expect(screen.queryByRole("button", { name: "Reactivar Herod" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reactivar Percival" })).toBeNull();
+    // El borrador sí ofrece Activar: el control correcto para su estado.
+    expect(screen.getByRole("button", { name: "Activar Percival" })).toBeTruthy();
   });
 
   it("quien solo puede leer no ve Reactivar", async () => {
