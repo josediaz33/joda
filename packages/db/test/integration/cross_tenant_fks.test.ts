@@ -50,6 +50,7 @@ const CROSS_TENANT_FKS = [
   "decant_work_orders.created_by",
   "decant_work_orders.executed_by",
   "decant_work_orders.sale_order_id",
+  "decant_work_orders.sale_order_line_id",
   "decant_work_orders.source_lot_id",
   "decant_work_orders.target_variant_id",
   "fiscal_document_lines.fiscal_document_id",
@@ -174,6 +175,16 @@ const REJECTED_BEFORE_THE_FK: Record<string, { code: string; message: RegExp; wh
     code: "23503",
     message: /^Asiento a revertir .* no encontrado en el tenant del asiento/,
     why: "trg_journal_entry_guard (BEFORE, 0020) busca el asiento revertido en el tenant",
+  },
+  "movement_cost_allocations.lot_id": {
+    code: "42501",
+    message: /^new row violates row-level security policy for table "movement_cost_allocations"$/,
+    why: "WP-B11e (0039): la política de INSERT de las capas exige un movimiento del tenant de la sesión y de esta transacción; el que se copia es de otra transacción, así que RLS rechaza antes que la FK",
+  },
+  "movement_cost_allocations.movement_id": {
+    code: "42501",
+    message: /^new row violates row-level security policy for table "movement_cost_allocations"$/,
+    why: "WP-B11e (0039): el movimiento del tenant vecino es invisible para la función de la política de INSERT de las capas (filtra por el tenant de la sesión), así que RLS rechaza antes que la FK",
   },
   "purchase_order_lines.purchase_order_id": {
     code: "23514",

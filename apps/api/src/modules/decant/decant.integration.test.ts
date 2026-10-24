@@ -1756,7 +1756,13 @@ describe(
 
     // -------------------------------------------------------------------
     describe("docs/api-conventions.md §4.3 y §8.4 · sin permiso o de otro tenant se responde 404 (WP-C13)", () => {
-      it("un vendedor, sin inventory.decant:execute ni inventory.stock:read, no puede planificar, iniciar, ejecutar ni ver la cola", async () => {
+      // Desde WP-B18 el vendedor tiene `inventory.decant:plan`, un permiso del
+      // MISMO módulo (`inventory.decant`) que `execute`: con sesión y acceso al
+      // módulo, la regla de api-conventions §4.3 manda 403 y no 404 (ya sabe que
+      // el módulo existe). La cola exige `inventory.stock:read`, un módulo del que
+      // no tiene nada, y sigue siendo 404. El 403 de `plan` es transitorio: WP-C19
+      // la pasa a exigir `inventory.decant:plan`, y el vendedor la planifica.
+      it("un vendedor, sin inventory.decant:execute ni inventory.stock:read, no puede planificar, iniciar, ejecutar (403, tiene un permiso del módulo) ni ver la cola (404)", async () => {
         const scenario = await createScenario();
         await seedBulkLot(scenario.bulkVariantId, { qty: 114.65, unitCostPyg: 11_972 });
         await seedSupplies(scenario);
@@ -1782,7 +1788,7 @@ describe(
           started.statusCode,
           executed.statusCode,
           queue.statusCode,
-        ]).toEqual([404, 404, 404, 404]);
+        ]).toEqual([403, 403, 403, 404]);
         expect(await movementsOfOrder(orderId)).toEqual([]);
       });
 

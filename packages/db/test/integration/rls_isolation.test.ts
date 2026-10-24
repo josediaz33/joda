@@ -1000,8 +1000,11 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       await actAs(PEER_OWNER_ID, PEER_TENANT_ID);
       await seedPeerInventory();
       // Desde WP-B08c (0023) la FK compuesta lo rechaza en el INSERT, antes
-      // que el trigger diferido. El trigger, aislado, lo prueba el
-      // invariante 35.
+      // que el trigger diferido; y desde WP-B11e (0039) la política de INSERT
+      // de las capas lo rechaza antes que la FK: el movimiento del tenant real
+      // es invisible para el vecino (y no es de su transacción). La FK
+      // compuesta sigue ahí (cross_tenant_fks.test.ts la verifica) y el
+      // trigger, aislado, lo prueba el invariante 35.
       await expect(
         api.query(
           `INSERT INTO app.movement_cost_allocations
@@ -1010,8 +1013,8 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
           [PEER_TENANT_ID, realMovementId, PEER_LOT_ID],
         ),
       ).rejects.toMatchObject({
-        code: "23503",
-        constraint: "movement_cost_allocations_movement_id_fkey",
+        code: "42501",
+        message: 'new row violates row-level security policy for table "movement_cost_allocations"',
       });
       await api.query("ROLLBACK");
     });

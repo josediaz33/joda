@@ -1503,9 +1503,15 @@ docs/security-spec.md §3.1 («Planificar un decant sin leer lotes») y la
 resolución de WP-C13 en docs/backlog.md («Decisiones de José sobre H1, H3
 y E07»: permiso inventory.decant:plan, función SECURITY DEFINER acotada,
 plan solo sobre ventas awaiting_payment o paid, una orden por línea de
-venta). El esquema (permiso, función, columna e índice) lo pone WP-B18, que
-va antes de este WP; las cuatro preguntas que había ahí quedaron resueltas
-el 2026-10-08.
+venta). El esquema (permiso, función, columna e índice) lo puso WP-B18
+(0039), y las decisiones que dejaba abiertas están en security-spec §3.1
+(la función `app.list_decant_plan_lots(variante)`, una llamada por
+componente del BOM, sin costos; el `LotSnapshot` de `plan` sin `unitCost`;
+el vendedor no pasa `sourceLotId`); las cuatro preguntas que había ahí
+quedaron resueltas el 2026-10-08. De WP-B11e (0039): una capa de costo se
+escribe en la MISMA transacción que su movimiento y sin savepoints de por
+medio (la política de las capas compara el `xmin` del movimiento), con el
+permiso del `movement_type`.
 
 Objetivo: confirmación de venta — consumo real de inventario, cálculo y
 persistencia del COGS por línea, con bloqueo de lotes ordenado para

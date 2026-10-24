@@ -115,7 +115,8 @@ product_variants ──< stock_reservations   (separadas del ledger)
 
 inventory_lots ──< decant_work_orders >── product_variants
                           │
-                          └── sale_order_id
+                          ├── sale_order_id
+                          └── sale_order_line_id   (nullable; una orden activa por línea, WP-B18)
 ```
 
 **`inventory_balances` la escriben solo los triggers.** `init_lot_balance` y `project_lot_balance` son `SECURITY DEFINER`; `joda_api` solo tiene SELECT (WP-B09b, `0024_revoke_balances_write.sql`, invariante 74). Un saldo equivocado se corrige con un movimiento de ajuste, nunca editando la proyección.
@@ -177,7 +178,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 136: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 149: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -335,6 +336,22 @@ Los estados de los que la base impone que no se vuelva (ADR-026). El ADR guarda 
 - **El ETL tiene que respetarlo.** Una variante `tester`, `supply` o `bulk` del v2 se carga con `online_visible = false`.
 - **Verificación.** Invariantes 132 a 134 (tester, insumo y granel con el flag encendido), 135 (el `UPDATE` sobre una variante que ya existe) y el control positivo 136 (sellado, decant y unit lo aceptan).
 
+### 4.9 Una orden de fraccionamiento activa por línea de venta, y los lotes para planificar (WP-B18, `0039_decant_plan_lots_and_cost_layer_permission.sql`)
+
+- **`decant_work_orders.sale_order_line_id`** (nullable) con FK compuesta `(sale_order_line_id, tenant_id) → sale_order_lines (id, tenant_id)`, `ON DELETE RESTRICT` (4.3), y el índice único parcial `decant_wo_one_active_per_line ON decant_work_orders (sale_order_line_id) WHERE status <> 'cancelled'`. Una línea tiene una sola orden que no esté cancelada; **cancelarla permite replanificar** (H3, decisión de José, 2026-10-08). Es un invariante de la base y no una `Idempotency-Key` obligatoria: la clave la elige el cliente y dos llamadas con claves distintas, o sin clave, crearon las tres órdenes de H3. Es nullable porque C13b planifica decants para stock, sin venta, y un `NULL` no choca en un índice único. La violación llega como `23505` con el nombre del índice; traducirla a un 409 es de `plan` (C19).
+- **Que la línea sea del pedido de la misma orden no lo impone la base.** `sale_order_id` y `sale_order_line_id` son columnas independientes; `plan` recibe la línea y deriva el pedido de ella, así que no pueden diferir por construcción. Atarlas en el esquema pide un `UNIQUE (id, sale_order_id, tenant_id)` sobre `sale_order_lines` y un `CHECK` de que no haya línea sin pedido: se evalúa si aparece un segundo escritor de la columna.
+- **`app.list_decant_plan_lots(p_variant_id uuid)`**, `SECURITY DEFINER`: los lotes candidatos de una variante para planificar un decant, para quien tiene `inventory.decant:plan` y no `inventory.stock:read`. Devuelve `lot_id`, `available` y `opened_at`, y nada más. Falla cerrado y filtra por el tenant de la sesión; el estado lo decide el tipo de la variante (`bulk` → `open_for_decant`; el resto → `available`). Diseño y alcance en `docs/security-spec.md` §3.1, «Planificar un decant sin leer lotes».
+- **Verificación.** Invariantes 137 y 138 (el permiso en los roles sembrados y en ninguno más; el vendedor planifica y no ejecuta), 139 (la forma y los privilegios de la función), 140 a 145 (la función como `joda_api`: lo que devuelve, el rechazo sin permiso, sin sesión de staff y sin tenant, la sombra en `pg_temp`, otro tenant), 146 y 147 (el índice rechaza una segunda orden activa y admite una nueva tras cancelar). El comportamiento completo, con un tenant vecino con sus propios lotes, está en `packages/db/test/integration/decant_plan_lots.test.ts`.
+
+### 4.10 Las capas de costo se atan al movimiento de la transacción y a su permiso (WP-B11e, `0039`)
+
+`movement_cost_allocations` tiene una sola política de escritura, la de INSERT, `allocations_insert`: `WITH CHECK (app.can_allocate_cost_to_movement(movement_id))`. La función exige el mismo permiso que el `movement_type` del movimiento (el mapeo de WP-B11d, `docs/security-spec.md` §3.1) **y** que el movimiento lo haya creado la transacción de quien escribe la capa (`xmin = pg_current_xact_id()`). Sin UPDATE ni DELETE (la tabla es append-only). El SELECT sigue exigiendo `inventory.stock:read` (0037).
+
+- **Por qué la segunda condición.** El cuadre (`trg_cost_allocation_matches`) es una constraint diferida que se verifica al `COMMIT` de la transacción que escribió el movimiento y sus capas; ningún flujo legítimo agrega capas a un movimiento de otra transacción. Cierra la prueba por igualdad que dejaba el rechazo sin cifras de 0037.
+- **Por qué una función.** El vendedor no ve el movimiento que acaba de insertar (`movements_read`, 0037), y un `EXISTS` bajo RLS lo rechazaría.
+- **Límite que falla cerrado.** Un movimiento insertado dentro de un `SAVEPOINT` (o de un bloque PL/pgSQL con `EXCEPTION`) lleva el `xmin` de la subtransacción y no sirve para atar capas: el movimiento y sus capas van del mismo lado del savepoint.
+- **Verificación.** Invariantes 148 (una sola política de escritura, de INSERT, por la función y sin `true`) y 149 (la función cubre todo `movement_type` y los seis permisos, y exige movimiento de esta transacción y del tenant), como el 114 para el movimiento. El comportamiento, por cada permiso del mapeo y con la forma de cada rol, está en `write_permissions.test.ts`.
+
 ---
 
 ## 5. Vistas
@@ -366,17 +383,18 @@ Las vistas públicas son el contrato con el storefront. **El storefront nunca le
 
 Más allá de las claves primarias y foráneas:
 
-| Índice                           | Sobre                                                          | Para qué                 |
-| -------------------------------- | -------------------------------------------------------------- | ------------------------ |
-| `products_facets_gin`            | `products.facets` (GIN, `jsonb_path_ops`)                      | Filtros del storefront   |
-| `products_search_gin`            | `products.search_vector` (GIN)                                 | Búsqueda de texto        |
-| `lots_variant_fifo`              | `(tenant_id, variant_id, received_at)` parcial                 | Selección FIFO           |
-| `lots_variant_fefo`              | `(tenant_id, variant_id, expiry_at)` parcial                   | Selección FEFO           |
-| `mov_lot_time`                   | `(lot_id, occurred_at, id)`                                    | Historial de lote        |
-| `reservations_live`              | `(tenant_id, variant_id)` parcial `WHERE released_at IS NULL`  | Cálculo de disponible    |
-| `reservations_expiry`            | `(expires_at)` parcial                                         | Job de liberación        |
-| `product_categories_one_primary` | `(product_id)` único parcial `WHERE is_primary`                | Invariante de breadcrumb |
-| `unposted_open`                  | `(tenant_id, occurred_at)` parcial `WHERE resolved_at IS NULL` | Bandeja de eventos       |
+| Índice                           | Sobre                                                                                 | Para qué                        |
+| -------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------- |
+| `products_facets_gin`            | `products.facets` (GIN, `jsonb_path_ops`)                                             | Filtros del storefront          |
+| `products_search_gin`            | `products.search_vector` (GIN)                                                        | Búsqueda de texto               |
+| `lots_variant_fifo`              | `(tenant_id, variant_id, received_at)` parcial                                        | Selección FIFO                  |
+| `lots_variant_fefo`              | `(tenant_id, variant_id, expiry_at)` parcial                                          | Selección FEFO                  |
+| `mov_lot_time`                   | `(lot_id, occurred_at, id)`                                                           | Historial de lote               |
+| `reservations_live`              | `(tenant_id, variant_id)` parcial `WHERE released_at IS NULL`                         | Cálculo de disponible           |
+| `reservations_expiry`            | `(expires_at)` parcial                                                                | Job de liberación               |
+| `product_categories_one_primary` | `(product_id)` único parcial `WHERE is_primary`                                       | Invariante de breadcrumb        |
+| `decant_wo_one_active_per_line`  | `decant_work_orders (sale_order_line_id)` único parcial `WHERE status <> 'cancelled'` | Una orden activa por línea (H3) |
+| `unposted_open`                  | `(tenant_id, occurred_at)` parcial `WHERE resolved_at IS NULL`                        | Bandeja de eventos              |
 
 Los índices parciales importan: `lots_variant_fifo` solo cubre lotes con estado utilizable, así que no crece con el histórico agotado.
 
@@ -405,7 +423,7 @@ Qué comandos cubre la política de permiso, en cada una:
 
 - **Lectura (SELECT):** las siete, desde 0010.
 - **Escritura:** `suppliers`, `purchase_orders`, `inventory_lots`, `chart_of_accounts` y `customer_deposits` desde 0030 (WP-B11): INSERT y UPDATE con su permiso de escritura, una política por comando, y DELETE denegado salvo en `purchase_orders` en borrador. `journal_entries` tiene su INSERT desde 0010 y su mapa de estados desde 0020. `sourcing_scenarios` tiene INSERT desde 0010 y UPDATE y DELETE desde 0032 (WP-B11b), los tres con `market.sourcing:write`, y su tabla hija `sourcing_scenario_lines` tiene los cuatro comandos con permiso desde 0032 (lectura con `market.sourcing:read`, escritura con `:write`); son las únicas de estas tablas donde el DELETE existe sin condición de estado. Las tablas que cuelgan de ellas y el ledger, desde 0034 (WP-B11d): `inventory_movements` (INSERT según `movement_type`, sin UPDATE ni DELETE), `purchase_order_lines` (la lectura exige `market.purchase_order:read`; agregar y quitar líneas, la orden padre en borrador), `goods_receipts` y `goods_receipt_lines` (recepciones sin DELETE) y el DELETE de `sale_orders` (solo en borrador); el SELECT de las demás sigue por tenant. `customer_deposits.sale_order_id` pasa a `ON DELETE RESTRICT`.
-- **El costo del ledger (0037, WP-B11f):** `inventory_movements` y `movement_cost_allocations` se leen con `inventory.stock:read`, como `inventory_lots`. El vendedor no obtiene `inventory_movements.total_cost_pyg` por ninguna vía. RLS decide por fila, no por columna: se cierra la tabla entera, y las capas de costo también, porque su suma por `movement_id` es ese mismo total. En `movement_cost_allocations` la `tenant_access` `FOR ALL` pasó a una política por comando: el INSERT sigue solo por tenant (WP-B11e), UPDATE y DELETE no tienen política.
+- **El costo del ledger (0037, WP-B11f):** `inventory_movements` y `movement_cost_allocations` se leen con `inventory.stock:read`, como `inventory_lots`. El vendedor no obtiene `inventory_movements.total_cost_pyg` por ninguna vía. RLS decide por fila, no por columna: se cierra la tabla entera, y las capas de costo también, porque su suma por `movement_id` es ese mismo total. En `movement_cost_allocations` la `tenant_access` `FOR ALL` pasó a una política por comando: el INSERT exige el permiso del movimiento y que sea de la transacción (0039, WP-B11e, 4.10), UPDATE y DELETE no tienen política.
 
 La tabla de permisos por comando y la trampa de la lectura (un rol que escribe sin poder leer) están en `docs/security-spec.md` §3.1.
 
