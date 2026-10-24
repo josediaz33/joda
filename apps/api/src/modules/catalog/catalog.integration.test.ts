@@ -2889,6 +2889,108 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(visibleAfter).toContain("c08q-republica");
   });
 
+  // WP-C08y, RN-CAT-07 (decisión de José, 2026-10-23). Archivar exige `write` si el producto no
+  // está publicado y además `publish` si ya tiene `published_at`: archivarlo lo saca de la tienda.
+  // Sin esto, archivar y reactivar (que deja `published_at` en nulo) despublicaba con solo `write`.
+  it("RN-CAT-07 · quien tiene write sin publish archiva un producto que no está publicado", async () => {
+    const product = await createAccessory("c08y-archiva-escritor");
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const response = await mutateAs(writerCookie, "catalog.product.archive", { id: product.id });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.data.status).toBe("archived");
+  });
+
+  it("RN-CAT-07 · quien tiene write sin publish no archiva un producto publicado: 403 y el producto no cambia; con publish sí, y conserva published_at", async () => {
+    const product = await createPublishableAccessory("c08y-archiva-publicado");
+    await mutateOk("catalog.product.publish", { id: product.id });
+    await activate(product.id);
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const denied = await mutateAs(writerCookie, "catalog.product.archive", { id: product.id });
+    const untouched = await call<ProductPublication>("catalog.product.byId", { id: product.id });
+    const allowed = await mutateOk<ProductPublication>("catalog.product.archive", {
+      id: product.id,
+    });
+
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json().error.data.appCode).toBe("FORBIDDEN_INSUFFICIENT_PERMISSION");
+    expect(untouched).toMatchObject({ status: "active", publishedAt: PUBLISH_CLOCK_ISO });
+    expect(allowed).toMatchObject({ status: "archived", publishedAt: PUBLISH_CLOCK_ISO });
+  });
+
+  it("RN-CAT-07 · el atajo está cerrado: quien tiene write sin publish no puede despublicar un producto archivando y reactivando", async () => {
+    const product = await createPublishableAccessory("c08y-sin-atajo");
+    await mutateOk("catalog.product.publish", { id: product.id });
+    await activate(product.id);
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const archive = await mutateAs(writerCookie, "catalog.product.archive", { id: product.id });
+    const reactivate = await mutateAs(writerCookie, "catalog.product.activate", { id: product.id });
+
+    expect(archive.statusCode).toBe(403);
+    // Sigue activo y publicado: reactivar un activo no cambia nada.
+    expect(reactivate.statusCode).toBe(200);
+    const fetched = await call<ProductPublication>("catalog.product.byId", { id: product.id });
+    expect(fetched).toMatchObject({ status: "active", publishedAt: PUBLISH_CLOCK_ISO });
+    expect(await publicProductSlugs()).toContain("c08y-sin-atajo");
+  });
+
+  it("RN-CAT-07 · archivar uno ya archivado no hace nada, tampoco para quien no puede publicar", async () => {
+    const product = await createPublishableAccessory("c08y-ya-archivado");
+    await mutateOk("catalog.product.publish", { id: product.id });
+    await mutateOk("catalog.product.archive", { id: product.id });
+    const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+    const response = await mutateAs(writerCookie, "catalog.product.archive", { id: product.id });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json().result.data).toMatchObject({
+      status: "archived",
+      publishedAt: PUBLISH_CLOCK_ISO,
+    });
+  });
+
+  it("RN-CAT-07 · un producto inexistente o de otro tenant da exactamente la misma respuesta al archivar", async () => {
+    await seedForeignCatalog();
+
+    const foreign = await mutate("catalog.product.archive", { id: FOREIGN_PRODUCT_ID });
+    const unknown = await mutate("catalog.product.archive", { id: UNKNOWN_ID });
+
+    expect(foreign.statusCode).toBe(404);
+    expect(unknown.statusCode).toBe(404);
+    expect(foreign.json().error.data.appCode).toBe("NOT_FOUND");
+    expect(unknown.json().error.data.appCode).toBe("NOT_FOUND");
+    expect(foreign.json().error.message).toBe("No encontrado.");
+    expect(unknown.json().error.message).toBe("No encontrado.");
+  });
+
+  it(
+    "RN-CAT-07 · si otro pedido publica el producto mientras quien no puede publicar lo archiva, no se archiva",
+    async () => {
+      const product = await createAccessory("c08y-publicado-en-vuelo");
+      const writerCookie = await loginPastMfa(STAFF_WRITER_EMAIL);
+
+      // Otra transacción publica el producto y todavía no confirma: la escritura de quien
+      // archiva espera la fila y, al desbloquearse, ya está publicado y archivarlo lo sacaría
+      // de la tienda sin que esa persona tenga permiso para eso.
+      const response = await whileHolding(
+        () =>
+          testDb.superuserClient.query(
+            `UPDATE app.products SET published_at = '2025-06-15T10:00:00Z' WHERE id = $1`,
+            [product.id],
+          ),
+        () => mutateAs(writerCookie, "catalog.product.archive", { id: product.id }),
+      );
+
+      expect(response.statusCode).toBe(403);
+      const fetched = await call<ProductPublication>("catalog.product.byId", { id: product.id });
+      expect(fetched.status).toBe("draft");
+    },
+    RACE_TEST_TIMEOUT_MS,
+  );
+
   it("RN-CAT-04 · quien solo puede leer el catálogo no reactiva un archivado: 403 y sigue archivado", async () => {
     const product = await createAccessory("c08q-reactiva-lector");
     await mutateOk("catalog.product.archive", { id: product.id });

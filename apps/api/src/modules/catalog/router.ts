@@ -121,12 +121,19 @@ export function createCatalogRouter(db: PrismaClient | null, deps: CatalogServic
         catalogService.updateProduct(requireDb(db), requireStaffContext(ctx), input),
       ),
 
+    // El permiso mínimo es `write`; si el producto ya tiene `published_at`, el servicio exige
+    // además `publish` (RN-CAT-07): archivarlo lo saca de la tienda.
     archive: staffProcedure
       .meta(WRITE)
       .input(archiveProductInput)
       .output(adminProductSchema)
       .mutation(({ ctx, input }) =>
-        catalogService.archiveProduct(requireDb(db), requireStaffContext(ctx), input),
+        catalogService.archiveProduct(
+          requireDb(db),
+          requireStaffContext(ctx),
+          { canPublish: ctx.grantedPermissions?.has("catalog.product:publish") === true },
+          input,
+        ),
       ),
 
     // El permiso mínimo es `write`; si el producto ya tiene `published_at`, el servicio
