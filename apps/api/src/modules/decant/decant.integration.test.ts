@@ -926,8 +926,10 @@ describe(
       it("un sellado abierto no es granel: aunque comparta el estado open_for_decant, se rechaza (RN-FRA-07)", async () => {
         const scenario = await createScenario();
         // Un decant mal configurado cuyo origen es una variante SELLADA: el único
-        // camino por el que un lote sellado llega a ser candidato. Lo que lo frena
-        // es el tipo de variante del lote, no su estado.
+        // camino por el que un lote sellado llega a ser candidato. Lo lleva a ese
+        // estado un UPDATE directo (el ETL, una carga a mano): desde WP-C08m el catálogo
+        // ya no deja fijar un origen que no sea el granel (RN-CAT-06). Lo que frena la
+        // planificación es el tipo de variante del lote, no su estado.
         const sealedVariant = await createVariant(
           scenario.productId,
           `SELLADO-${scenarioCounter}`,
@@ -945,8 +947,12 @@ describe(
             uom: "ml",
             sizeMl: 5,
             productionMode: "made_to_order",
-            sourceVariantId: sealedVariant,
+            sourceVariantId: scenario.bulkVariantId,
           },
+        );
+        await testDb.superuserClient.query(
+          `UPDATE app.product_variants SET source_variant_id = $1 WHERE id = $2`,
+          [sealedVariant, misconfiguredDecant],
         );
         // Un sellado abierto no admite movimientos (RN-LOT-03): se recibe y
         // recién después pasa a open_for_decant.

@@ -165,11 +165,6 @@ async function assertBrandExists(tx: TenantTx, brandId: string | null | undefine
   if (!(await repo.brandExists(tx, brandId))) throw toTRPCError(NOT_FOUND_ERROR);
 }
 
-/**
- * WP-C08b. Mismo criterio que `assertBrandExists`, para el origen (`sourceVariantId`) de una variante.
- * Solo comprueba que la variante sea del tenant: no que sea un granel, ni del mismo producto,
- * ni que no sea la propia variante. Esa regla de negocio está sin decidir (WP-C08m).
- */
 const SOURCE_VARIANT_OTHER_PRODUCT_ERROR = appError(
   "VALIDATION_SOURCE_VARIANT_OTHER_PRODUCT",
   400,
@@ -182,6 +177,12 @@ const SOURCE_VARIANT_SELF_ERROR = appError(
   "Una variante no puede ser su propio origen.",
 );
 
+const SOURCE_VARIANT_NOT_BULK_ERROR = appError(
+  "VALIDATION_SOURCE_VARIANT_NOT_BULK",
+  400,
+  "El origen de una variante bajo pedido tiene que ser el granel del producto (una variante de tipo granel, en ml): el decant se sirve de un frasco ya abierto, no de uno sellado.",
+);
+
 const SOURCE_VARIANT_PRODUCT_ARCHIVED_ERROR = appError(
   "VALIDATION_SOURCE_VARIANT_PRODUCT_ARCHIVED",
   400,
@@ -191,13 +192,13 @@ const SOURCE_VARIANT_PRODUCT_ARCHIVED_ERROR = appError(
 /**
  * WP-C08b + WP-C08m (RN-CAT-06). El origen de una variante bajo pedido tiene que existir bajo RLS
  * (si no, 404, con la misma respuesta para uno inexistente y uno de otro tenant), ser del MISMO
- * producto (un producto es un solo líquido), no ser la propia variante y estar en un producto
- * que no esté archivado. Solo se mira cuando el pedido fija un origen: editar el resto de una
- * variante de un producto archivado no pasa por acá.
+ * producto (un producto es un solo líquido), no ser la propia variante, ser el GRANEL del
+ * producto (`variant_type = 'bulk'`; en ml, porque `createVariantInput` lo fuerza al crear y `uom` no se edita: el CHECK de 0003 solo impide `ml` en los tipos que no son decant ni granel) y estar en un producto que
+ * no esté archivado. Solo se mira cuando el pedido fija un origen: editar el resto de una variante
+ * de un producto archivado no pasa por acá.
  *
- * **El tipo de la variante de origen no se valida**: José dijo «sealed con size_ml no nulo»,
- * que contradice RN-FRA-07 (el decant se sirve de un lote `bulk`) y el CHECK de 0003; queda
- * como estaba hasta que lo confirme (RN-CAT-06, WP-C08m).
+ * El decant se sirve del granel que nace al abrir un frasco sellado (ADR-009, RN-FRA-07), no del
+ * sellado: José confirmó el 2026-10-23 que su «sealed» era un lapsus y que el origen es el `bulk`.
  */
 async function assertSourceVariantUsable(
   tx: TenantTx,
@@ -209,6 +210,7 @@ async function assertSourceVariantUsable(
   if (!source) throw toTRPCError(NOT_FOUND_ERROR);
   if (source.id === owner.variantId) throw toTRPCError(SOURCE_VARIANT_SELF_ERROR);
   if (source.product_id !== owner.productId) throw toTRPCError(SOURCE_VARIANT_OTHER_PRODUCT_ERROR);
+  if (source.variant_type !== "bulk") throw toTRPCError(SOURCE_VARIANT_NOT_BULK_ERROR);
   const product = await repo.findProductRow(tx, { id: owner.productId });
   if (product?.status === "archived") throw toTRPCError(SOURCE_VARIANT_PRODUCT_ARCHIVED_ERROR);
 }
