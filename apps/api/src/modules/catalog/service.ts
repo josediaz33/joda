@@ -193,7 +193,7 @@ const SOURCE_VARIANT_PRODUCT_ARCHIVED_ERROR = appError(
  * WP-C08b + WP-C08m (RN-CAT-06). El origen de una variante bajo pedido tiene que existir bajo RLS
  * (si no, 404, con la misma respuesta para uno inexistente y uno de otro tenant), ser del MISMO
  * producto (un producto es un solo líquido), no ser la propia variante, ser el GRANEL del
- * producto (`variant_type = 'bulk'`, en ml: el CHECK de 0003 lo fuerza) y estar en un producto que
+ * producto (`variant_type = 'bulk'`; en ml, porque `createVariantInput` lo fuerza al crear y `uom` no se edita: el CHECK de 0003 solo impide `ml` en los tipos que no son decant ni granel) y estar en un producto que
  * no esté archivado. Solo se mira cuando el pedido fija un origen: editar el resto de una variante
  * de un producto archivado no pasa por acá.
  *
