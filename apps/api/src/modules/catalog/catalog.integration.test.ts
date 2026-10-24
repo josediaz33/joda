@@ -1794,25 +1794,15 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
     expect(fetched.sourceVariantId).toBe(bulk.id);
   });
 
-  it("docs/api-conventions.md §8.4 · actualizar el origen de una variante con otra variante propia se acepta, y null lo quita", async () => {
+  it("docs/api-conventions.md §8.4 · actualizar el origen de una variante con el granel propio se acepta, y null lo quita", async () => {
     const product = await createAccessory("c08b-variante-origen-propio");
+    // El índice único de 0028 permite un solo granel por producto, y desde WP-C08m el origen
+    // tiene que ser ese granel: no hay un segundo origen válido al que mover la variante.
     const firstSource = await mutateOk<{ id: string }>("catalog.variant.create", {
       productId: product.id,
       sku: "C08B-ORIGEN-1",
       variantType: "bulk",
       uom: "ml",
-      sizeMl: null,
-      pricePyg: "0",
-    });
-    // Un insumo y no un segundo granel: el índice único de 0028 permite un solo granel por
-    // producto. El tipo de la variante de origen no se valida todavía (RN-CAT-06, WP-C08m: la
-    // decisión de José, tomada al pie de la letra, contradice RN-FRA-07); si se restringe, esta
-    // prueba se reescribe sin que haya una regresión. Lo que sí se valida es el producto.
-    const secondSource = await mutateOk<{ id: string }>("catalog.variant.create", {
-      productId: product.id,
-      sku: "C08B-ORIGEN-2",
-      variantType: "supply",
-      uom: "unit",
       sizeMl: null,
       pricePyg: "0",
     });
@@ -1829,21 +1819,21 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
 
     const moved = await mutateOk<{ sourceVariantId: string | null }>("catalog.variant.update", {
       id: decant.id,
-      sourceVariantId: secondSource.id,
+      sourceVariantId: firstSource.id,
     });
     const cleared = await mutateOk<{ sourceVariantId: string | null; productionMode: string }>(
       "catalog.variant.update",
       { id: decant.id, productionMode: "stocked", sourceVariantId: null },
     );
 
-    expect(moved.sourceVariantId).toBe(secondSource.id);
+    expect(moved.sourceVariantId).toBe(firstSource.id);
     expect(cleared.sourceVariantId).toBeNull();
     expect(cleared.productionMode).toBe("stocked");
   });
 
-  // WP-C08m, RN-CAT-06 (decisión de José, 2026-10-12, en lo que es aplicable): el origen de una
-  // variante bajo pedido es una variante del MISMO producto, no la propia, y de un producto que no
-  // esté archivado. El tipo de la variante de origen no se valida todavía (ver RN-CAT-06).
+  // WP-C08m, RN-CAT-06 (decisión de José, 2026-10-12, con el tipo confirmado el 2026-10-23): el
+  // origen de una variante bajo pedido es el GRANEL (`bulk`, en ml) del MISMO producto, no la
+  // propia variante, de un producto que no esté archivado.
   async function createProductWithBulk(slug: string) {
     const product = await createAccessory(slug);
     const bulk = await mutateOk<{ id: string }>("catalog.variant.create", {
@@ -1925,6 +1915,63 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       id: decant.id,
     });
     expect(fetched.sourceVariantId).toBe(own.bulk.id);
+  });
+
+  it("RN-CAT-06 · el origen tiene que ser el granel: un sellado, un insumo, un tester o un decant del mismo producto se rechazan al crear y al actualizar, y el origen no cambia", async () => {
+    const own = await createProductWithBulk("c08m-no-granel");
+    const variant = (sku: string, variantType: string, uom: string, sizeMl: number | null) =>
+      mutateOk<{ id: string }>("catalog.variant.create", {
+        productId: own.product.id,
+        sku,
+        variantType,
+        uom,
+        sizeMl,
+        pricePyg: "100000",
+      });
+    const sealed = await variant("C08M-SELLADO", "sealed", "unit", 125);
+    const supply = await variant("C08M-INSUMO", "supply", "unit", null);
+    const tester = await variant("C08M-TESTER", "tester", "unit", 100);
+    const decant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      decantPayload(own.product.id, "C08M-DECANT-GRANEL", own.bulk.id),
+    );
+
+    const otherDecant = await mutateOk<{ id: string }>(
+      "catalog.variant.create",
+      decantPayload(own.product.id, "C08M-DECANT-OTRO", own.bulk.id),
+    );
+    const created = await mutate(
+      "catalog.variant.create",
+      decantPayload(own.product.id, "C08M-DECANT-SELLADO", sealed.id),
+    );
+    const toSupply = await mutate("catalog.variant.update", {
+      id: decant.id,
+      sourceVariantId: supply.id,
+    });
+    const toTester = await mutate("catalog.variant.update", {
+      id: decant.id,
+      sourceVariantId: tester.id,
+    });
+    const toDecant = await mutate("catalog.variant.update", {
+      id: decant.id,
+      sourceVariantId: otherDecant.id,
+    });
+
+    for (const response of [created, toSupply, toTester, toDecant]) {
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error.data.appCode).toBe("VALIDATION_SOURCE_VARIANT_NOT_BULK");
+    }
+    expect(created.json().error.message).toBe(
+      "El origen de una variante bajo pedido tiene que ser el granel del producto (una variante de tipo granel, en ml): el decant se sirve de un frasco ya abierto, no de uno sellado.",
+    );
+    const fetched = await call<{ sourceVariantId: string | null }>("catalog.variant.byId", {
+      id: decant.id,
+    });
+    expect(fetched.sourceVariantId).toBe(own.bulk.id);
+    const variants = await call<{ sku: string }[]>("catalog.variant.list", {
+      productId: own.product.id,
+    });
+    expect(variants.map((item) => item.sku)).not.toContain("C08M-DECANT-SELLADO");
   });
 
   it("RN-CAT-06 · no se fija un origen en un producto archivado, pero editar el resto de la variante sigue siendo posible", async () => {
