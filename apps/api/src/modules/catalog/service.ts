@@ -516,15 +516,39 @@ export async function activateProduct(
   });
 }
 
+const ARCHIVE_PUBLISHED_FORBIDDEN_ERROR = appError(
+  "FORBIDDEN_INSUFFICIENT_PERMISSION",
+  403,
+  "Este producto está publicado: archivarlo lo saca de la tienda y hace falta el permiso de publicar.",
+);
+
+/**
+ * Archiva el producto. WP-C08y, RN-CAT-07 (decisión de José, 2026-10-23): con `write` alcanza si
+ * el producto no está publicado, y si ya tiene `published_at` hace falta además `publish`, el
+ * mismo criterio que para activar (RN-CAT-04): archivar uno publicado lo saca de la tienda, y
+ * sacar de la tienda es de quien publica. Sin esto, archivar y reactivar (que deja
+ * `published_at` en nulo, RN-CAT-04) permitía despublicar con solo `write`.
+ *
+ * Una sola decisión, como en `activateProduct`: se intenta la escritura condicional y, si no
+ * cambió nada, se lee el producto y se explica por qué. Así una carrera con otro pedido (que lo
+ * publique o lo archive) termina igual que si hubiera ocurrido antes de este pedido. Archivar
+ * uno ya archivado no hace nada. Conserva `published_at`.
+ */
 export async function archiveProduct(
   db: PrismaClient,
   ctx: TenantTxContext,
+  access: { readonly canPublish: boolean },
   input: { readonly id: string },
 ): Promise<AdminProduct> {
   return withTenantTx(db, ctx, async (tx) => {
-    const existing = await repo.findProductRow(tx, input);
-    if (!existing) throw toTRPCError(NOT_FOUND_ERROR);
-    await repo.updateProductRow(tx, input.id, { status: "archived" });
+    if (!(await repo.archiveProductRow(tx, input.id, !access.canPublish))) {
+      const current = await repo.findProductRow(tx, input);
+      if (!current) throw toTRPCError(NOT_FOUND_ERROR);
+      // Ya archivado: no hay nada que hacer. Si no, la condición que falló es
+      // `published_at IS NULL`: está publicado y quien archiva no puede publicar.
+      if (current.status === "archived") return toAdminProduct(current);
+      throw toTRPCError(ARCHIVE_PUBLISHED_FORBIDDEN_ERROR);
+    }
     const row = await repo.findProductRow(tx, input);
     if (!row) throw new Error(`producto ${input.id} desapareció a mitad de la transacción`);
     return toAdminProduct(row);

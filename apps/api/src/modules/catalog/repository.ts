@@ -179,6 +179,29 @@ export async function reactivateArchivedProductRow(
   return row ? { previousPublishedAt: row.previous_published_at } : null;
 }
 
+/**
+ * WP-C08y, RN-CAT-07. `status` pasa a `archived` y dice si cambió algo. Con `onlyIfUnpublished`
+ * (quien archiva no puede publicar) la condición incluye `published_at IS NULL`: archivar un
+ * producto publicado lo saca de la tienda, y si otro pedido lo publica mientras esta escritura
+ * espera el bloqueo de la fila, no lo archiva alguien que no tiene permiso para eso. Un producto
+ * ya archivado no cambia (no hay nada que escribir).
+ */
+export async function archiveProductRow(
+  tx: TenantTx,
+  id: string,
+  onlyIfUnpublished: boolean,
+): Promise<boolean> {
+  const { count } = await tx.products.updateMany({
+    where: {
+      id,
+      status: { not: "archived" },
+      ...(onlyIfUnpublished ? { published_at: null } : {}),
+    },
+    data: { status: "archived" },
+  });
+  return count === 1;
+}
+
 /** Contraparte de `publishProductRow`: solo cambia un producto que está publicado. */
 export async function unpublishProductRow(tx: TenantTx, id: string): Promise<boolean> {
   const { count } = await tx.products.updateMany({
