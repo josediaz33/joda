@@ -384,6 +384,7 @@ Sobre un lote sellado de una unidad (`qty_initial = 1`):
 
 - **El lote no está en `available`.** Uno en `quarantine` o `damaged` no se puede fraccionar: es mercadería que todavía no pasó control de calidad o que ya se descartó. Confirmado como regla de negocio en la revisión cruzada de WP-A13. Uno ya abierto tampoco (caso borde 5).
 - **El lote no tiene un frasco en saldo, o la variante no tiene un frasco disponible.** Disponible es el saldo menos las reservas vivas (RN-RES-03): abrir el último frasco reservado se lo saca al cliente que ya pagó.
+- **El lote tiene una reserva viva propia** (atada a su `lot_id`, RN-RES-06): esa reserva es una promesa sobre ese frasco concreto. Decidido por José el 2026-10-29; lo implementa WP-C18b, que además bloquea la variante antes que el lote (RN-RES-07): hasta entonces, dos aperturas de lotes distintos de la misma variante con el último frasco reservado podrían pasar las dos.
 - **La variante del lote no es sellada.** Un `tester` es el frasco de exhibición y no se fracciona (regla decidida en la toma de WP-C11, 2026-09-29). Si alguna vez se compran frascos sin caja para decantar, se cargan como variante sellada con su propio SKU.
 - **El producto no tiene variante de granel.** Hay que crearla en el catálogo. Un producto tiene **una sola**, impuesto por la base: es un solo líquido aunque se venda en varios tamaños.
 - **El producto no tiene volumen nominal.** El granel nace con `nominal_volume_ml` ml (RN-LOT-02, paso 3); sin él, por ejemplo en un producto que no es un perfume, no hay cuántos ml calcular.
@@ -441,7 +442,7 @@ Según `allocation_policy` de la variante:
 
 Ante empate, desempata el `id` ascendente.
 
-**El orden de bloqueo es una propiedad de la API, no de la política de consumo.** Cuando una línea de venta necesita más de un lote, la API toma el `SELECT ... FOR UPDATE` de esos lotes siempre en `id` ascendente, para evitar interbloqueos entre pedidos multi-línea concurrentes — sin importar qué política decidió cuánto sale de cada uno: `fifo` consume del más antiguo primero y `fefo` del que vence antes, pero eso solo decide las cantidades, nunca el orden de bloqueo. Por la misma razón, la función de dominio que arma las capas de costo (`allocateFromLots`, RN-COS-04) devuelve el resultado ordenado por `id` ascendente, aunque haya consumido los lotes en otro orden — es lo que la API bloquea, en el mismo orden en que lo recibe.
+**El orden de bloqueo es una propiedad de la API, no de la política de consumo.** Cuando una línea de venta necesita más de un lote, la API toma el `SELECT ... FOR UPDATE` de esos lotes siempre en `id` ascendente, para evitar interbloqueos entre pedidos multi-línea concurrentes — sin importar qué política decidió cuánto sale de cada uno: `fifo` consume del más antiguo primero y `fefo` del que vence antes, pero eso solo decide las cantidades, nunca el orden de bloqueo. Por la misma razón, la función de dominio que arma las capas de costo (`allocateFromLots`, RN-COS-04) devuelve el resultado ordenado por `id` ascendente, aunque haya consumido los lotes en otro orden — es lo que la API bloquea, en el mismo orden en que lo recibe. **Los lotes se bloquean después de la variante, no antes:** el orden completo, para todo el sistema, es el de RN-RES-07.
 
 ---
 
@@ -477,7 +478,7 @@ Cuentan **todas** las unidades del lote, incluidas las vendidas, en cuarentena o
 
 `serialized_units.variant_id` es el `variant_id` de su `lot_id`. Impuesto por la base con una FK compuesta `(lot_id, variant_id, tenant_id) → inventory_lots (id, variant_id, tenant_id)` (WP-C12, `0029`), el mismo patrón que la variante de un movimiento (WP-B08c). La variante de la unidad la deriva el servidor del lote; nunca se acepta del cliente. Un lote con unidades serializadas no cambia de variante. Una unidad puede existir sin lote (`lot_id` nulo).
 
-Lo mismo vale para `stock_reservations` (lote y unidad serializada de la reserva, de la variante de la reserva): lo hereda WP-C18.
+Lo mismo vale para `stock_reservations` (WP-C18a, `0040`): el lote y la unidad serializada de una reserva son de la variante de la reserva, con las FK compuestas `(lot_id, variant_id, tenant_id)` y `(serial_unit_id, variant_id, tenant_id)`. Para esta última, `serialized_units` recibe `UNIQUE (id, variant_id, tenant_id)`. Con `lot_id` o `serial_unit_id` nulos no verifica nada: la reserva es por variante por defecto (RN-RES-06).
 
 ### Cómo se cargan y cómo se venden
 
@@ -517,7 +518,7 @@ waste_expected =  0,200
 ml_reservado   = 10,200
 ```
 
-Además se reservan los insumos del BOM: 1 vial, 1 atomizador, 1 etiqueta.
+Además se reservan los insumos del BOM: 1 vial, 1 atomizador, 1 etiqueta. La reserva del granel va atada al lote de granel elegido; la de los insumos, por variante (RN-RES-06).
 
 ### RN-FRA-03 · Ejecución
 
@@ -604,19 +605,52 @@ Agregar al carrito no aparta inventario. La disponibilidad se muestra, no se blo
 | Seña recibida                 | Hasta la fecha de vencimiento de la seña |
 | Retención manual del personal | Definida por el operador, máximo 30 días |
 
+Los valores de la tabla son los de la especificación y mandan en los medios que cubre (`computeReservationExpiresAt`, `packages/domain/src/sales/reservation.ts`, WP-A09).
+
+**Pedido en espera de pago sin medio de pago registrado** (decisión de José, 2026-10-29): la reserva que nace al pasar un pedido a `awaiting_payment` sin que el sistema conozca el medio de pago dura **24 h**, y esa duración es **configurable por tenant**. Es el único caso que la tabla no cubre, y hoy es el único que existe: todavía no hay pagos (el pedido lo carga el personal, WP-C17). En cuanto el medio se registra, manda la tabla (tarjeta 30 min, transferencia 48 h, seña hasta su vencimiento) y ese valor no es configurable. Cómo se interpretó la decisión frente a esta tabla, y dónde queda la configuración: `docs/decisiones-provisionales.md`.
+
 ### RN-RES-03 · Disponible
 
 ```
 disponible = saldo_proyectado − Σ reservas con released_at IS NULL y expires_at > now()
 ```
 
+El disponible se calcula **por variante** (`v_stock_available`): cuenta toda reserva viva de la variante, esté atada a un lote o a una unidad o no (RN-RES-06). El disponible de un lote es su saldo menos las reservas vivas atadas a él.
+
 ### RN-RES-04 · Liberación
 
-Un trabajo programado libera las reservas vencidas cada 5 minutos. Una reserva liberada no se reactiva: se crea una nueva.
+Un trabajo programado libera las reservas vencidas cada 5 minutos. Una reserva liberada no se reactiva: se crea una nueva. Liberar es marcar `released_at`; la fila no se borra.
+
+**Con qué credencial corre** (decisión de José, 2026-10-29; la implementa WP-C18b). El trabajo corre como `joda_api`, **nunca con `service_role`**: con una credencial que elude RLS el aislamiento por tenant deja de existir. Como `joda_api` ve un solo tenant por transacción, el trabajo recorre los tenants con una función `SECURITY DEFINER` que devuelve **solo los ids de los tenants activos** (ningún otro dato) y, por cada uno, abre una transacción, fija el contexto (`set_config('app.tenant_id' …, true)`, con el `true` final) y libera bajo RLS. Qué es un tenant «activo» (la tabla `tenants` no tiene un estado) y quién ejecuta la función: `docs/decisiones-provisionales.md`.
 
 ### RN-RES-05 · Conflicto en checkout
 
 Si al confirmar el pago la reserva venció y el stock ya no alcanza, la operación se rechaza, el pago se reembolsa y el pedido queda en `cancelled` con motivo `stock_no_disponible`. **Nunca se confirma una venta sin stock.**
+
+### RN-RES-06 · A qué se ata una reserva
+
+La reserva es **por variante por defecto**: `variant_id` es obligatorio. `lot_id` y `serial_unit_id` son opcionales (decisión de José, 2026-10-29):
+
+- **Un reloj serializado reserva su unidad** (`serial_unit_id`): dos pedidos no pueden comprometer el mismo reloj.
+- **Un plan de decant reserva el lote de granel elegido** (`lot_id`, RN-FRA-02); sus insumos, por variante.
+- **Cualquier otra reserva** (un pedido de un perfume sellado, un accesorio) es por variante, sin lote: qué lote sale lo decide la confirmación de la venta (RN-LOT-05), no la reserva.
+
+Una reserva atada a un lote o a una unidad es **de la variante de ese lote o de esa unidad**, y lo impone la base (FK compuestas, WP-C18a, `0040`; RN-SER-04). Una reserva liberada o vencida conserva su fila, así que el lote o la unidad a la que apuntó no cambia de variante.
+
+**Apertura de frasco** (RN-LOT-02, WP-C11): exige **disponible ≥ 1 en la variante después de las reservas** (RN-RES-03), y **no se abre un lote que tenga una reserva viva propia**.
+
+### RN-RES-07 · Orden de bloqueo único
+
+Toda operación que decide sobre stock —reservar, cancelar un pedido con reservas, abrir un frasco, planificar o ejecutar un decant, confirmar una venta, ajustar, dar de alta una unidad serializada— toma sus bloqueos **en este orden, el mismo en todo el sistema** (decisión de José, 2026-10-29):
+
+1. La fila de `product_variants` de cada variante involucrada (`SELECT … FOR UPDATE`), por `id` ascendente.
+2. Después, los lotes involucrados, en `id` ascendente y en una sola sentencia (`SELECT … FOR UPDATE … ORDER BY id`: RN-LOT-05, ADR-019).
+
+**Por qué la variante primero.** El disponible (RN-RES-03) se lee por variante. Sin bloquearla, dos operaciones sobre lotes distintos de la misma variante leen el mismo disponible y comprometen el último frasco las dos (la apertura de frasco lo tiene anotado desde WP-C11). **Por qué un solo orden.** Dos caminos que bloquean en órdenes distintos se interbloquean aunque cada uno sea correcto por separado.
+
+**Requisito explícito de WP-C18b y de WP-C19**, que llevan a este orden **todos** los caminos que hoy bloquean lotes: ajustes, alta de unidades, apertura, planificación y ejecución de decants y `updateVariant`. Quien solo conoce el lote (la apertura, la ejecución de una orden) lee su `variant_id` sin bloquear, bloquea la variante y después el lote, y revalida el lote ya bloqueado.
+
+**La trampa que justifica auditar todos los caminos.** Un `FOR UPDATE` sobre la variante también espera a cualquier `INSERT` que la referencie: la comprobación de la FK toma `FOR KEY SHARE` sobre la fila de la variante (movimientos, lotes, unidades, líneas de venta, reservas). Un camino que bloquea un lote y después inserta un movimiento, sin haber tomado antes la variante, se interbloquea contra otro que sí la tomó primero. Verificado en PostgreSQL 16 en WP-C18a: con la variante en `FOR UPDATE`, el `INSERT` de una reserva espera; con `FOR NO KEY UPDATE`, no. `FOR NO KEY UPDATE` da la misma exclusión entre quienes deciden stock sin esperar a las FK. La decisión de José es `FOR UPDATE`; si WP-C18b prefiere la otra, lo propone y José lo confirma.
 
 ---
 

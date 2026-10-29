@@ -58,6 +58,10 @@ Bloqueo de lotes en **orden ascendente de `lot_id`**, en una sola sentencia. Sin
 orden determinístico hay interbloqueo en pedidos multilínea. Dejá el comentario
 en el código: es el tipo de detalle que alguien "limpia" en un refactor.
 
+**La fila de `product_variants` (`FOR UPDATE`, por `id`) va antes que los
+lotes**, en todo camino que decide sobre stock: es el orden único del sistema
+(`docs/domain-rules.md` RN-RES-07). Lotes sin variante primero = interbloqueo.
+
 ## Otras
 
 - Zod `.strict()` en toda entrada. Los importes viajan como string.

@@ -269,6 +269,8 @@ SELECT * FROM app.inventory_lots
 
 El orden determinístico es obligatorio: sin él, dos pedidos multi-línea que tocan los mismos lotes en orden distinto producen interbloqueo. **Este comentario va en el código**, porque es exactamente el tipo de detalle que alguien "limpia" en un refactor.
 
+**La fila de la variante va antes que los lotes** (decisión de José, 2026-10-29; `docs/domain-rules.md` RN-RES-07): toda operación que decide sobre stock bloquea primero `product_variants` (`FOR UPDATE`, por `id` ascendente) y después los lotes, en el orden de arriba. Es el único orden del sistema; un camino que bloquee lotes sin tomar antes la variante se interbloquea contra uno que sí lo hizo.
+
 `SKIP LOCKED` solo para trabajadores en segundo plano, nunca en una venta: saltear un recurso bloqueado durante una venta produce resultados inesperados.
 
 ### 8.3 Alcance
