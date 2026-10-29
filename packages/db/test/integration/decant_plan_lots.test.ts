@@ -583,8 +583,12 @@ describe("planificar un decant sin leer lotes y sin duplicar la orden (WP-B18, R
       await db.client.query("BEGIN");
       try {
         await db.client.query("SET LOCAL ROLE joda_readonly");
+        // El mensaje importa: con la función ejecutable por PUBLIC, esta misma
+        // llamada (sin contexto de sesión) también da 42501, pero por la falta de
+        // tenant y no por el privilegio.
         await expect(db.client.query(CANDIDATES_OF(OWN_BULK_VARIANT_ID))).rejects.toMatchObject({
           code: "42501",
+          message: "permission denied for function list_decant_plan_lots",
         });
       } finally {
         await db.client.query("ROLLBACK");

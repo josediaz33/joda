@@ -2279,6 +2279,21 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       });
     });
 
+    it("el storefront (joda_readonly) no ejecuta la función que decide la política: es de la API", async () => {
+      await db.client.query("BEGIN");
+      try {
+        await db.client.query("SET LOCAL ROLE joda_readonly");
+        await expect(
+          db.client.query("SELECT app.can_allocate_cost_to_movement(1)"),
+        ).rejects.toMatchObject({
+          code: "42501",
+          message: "permission denied for function can_allocate_cost_to_movement",
+        });
+      } finally {
+        await db.client.query("ROLLBACK");
+      }
+    });
+
     it("las capas no se editan ni se borran: el UPDATE y el DELETE de joda_api siguen sin privilegio", async () => {
       await expect(
         as(owner, `UPDATE app.movement_cost_allocations SET total_cost_pyg = 1`),
