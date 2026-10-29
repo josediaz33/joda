@@ -69,6 +69,11 @@ const SALE_ORDER_IDS = {
   refunded: "b1100000-0000-0000-0000-000000000508",
 } as const;
 const SCENARIO_LINE_ID = "b1100000-0000-0000-0000-0000000000f2";
+// WP-B11e: un granel abierto del tenant vecino, para las pruebas de capas que
+// cruzan tenants (un movimiento del vecino).
+const PEER_PRODUCT_ID = "b11e0000-0000-0000-0000-0000000000a1";
+const PEER_VARIANT_ID = "b11e0000-0000-0000-0000-0000000000b1";
+const PEER_LOT_ID = "b11e0000-0000-0000-0000-0000000000c1";
 
 interface Actor {
   userId: string;
@@ -308,8 +313,8 @@ const UPDATE_ALL_SALE_ORDERS = `UPDATE app.sale_orders SET notes = 'editado'`;
 const COUNT_SALE_ORDER = (id: string) =>
   `SELECT count(*)::int AS n FROM app.sale_orders WHERE id = '${id}'`;
 // Los permisos de los roles de sistema son la matriz de security-spec §2.1: los
-// cambia el seed, no la API. Del tenant real: dueño 28, encargado 27, vendedor 6,
-// depósito 5.
+// cambia el seed, no la API. Del tenant real: dueño 29, encargado 28, vendedor 7,
+// depósito 6.
 const COUNT_OWNER_ROLE_PERMISSIONS = `SELECT count(*)::int AS n FROM app.role_permissions rp
   JOIN app.roles r ON r.id = rp.role_id
   WHERE r.tenant_id = '${REAL_TENANT_ID}' AND r.code = 'owner'`;
@@ -445,6 +450,24 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       SELECT app.seed_roles('${PEER_TENANT_ID}');
     `);
     peerOwner = await seedRoleActor("000", PEER_TENANT_ID, "owner");
+    await db.client.query(`
+      INSERT INTO app.products (id, tenant_id, kind, slug, name, status)
+      VALUES ('${PEER_PRODUCT_ID}', '${PEER_TENANT_ID}', 'perfume', 'vecino-b11e',
+              'Perfume vecino B11e', 'active');
+      INSERT INTO app.perfume_details
+        (tenant_id, product_id, concentration, nominal_volume_ml, olfactory_family,
+         waste_factor, unusable_residue_ml)
+      VALUES ('${PEER_TENANT_ID}', '${PEER_PRODUCT_ID}', 'edp', 100, 'Cítrico', 0.02, 2.5);
+      INSERT INTO app.product_variants
+        (id, tenant_id, product_id, sku, variant_type, uom, price_pyg, online_visible)
+      VALUES ('${PEER_VARIANT_ID}', '${PEER_TENANT_ID}', '${PEER_PRODUCT_ID}', 'VECINO-B11E-BULK',
+              'bulk', 'ml', 0, false);
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, status, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg, opened_at)
+      VALUES ('${PEER_LOT_ID}', '${PEER_TENANT_ID}', '${PEER_VARIANT_ID}', 'open_for_decant', 80,
+              'ml', 100, 'PYG', 1, 8000, 100, now());
+    `);
 
     // El owner del smoke no tiene sesión viva: has_permission() la exige.
     owner = {
@@ -1081,6 +1104,7 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
         "accounting.deposit:write",
         "catalog.product:read",
         "fiscal.document:issue",
+        "inventory.decant:plan",
         "sales.order:read",
         "sales.order:write",
       ]);
@@ -2050,48 +2074,50 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
     });
 
     // La ruta de fuga que dejaba 0037 sin la corrección del disparador: la
-    // política de INSERT de las capas es solo por tenant y la FK no evalúa RLS,
+    // política de INSERT de las capas era solo por tenant y la FK no evalúa RLS,
     // así que una capa de 1 sobre un movimiento AJENO, con la verificación
     // forzada, devolvía `asignado=X declarado=Y` con Y el costo del movimiento.
+    // Desde 0039 (WP-B11e) la capa ni siquiera entra: la política la rechaza
+    // antes de que el disparador la mire, y el rechazo no trae ninguna cifra.
     it.each([
-      ["una recepción sin capas", () => unlayeredMovementId],
-      ["un movimiento que ya tiene sus capas", () => costedMovementId],
+      ["una recepción sin capas", () => unlayeredMovementId, UNLAYERED_MOVEMENT_COST],
+      ["un movimiento que ya tiene sus capas", () => costedMovementId, COSTED_MOVEMENT_COST],
     ])(
-      "el vendedor no obtiene el costo de %s por el mensaje de una capa que no cuadra",
-      async (_label, movementId) => {
-        await as(seller, INSERT_COST_LAYER_ON(movementId(), 1));
-
-        await expect(api.query(CHECK_COST_LAYERS_NOW)).rejects.toMatchObject({
-          code: "23514",
-          message: expect.stringMatching(COST_LAYERS_MISMATCH_WITHOUT_AMOUNTS),
+      "el vendedor no obtiene el costo de %s: su capa se rechaza al insertarla, sin cifras",
+      async (_label, movementId, cost) => {
+        await expect(as(seller, INSERT_COST_LAYER_ON(movementId(), 1))).rejects.toMatchObject({
+          code: "42501",
+          message: expect.not.stringContaining(String(cost)),
         });
       },
     );
 
-    it("quien tiene inventory.stock:read sí ve los montos en el rechazo de una capa que no cuadra (control positivo)", async () => {
-      await as(custom.stockReader, INSERT_COST_LAYER_ON(costedMovementId, 1));
+    it("quien tiene inventory.stock:read sí ve los montos en el rechazo de una capa que no cuadra de su propio movimiento (control positivo)", async () => {
+      await as(warehouse, `${INSERT_MOVEMENT("adjustment", 5, "NULL", "1000")} RETURNING id`);
+      await api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(1));
 
       await expect(api.query(CHECK_COST_LAYERS_NOW)).rejects.toMatchObject({
         code: "23514",
-        message: expect.stringMatching(
-          new RegExp(
-            `no cuadran: asignado=${COSTED_MOVEMENT_COST + 1} declarado=${COSTED_MOVEMENT_COST}$`,
-          ),
-        ),
+        message: expect.stringMatching(/no cuadran: asignado=1 declarado=1000$/),
       });
     });
 
-    // COMPORTAMIENTO CONOCIDO, que cierra WP-B11e (atar la capa a un movimiento
-    // que quien la escribe creó en esa transacción). Sin montos en el mensaje
-    // queda la igualdad: una capa pasa solo si su total es el del movimiento,
-    // así que quien adivina el costo exacto de un movimiento ajeno sin capas lo
-    // confirma. Cuando B11e lo cierre, esta prueba se invierte a propósito.
-    it("comportamiento conocido (WP-B11e): el vendedor confirma por igualdad el costo exacto de un movimiento ajeno sin capas", async () => {
-      await as(seller, INSERT_COST_LAYER_ON(unlayeredMovementId, UNLAYERED_MOVEMENT_COST));
-      const guess = await api.query(CHECK_COST_LAYERS_NOW);
-
-      expect(guess.command).toBe("SET");
-    });
+    // El oráculo que dejó 0037 y cerró WP-B11e: sin cifras en el mensaje quedaba
+    // la igualdad (una capa pasa solo si su total es el del movimiento), así que
+    // quien adivinaba el costo exacto de un movimiento ajeno sin capas lo
+    // confirmaba. Ahora la capa no se puede atar a un movimiento ajeno: el
+    // intento ni llega al cuadre, acierte o no el total.
+    it.each([
+      ["acierta el costo exacto", UNLAYERED_MOVEMENT_COST],
+      ["no lo acierta", 1],
+    ])(
+      "el vendedor no confirma el costo de un movimiento ajeno sin capas: la capa que %s se rechaza igual (42501)",
+      async (_label, guess) => {
+        await expect(
+          as(seller, INSERT_COST_LAYER_ON(unlayeredMovementId, guess)),
+        ).rejects.toMatchObject({ code: "42501" });
+      },
+    );
 
     // Control positivo de la trampa: quien escribe Y lee el ledger sigue usando
     // la forma de Prisma (INSERT ... RETURNING).
@@ -2105,6 +2131,261 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       const { rowCount, rows } = await as(actorNamed(key), INSERT_MOVEMENT_RETURNING(type, qty));
 
       expect({ rowCount, hasId: rows[0].id !== undefined }).toEqual({ rowCount: 1, hasId: true });
+    });
+  });
+
+  // WP-B11e (0039). La capa de costo de una salida exige el permiso del
+  // movimiento al que pertenece (el mapeo de WP-B11d, 0034) Y que el movimiento
+  // lo haya creado ESA transacción. La primera es la política de INSERT; la
+  // segunda, lo que cierra el oráculo por igualdad que dejaba 0037. Cada caso es
+  // la operación real: el movimiento y la capa por la misma conexión de joda_api,
+  // en una transacción, y con la forma que cada rol puede usar (el vendedor y el
+  // que solo escribe compras, sin RETURNING y con currval; el resto, con
+  // RETURNING, que es la que emite Prisma).
+  describe("movement_cost_allocations: la capa exige el permiso del movimiento y que el movimiento sea de la transacción (WP-B11e)", () => {
+    const COST = 1000;
+    // Mismo mapeo y mismas filas que el INSERT del movimiento (WP-B11d): quién
+    // lo hace, y el vecino más plausible que no.
+    const LAYER_MAPPING: [string, number, string, string, string][] = [
+      ["sale", -1, "NULL", "seller", "warehouse"],
+      ["adjustment", 5, "NULL", "adjusts", "seller"],
+      ["decant_consumption", -1, "NULL", "decants", "adjusts"],
+      ["decant_yield", 1, "NULL", "decants", "adjusts"],
+      ["bom_consumption", -1, "NULL", "decants", "adjusts"],
+      ["waste", -1, "NULL", "decants", "adjusts"],
+      ["transfer_out", -1, "'lot_separation'", "decants", "adjusts"],
+      ["transfer_in", 1, "'lot_opening'", "decants", "adjusts"],
+      ["purchase_receipt", 1, "NULL", "receives", "decants"],
+      ["return_in", 1, "NULL", "refunds", "poWriter"],
+      // Devolución a proveedor: es compras, no ventas.
+      ["return_out", -1, "NULL", "poWriter", "refunds"],
+    ];
+    const LAYER_RETURNING = `${INSERT_COST_LAYER_FOR_LAST_MOVEMENT(COST)} RETURNING id`;
+    const RLS_ON_LAYERS =
+      /^new row violates row-level security policy for table "movement_cost_allocations"$/;
+
+    it.each(LAYER_MAPPING)(
+      "%s: el rol que tiene su permiso registra el movimiento y su capa en la misma transacción, y cuadran al cierre",
+      async (type, qty, reference, allowed) => {
+        await as(actorsByKey[allowed]!, INSERT_MOVEMENT(type, qty, reference, String(COST)));
+        const layer = await api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(COST));
+        const check = await api.query(CHECK_COST_LAYERS_NOW);
+
+        expect({ layer: layer.rowCount, check: check.command }).toEqual({ layer: 1, check: "SET" });
+      },
+    );
+
+    // El movimiento lo inserta el owner (que tiene todos los permisos) en esta
+    // transacción, y la capa la escribe otro rol: lo único que puede rechazarla
+    // es el permiso, porque el movimiento SÍ es de la transacción.
+    it.each(LAYER_MAPPING)(
+      "%s: no la registra el rol que tiene el permiso de otra operación, aunque el movimiento sea de su transacción",
+      async (type, qty, reference, _allowed, denied) => {
+        await as(owner, INSERT_MOVEMENT(type, qty, reference, String(COST)));
+        await actAs(actorsByKey[denied]!, REAL_TENANT_ID);
+
+        await expect(api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(COST))).rejects.toMatchObject({
+          code: "42501",
+          message: expect.stringMatching(RLS_ON_LAYERS),
+        });
+      },
+    );
+
+    // La forma de Prisma (`INSERT ... RETURNING`), para los roles que además
+    // leen el ledger: la política de lectura de las capas (0037) la deja pasar.
+    it.each([
+      ["adjustment", 5, "adjusts"],
+      ["decant_consumption", -1, "decants"],
+      ["purchase_receipt", 1, "receives"],
+      ["return_in", 1, "refunds"],
+      ["sale", -1, "owner"],
+    ])(
+      "%s: el rol que escribe y lee el ledger registra la capa con RETURNING",
+      async (type, qty, key) => {
+        await as(
+          actorsByKey[key]!,
+          `${INSERT_MOVEMENT(type, qty, "NULL", String(COST))} RETURNING id`,
+        );
+        const layer = await api.query(LAYER_RETURNING);
+
+        expect({ rowCount: layer.rowCount, hasId: layer.rows[0].id !== undefined }).toEqual({
+          rowCount: 1,
+          hasId: true,
+        });
+      },
+    );
+
+    it("quien escribe movimientos de compras y no los lee (return_out, solo market.purchase_order:write) registra la capa sin RETURNING, y con RETURNING recibe 42501", async () => {
+      await as(custom.poWriter, INSERT_MOVEMENT("return_out", -1, "NULL", String(COST)));
+      const without = await api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(COST));
+      await api.query("ROLLBACK");
+
+      await as(custom.poWriter, INSERT_MOVEMENT("return_out", -1, "NULL", String(COST)));
+      await expect(api.query(LAYER_RETURNING)).rejects.toMatchObject({ code: "42501" });
+      expect(without.rowCount).toBe(1);
+    });
+
+    // El oráculo de WP-B11f. El owner tiene todos los permisos: lo que lo frena
+    // acá no es el permiso sino que el movimiento no es de su transacción.
+    it.each([
+      ["una recepción de compra sin capas", () => unlayeredMovementId, UNLAYERED_MOVEMENT_COST],
+      ["un movimiento que ya tiene sus capas", () => costedMovementId, 1],
+    ])(
+      "ni siquiera el owner agrega una capa a %s, de otra transacción (42501)",
+      async (_label, movementId, cost) => {
+        await expect(as(owner, INSERT_COST_LAYER_ON(movementId(), cost))).rejects.toMatchObject({
+          code: "42501",
+          message: expect.stringMatching(RLS_ON_LAYERS),
+        });
+      },
+    );
+
+    it("un movimiento que no existe se rechaza igual que uno ajeno: la respuesta no distingue (mismo error)", async () => {
+      const foreign = await as(seller, INSERT_COST_LAYER_ON(unlayeredMovementId, 1)).catch(
+        (error: unknown) => error,
+      );
+      await api.query("ROLLBACK");
+      const missing = await as(seller, INSERT_COST_LAYER_ON("999999999", 1)).catch(
+        (error: unknown) => error,
+      );
+
+      expect({
+        foreign: (foreign as Error).message,
+        sameMessage: (foreign as Error).message === (missing as Error).message,
+      }).toEqual({
+        foreign: expect.stringMatching(RLS_ON_LAYERS),
+        sameMessage: true,
+      });
+    });
+
+    // Esta prueba la frena el aislamiento por tenant (`tenant_isolation`), no la
+    // función: pasa también con la política `true` de 0037. La que discrimina el
+    // filtro de tenant de la función es la de abajo.
+    it("el owner de otro tenant no agrega una capa al ledger del tenant real (42501, tenant_isolation)", async () => {
+      await expect(
+        as(peerOwner, INSERT_COST_LAYER_ON(unlayeredMovementId, 1), PEER_TENANT_ID),
+      ).rejects.toMatchObject({ code: "42501" });
+    });
+
+    it("un rol que solo lee stock no registra la capa de un movimiento que creó el owner en la misma transacción (42501)", async () => {
+      await as(owner, INSERT_MOVEMENT("adjustment", 5, "NULL", String(COST)));
+      await actAs(custom.readOnly, REAL_TENANT_ID);
+
+      await expect(api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(COST))).rejects.toMatchObject({
+        code: "42501",
+      });
+    });
+
+    // El movimiento y su capa en UNA sentencia (un CTE) también son de la
+    // misma transacción: la función que decide la política tiene que ver el
+    // movimiento que acaba de insertar la sentencia que la llama.
+    it("el movimiento y su capa en una sola sentencia (CTE) se registran: el movimiento es de la transacción", async () => {
+      const { rowCount } = await as(
+        owner,
+        `WITH m AS (${INSERT_MOVEMENT("sale", -1, "NULL", String(COST))} RETURNING id)
+         INSERT INTO app.movement_cost_allocations
+           (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+         SELECT '${REAL_TENANT_ID}', m.id, '${LOT_ID}', 1, ${COST}, ${COST} FROM m`,
+      );
+
+      expect(rowCount).toBe(1);
+    });
+
+    // Lo que discrimina el filtro de tenant de la función: un movimiento del
+    // tenant VECINO, creado en esta misma transacción (se cambia de contexto a mitad
+    // de camino), por lo demás pasaría la condición de la transacción y el permiso
+    // del dueño. Con el filtro lo rechaza la política (42501); sin él, la política
+    // lo dejaría pasar y lo rechazaría la FK compuesta (23503).
+    it("un movimiento del tenant vecino, creado en esta misma transacción, no sirve a una capa del tenant real: lo rechaza la política (42501) y no la FK (23503)", async () => {
+      await as(
+        peerOwner,
+        `INSERT INTO app.inventory_movements
+           (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+         VALUES ('${PEER_TENANT_ID}', '${PEER_LOT_ID}', '${PEER_VARIANT_ID}', 1, 'ml', 'adjustment')`,
+        PEER_TENANT_ID,
+      );
+      await actAs(owner, REAL_TENANT_ID);
+
+      await expect(api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(COST))).rejects.toMatchObject({
+        code: "42501",
+        message: expect.stringMatching(RLS_ON_LAYERS),
+      });
+    });
+
+    // La política rechaza antes que la FK compuesta, así que ninguna prueba con
+    // RLS puesta llega a ejercerla. Con el superusuario, que elude RLS, sí: una
+    // capa del tenant vecino sobre un movimiento del tenant real (con un lote del
+    // vecino, para que lo único que falle sea la FK del movimiento).
+    it("la FK compuesta de la capa sigue ahí: con RLS eludida, una capa del vecino sobre un movimiento del tenant real se rechaza por la FK (23503)", async () => {
+      await expect(
+        db.client.query(
+          `INSERT INTO app.movement_cost_allocations
+             (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+           VALUES ('${PEER_TENANT_ID}', ${costedMovementId}, '${PEER_LOT_ID}', 1, 1, 1)`,
+        ),
+      ).rejects.toMatchObject({
+        code: "23503",
+        constraint: "movement_cost_allocations_movement_id_fkey",
+      });
+    });
+
+    // LÍMITE CONOCIDO, que falla cerrado. `xmin` de un movimiento insertado
+    // DENTRO de un SAVEPOINT es el id de la subtransacción, y la función compara
+    // con el de la transacción. Ni withTenantTx ni Prisma abren savepoints en
+    // una transacción interactiva; estas pruebas dejan escrito para quien lo haga
+    // qué sirve y qué no: el movimiento se inserta FUERA de todo savepoint; uno
+    // abierto después de insertarlo no afecta a sus capas.
+    it("límite conocido: un movimiento insertado dentro de un SAVEPOINT no sirve para atar capas, aunque la capa vaya en el mismo savepoint (42501)", async () => {
+      await as(owner, "SAVEPOINT antes_del_movimiento");
+      await api.query(INSERT_MOVEMENT("sale", -1, "NULL", String(COST)));
+
+      await expect(api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(COST))).rejects.toMatchObject({
+        code: "42501",
+      });
+    });
+
+    it("límite conocido: liberar el savepoint (RELEASE) no ayuda, el xmin del movimiento sigue siendo el de la subtransacción (42501)", async () => {
+      await as(owner, "SAVEPOINT antes_del_movimiento");
+      await api.query(INSERT_MOVEMENT("sale", -1, "NULL", String(COST)));
+      await api.query("RELEASE SAVEPOINT antes_del_movimiento");
+
+      await expect(api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(COST))).rejects.toMatchObject({
+        code: "42501",
+      });
+    });
+
+    it("un savepoint abierto después de insertar el movimiento no afecta a sus capas: el movimiento es de la transacción y la capa se registra", async () => {
+      await as(owner, INSERT_MOVEMENT("sale", -1, "NULL", String(COST)));
+      await api.query("SAVEPOINT despues_del_movimiento");
+      const layer = await api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(COST));
+      const check = await api.query(CHECK_COST_LAYERS_NOW);
+
+      expect({ layer: layer.rowCount, check: check.command }).toEqual({ layer: 1, check: "SET" });
+    });
+
+    it("el storefront (joda_readonly) no ejecuta la función que decide la política: es de la API", async () => {
+      await db.client.query("BEGIN");
+      try {
+        await db.client.query("SET LOCAL ROLE joda_readonly");
+        await expect(
+          db.client.query("SELECT app.can_allocate_cost_to_movement(1)"),
+        ).rejects.toMatchObject({
+          code: "42501",
+          message: "permission denied for function can_allocate_cost_to_movement",
+        });
+      } finally {
+        await db.client.query("ROLLBACK");
+      }
+    });
+
+    it("las capas no se editan ni se borran: el UPDATE y el DELETE de joda_api siguen sin privilegio", async () => {
+      await expect(
+        as(owner, `UPDATE app.movement_cost_allocations SET total_cost_pyg = 1`),
+      ).rejects.toMatchObject({ code: "42501" });
+      await api.query("ROLLBACK");
+      await expect(as(owner, `DELETE FROM app.movement_cost_allocations`)).rejects.toMatchObject({
+        code: "42501",
+      });
     });
   });
 
@@ -2177,7 +2458,7 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
         });
       });
 
-      it("el vendedor no edita ni borra permisos de roles: sin WHERE afecta cero filas y el depósito conserva los cinco", async () => {
+      it("el vendedor no edita ni borra permisos de roles: sin WHERE afecta cero filas y el depósito conserva los seis", async () => {
         const edited = await as(seller, UPDATE_ALL_ROLE_PERMISSIONS);
         const deleted = await api.query(DELETE_ALL_ROLE_PERMISSIONS);
         const remaining = await countAsOwner(COUNT_DEPOSITO_PERMISSIONS);
@@ -2185,7 +2466,7 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
         expect({ edited: edited.rowCount, deleted: deleted.rowCount, remaining }).toEqual({
           edited: 0,
           deleted: 0,
-          remaining: 5,
+          remaining: 6,
         });
       });
 
@@ -2317,7 +2598,7 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
 
       // El defecto que la revisión de B11 reprodujo: como vendedor, este DELETE
       // borró la fila y, por la cascada (que no evalúa RLS), sus permisos.
-      it("el vendedor no borra el rol de depósito: afecta cero filas y el rol conserva sus cinco permisos", async () => {
+      it("el vendedor no borra el rol de depósito: afecta cero filas y el rol conserva sus seis permisos", async () => {
         const { rowCount } = await as(seller, DELETE_DEPOSITO_ROLE);
         const roleLeft = await countAsOwner(
           COUNT_ROLE(`tenant_id = '${REAL_TENANT_ID}' AND code = 'deposito'`),
@@ -2327,7 +2608,7 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
         expect({ deleted: rowCount, roleLeft, permissionsLeft }).toEqual({
           deleted: 0,
           roleLeft: 1,
-          permissionsLeft: 5,
+          permissionsLeft: 6,
         });
       });
 
@@ -2396,24 +2677,24 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
     // bloqueado como si lo hubiera borrado. Los permisos de un rol de sistema son
     // la matriz de security-spec §2.1 y los cambia el seed.
     describe("los permisos de un rol de sistema no se modifican en tiempo de ejecución", () => {
-      it("el dueño no se vacía su propio rol: el DELETE afecta cero filas, conserva los 28 permisos y sigue administrando", async () => {
+      it("el dueño no se vacía su propio rol: el DELETE afecta cero filas, conserva los 29 permisos y sigue administrando", async () => {
         const { rowCount } = await as(owner, DELETE_OWNER_ROLE_PERMISSIONS);
         const remaining = await countAsOwner(COUNT_OWNER_ROLE_PERMISSIONS);
         const { rows } = await api.query(CAN_ADMINISTER_USERS);
 
         expect({ deleted: rowCount, remaining, canAdminister: rows[0].ok }).toEqual({
           deleted: 0,
-          remaining: 28,
+          remaining: 29,
           canAdminister: true,
         });
       });
 
-      it("un DELETE sin WHERE del dueño solo alcanza a los roles personalizados: los de sistema conservan sus 66 permisos", async () => {
+      it("un DELETE sin WHERE del dueño solo alcanza a los roles personalizados: los de sistema conservan sus 70 permisos", async () => {
         const { rowCount } = await as(owner, DELETE_ALL_ROLE_PERMISSIONS);
         const remaining = await countAsOwner(COUNT_SYSTEM_ROLE_PERMISSIONS);
 
         expect(rowCount).toBeGreaterThan(0);
-        expect(remaining).toBe(66);
+        expect(remaining).toBe(70);
       });
 
       it("el dueño no le agrega un permiso a un rol de sistema (42501)", async () => {
@@ -2446,7 +2727,7 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
         await db.client.query(`SELECT app.seed_roles('${REAL_TENANT_ID}')`);
         const remaining = await countAsSuperuser(COUNT_SYSTEM_ROLE_PERMISSIONS);
 
-        expect(remaining).toBe(66);
+        expect(remaining).toBe(70);
       });
     });
 
@@ -2475,10 +2756,10 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
         });
       });
 
-      it("joda_api sigue leyendo el catálogo: las 28 filas", async () => {
+      it("joda_api sigue leyendo el catálogo: las 29 filas", async () => {
         const { rows } = await as(seller, `SELECT count(*)::int AS n FROM app.permissions`);
 
-        expect(rows[0].n).toBe(28);
+        expect(rows[0].n).toBe(29);
       });
     });
 
@@ -2486,7 +2767,7 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
     // resolver los permisos de cada sesión (`getGrantedPermissionCodes`), y el
     // vendedor no tiene `settings.user:read`.
     describe("la lectura sigue por tenant", () => {
-      it("el vendedor, sin settings.user:read, lee los seis permisos de su rol", async () => {
+      it("el vendedor, sin settings.user:read, lee los siete permisos de su rol", async () => {
         const { rows } = await as(
           seller,
           `SELECT count(*)::int AS n FROM app.role_permissions rp
@@ -2494,7 +2775,7 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
             WHERE sur.staff_user_id = '${seller.userId}'`,
         );
 
-        expect(rows[0].n).toBe(6);
+        expect(rows[0].n).toBe(7);
       });
     });
 

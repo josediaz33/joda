@@ -284,11 +284,12 @@ VALUES ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-0000000
         'sale_order', 'cccccccc-0000-0000-0000-000000000001', now() + interval '30 minutes');
 
 INSERT INTO decant_work_orders (id, tenant_id, source_lot_id, target_variant_id,
-                                sale_order_id, qty_units, ml_per_unit,
+                                sale_order_id, sale_order_line_id, qty_units, ml_per_unit,
                                 ml_expected, waste_expected, created_by)
 VALUES ('dddddddd-0000-0000-0000-000000000001',
         '11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-000000000002',
         '55555555-0000-0000-0000-000000000003', 'cccccccc-0000-0000-0000-000000000001',
+        'cccccccc-0000-0000-0000-00000000000a',
         1, 10.000, 10.000, 0.200, '22222222-2222-2222-2222-222222222222');
 
 \echo '--- 4.b Pago con webhook idempotente'

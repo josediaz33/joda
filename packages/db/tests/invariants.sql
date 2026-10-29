@@ -2880,6 +2880,453 @@ SELECT pg_temp.expect_fail_like(136, 'Sellado, decant y unit aceptan online_visi
   $$,
   'aceptado');
 
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-B18 (0039_decant_plan_lots_and_cost_layer_permission.sql, H1 y H3 de la
+-- revisión de WP-C13): el vendedor planifica un decant sin leer lotes, y una
+-- línea de venta tiene una sola orden de fraccionamiento activa.
+--
+-- 137 a 139 miran la forma (el seed y la firma); 140 a 145 ejercen la función
+-- conectados como `joda_api` (`SET LOCAL ROLE`, la credencial del runtime y no
+-- el superusuario que elude RLS), con una sesión de staff viva creada dentro
+-- del propio bloque y revertida con él; 146 y 147 prueban el índice. El
+-- comportamiento completo, con el vendedor, el depósito y un tenant vecino
+-- con sus propios lotes, lo prueba `decant_plan_lots.test.ts`.
+--
+-- Cada bloque termina en una excepción (`aceptado` si la condición se cumplió):
+-- así se revierte todo lo que creó, incluido el `SET LOCAL ROLE`, que de otro
+-- modo dejaría al resto del archivo corriendo como `joda_api`.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Un usuario de staff del tenant (por defecto, el del smoke) con el rol de ese
+-- código y una sesión viva. El id de usuario es `b1800000-…-<n>` y el de la
+-- sesión `b1850000-…-<n>`.
+CREATE OR REPLACE FUNCTION pg_temp.b18_actor(
+  p_role text, p_n int, p_tenant uuid DEFAULT '11111111-1111-1111-1111-111111111111'
+) RETURNS void LANGUAGE plpgsql AS $$
+DECLARE
+  v_user uuid := ('b1800000-0000-0000-0000-' || lpad(p_n::text, 12, '0'))::uuid;
+  v_session uuid := ('b1850000-0000-0000-0000-' || lpad(p_n::text, 12, '0'))::uuid;
+BEGIN
+  INSERT INTO app.staff_users (id, tenant_id, auth_subject, email, full_name)
+  VALUES (v_user, p_tenant, 'sub-b18-' || p_n, 'b18-' || p_n || '@joda.test', 'Actor B18 ' || p_n);
+  INSERT INTO app.staff_user_roles (staff_user_id, role_id, tenant_id)
+  SELECT v_user, r.id, r.tenant_id FROM app.roles r WHERE r.tenant_id = p_tenant AND r.code = p_role;
+  INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at)
+  VALUES (v_session, p_tenant, v_user, now() + interval '8 hours');
+END $$;
+
+-- 137 ─ `inventory.decant:plan` está en el catálogo y en los cuatro roles de
+-- sistema de cada tenant, y en ningún otro rol: ni un rol de sistema que no
+-- esté en la lista ni uno personalizado. Sin él en el vendedor, vender un
+-- decant vuelve a necesitar `inventory.stock:read`; en un rol de más, la
+-- planificación se abre a quien no debe. El nombre lista las culpables.
+WITH roles_sistema AS (
+  SELECT id, code, tenant_id FROM app.roles WHERE is_system
+), tiene AS (
+  SELECT rp.role_id FROM app.role_permissions rp
+   WHERE rp.permission_code = 'inventory.decant:plan'
+), faltan AS (
+  SELECT r.code || ' (' || left(r.tenant_id::text, 8) || ')' AS descripcion
+    FROM roles_sistema r
+   WHERE r.code IN ('owner', 'manager', 'vendedor', 'deposito')
+     AND r.id NOT IN (SELECT role_id FROM tiene)
+), sobran AS (
+  SELECT r.code || ' (' || left(r.tenant_id::text, 8) || ')' AS descripcion
+    FROM app.roles r
+    JOIN tiene t ON t.role_id = r.id
+   WHERE NOT (r.is_system AND r.code IN ('owner', 'manager', 'vendedor', 'deposito'))
+)
+SELECT pg_temp.expect_true(137,
+  'inventory.decant:plan está en el catálogo y solo en owner, manager, vendedor y deposito'
+    || COALESCE(' — faltan: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM faltan), '')
+    || COALESCE(' — sobran: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sobran), ''),
+  EXISTS (SELECT 1 FROM app.permissions WHERE code = 'inventory.decant:plan')
+  AND (SELECT count(*) FROM roles_sistema) >= 4
+  AND NOT EXISTS (SELECT 1 FROM faltan) AND NOT EXISTS (SELECT 1 FROM sobran));
+
+-- 138 ─ El vendedor sembrado planifica, pero no ejecuta ni lee lotes:
+-- `plan` no es una puerta de atrás hacia `inventory.decant:execute` (la política
+-- de `inventory_movements` del consumo del granel, 0034) ni hacia
+-- `inventory.stock:read` (el 130). Si se le diera uno de los dos para
+-- planificar, volverían los costos de lote al vendedor.
+WITH vendedores AS (
+  SELECT id FROM app.roles WHERE is_system AND code = 'vendedor'
+)
+SELECT pg_temp.expect_true(138,
+  'El vendedor sembrado tiene inventory.decant:plan y no tiene inventory.decant:execute',
+  (SELECT count(*) FROM vendedores) >= 1
+  AND NOT EXISTS (SELECT 1 FROM vendedores v
+                   WHERE NOT EXISTS (SELECT 1 FROM app.role_permissions rp
+                                      WHERE rp.role_id = v.id
+                                        AND rp.permission_code = 'inventory.decant:plan'))
+  AND NOT EXISTS (SELECT 1 FROM app.role_permissions rp
+                    JOIN vendedores v ON v.id = rp.role_id
+                   WHERE rp.permission_code = 'inventory.decant:execute'));
+
+-- 139 ─ La función de los lotes candidatos: una sola, SECURITY DEFINER con
+-- `search_path` fijo, que devuelve exactamente `lot_id`, `available` y
+-- `opened_at` (ningún costo ni proveedor), que no se puede ejecutar por PUBLIC
+-- ni por `joda_readonly` (el storefront) y sí por `joda_api`. El 30 y el 40
+-- ya cubren el dueño y el `search_path` de toda SECURITY DEFINER; acá se pide
+-- por nombre para que borrarla o ensancharla no pase desapercibido.
+WITH f AS (
+  SELECT p.oid, p.prosecdef, p.provolatile, p.proconfig, p.proacl, p.proowner,
+         p.proargnames, p.proargmodes, p.proallargtypes
+    FROM pg_proc p
+   WHERE p.pronamespace = 'app'::regnamespace AND p.proname = 'list_decant_plan_lots'
+)
+SELECT pg_temp.expect_true(139,
+  'list_decant_plan_lots: SECURITY DEFINER, devuelve solo lot_id/available/opened_at, solo joda_api la ejecuta',
+  (SELECT count(*) FROM f) = 1
+  AND (SELECT bool_and(prosecdef) FROM f)
+  AND (SELECT bool_and('search_path=app, pg_temp' = ANY (COALESCE(proconfig, '{}'))) FROM f)
+  AND (SELECT bool_and(provolatile = 's') FROM f)
+  AND (SELECT bool_and(proargnames = ARRAY['p_variant_id', 'lot_id', 'available', 'opened_at']
+                       AND proargmodes = ARRAY['i', 't', 't', 't']::"char"[]
+                       AND proallargtypes = ARRAY['uuid'::regtype::oid, 'uuid'::regtype::oid,
+                                                  'app.qty'::regtype::oid,
+                                                  'timestamptz'::regtype::oid])
+         FROM f)
+  AND NOT EXISTS (SELECT 1 FROM f,
+                    aclexplode(COALESCE(f.proacl, acldefault('f', f.proowner))) a
+                   WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE')
+  AND (SELECT bool_and(has_function_privilege('joda_api', oid, 'EXECUTE')) FROM f)
+  AND NOT (SELECT bool_or(has_function_privilege('joda_readonly', oid, 'EXECUTE')) FROM f));
+
+-- 140 ─ Control positivo y la razón de ser de la función: el vendedor, conectado
+-- como `joda_api` y SIN `inventory.stock:read`, no lee ningún lote
+-- (`inventory_lots` le da cero filas) y aun así la función le entrega el granel
+-- abierto del tenant con su cantidad y su fecha de apertura, los mismos valores
+-- que tiene el lote, y con exactamente esas tres columnas.
+SELECT pg_temp.expect_fail_like(140, 'El vendedor planifica sin leer lotes: la función le entrega lot_id, disponible y apertura',
+  $$DO $x$
+    DECLARE
+      v_bulk constant uuid := '55555555-0000-0000-0000-000000000002';
+      v_lot constant uuid := '99999999-0000-0000-0000-000000000002';
+      v_opened timestamptz;
+      v_hand numeric;
+      v_direct int;
+      v_rows int;
+      v_keys text;
+      v_got_lot text;
+      v_got_available numeric;
+      v_got_opened timestamptz;
+    BEGIN
+      SELECT l.opened_at INTO v_opened FROM app.inventory_lots l WHERE l.id = v_lot;
+      SELECT b.on_hand INTO v_hand FROM app.inventory_balances b WHERE b.lot_id = v_lot;
+      PERFORM pg_temp.b18_actor('vendedor', 140);
+      SET LOCAL ROLE joda_api;
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000000140', true),
+              set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000000140', true);
+      SELECT count(*) INTO v_direct FROM app.inventory_lots;
+      SELECT count(*), min(f.lot_id::text), min(f.available), min(f.opened_at)
+        INTO v_rows, v_got_lot, v_got_available, v_got_opened
+        FROM app.list_decant_plan_lots(v_bulk) f;
+      SELECT string_agg(k, ',' ORDER BY k) INTO v_keys
+        FROM (SELECT DISTINCT jsonb_object_keys(to_jsonb(f)) AS k
+                FROM app.list_decant_plan_lots(v_bulk) f) s;
+      IF v_direct = 0 AND v_rows = 1 AND v_got_lot = v_lot::text
+         AND v_got_available = v_hand AND v_got_opened = v_opened
+         AND v_keys = 'available,lot_id,opened_at' THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO directo=% filas=% lote=% disponible=% (esperado %) apertura=% columnas=%',
+        v_direct, v_rows, v_got_lot, v_got_available, v_hand, v_got_opened, v_keys;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 141 ─ Sin `inventory.decant:plan` la función RECHAZA, no devuelve un vacío:
+-- un vacío es indistinguible de «no hay granel», el engaño de H1. Un rol que
+-- lee lotes y ejecuta decants (y no puede planificar) es el vecino más
+-- plausible.
+SELECT pg_temp.expect_fail_like(141, 'Sin inventory.decant:plan la función rechaza (42501), no devuelve un vacío',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.roles (id, tenant_id, code, name)
+      VALUES ('b1860000-0000-0000-0000-000000000141', '11111111-1111-1111-1111-111111111111',
+              'b18-sin-plan', 'Sin plan');
+      INSERT INTO app.role_permissions (tenant_id, role_id, permission_code)
+      VALUES ('11111111-1111-1111-1111-111111111111', 'b1860000-0000-0000-0000-000000000141',
+              'inventory.stock:read'),
+             ('11111111-1111-1111-1111-111111111111', 'b1860000-0000-0000-0000-000000000141',
+              'inventory.decant:execute');
+      PERFORM pg_temp.b18_actor('b18-sin-plan', 141);
+      SET LOCAL ROLE joda_api;
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000000141', true),
+              set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000000141', true);
+      PERFORM * FROM app.list_decant_plan_lots('55555555-0000-0000-0000-000000000002');
+      RAISE EXCEPTION 'devolvió filas o un vacío';
+    END $x$
+  $$,
+  'Falta el permiso inventory.decant:plan%');
+
+-- 142 ─ Sin sesión de staff vigente tampoco: aunque el usuario tenga el
+-- permiso, una audiencia que no es `staff`, una sesión que no existe o ningún
+-- `app.session_id` rechazan las tres. Es lo que distingue a la función de una
+-- lectura abierta a quien sabe un `user_id`.
+SELECT pg_temp.expect_fail_like(142, 'Sin sesión de staff vigente la función rechaza: audiencia system, sesión inexistente y sin sesión',
+  $$DO $x$
+    DECLARE
+      v_ctx record;
+      v_rechazos int := 0;
+    BEGIN
+      PERFORM pg_temp.b18_actor('vendedor', 142);
+      SET LOCAL ROLE joda_api;
+      FOR v_ctx IN
+        SELECT * FROM (VALUES
+          ('system', 'b1850000-0000-0000-0000-000000000142'),
+          ('staff',  'b1850000-0000-0000-0000-0000000f0142'),
+          ('staff',  '')
+        ) AS t(audience, session_id)
+      LOOP
+        PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000000142', true),
+                set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+                set_config('app.audience', v_ctx.audience, true),
+                set_config('app.session_id', v_ctx.session_id, true);
+        BEGIN
+          PERFORM * FROM app.list_decant_plan_lots('55555555-0000-0000-0000-000000000002');
+        EXCEPTION WHEN insufficient_privilege THEN
+          IF SQLERRM LIKE 'Falta el permiso inventory.decant:plan%' THEN
+            v_rechazos := v_rechazos + 1;
+          END IF;
+        END;
+      END LOOP;
+      IF v_rechazos = 3 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO solo % de 3 contextos rechazaron', v_rechazos;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 143 ─ Sin tenant en el contexto: rechaza. Una SECURITY DEFINER ve las filas
+-- de todos los tenants; sin tenant, «filtrar por el tenant de la sesión» no
+-- filtraría nada.
+SELECT pg_temp.expect_fail_like(143, 'Sin tenant en el contexto la función rechaza (42501), no devuelve lotes',
+  $$DO $x$
+    BEGIN
+      PERFORM pg_temp.b18_actor('vendedor', 143);
+      SET LOCAL ROLE joda_api;
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000000143', true),
+              set_config('app.tenant_id', '', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000000143', true);
+      PERFORM * FROM app.list_decant_plan_lots('55555555-0000-0000-0000-000000000002');
+      RAISE EXCEPTION 'devolvió filas o un vacío';
+    END $x$
+  $$,
+  'No hay tenant en el contexto%');
+
+-- 144 ─ Una sombra en `pg_temp` no cambia nada. En una SECURITY DEFINER sin
+-- `search_path` fijo, `pg_temp` se busca primero (verificado como `joda_api`
+-- en WP-B10 sobre has_permission). Con tablas temporales falsas de
+-- `role_permissions`, `staff_user_roles`, `inventory_lots`,
+-- `inventory_balances` y `product_variants`, y `pg_temp` primero en el
+-- `search_path` de la sesión: (a) quien NO tiene el permiso sigue rechazado
+-- aunque la sombra se lo otorgue, y (b) quien lo tiene sigue recibiendo los
+-- lotes reales aunque la sombra diga que no hay ninguno.
+SELECT pg_temp.expect_fail_like(144, 'Una sombra en pg_temp no otorga el permiso ni cambia los lotes que la función devuelve',
+  $$DO $x$
+    DECLARE
+      v_denegado boolean := false;
+      v_rows int;
+    BEGIN
+      INSERT INTO app.roles (id, tenant_id, code, name)
+      VALUES ('b1860000-0000-0000-0000-000000000144', '11111111-1111-1111-1111-111111111111',
+              'b18-sin-plan-144', 'Sin plan 144');
+      PERFORM pg_temp.b18_actor('b18-sin-plan-144', 144);
+      PERFORM pg_temp.b18_actor('vendedor', 1440);
+      SET LOCAL ROLE joda_api;
+      CREATE TEMP TABLE role_permissions (LIKE app.role_permissions);
+      CREATE TEMP TABLE staff_user_roles (LIKE app.staff_user_roles);
+      CREATE TEMP TABLE inventory_lots (LIKE app.inventory_lots);
+      CREATE TEMP TABLE inventory_balances (LIKE app.inventory_balances);
+      CREATE TEMP TABLE product_variants (LIKE app.product_variants);
+      INSERT INTO pg_temp.role_permissions (tenant_id, role_id, permission_code)
+      VALUES ('11111111-1111-1111-1111-111111111111', 'b1860000-0000-0000-0000-000000000144',
+              'inventory.decant:plan');
+      PERFORM set_config('search_path', 'pg_temp, app, public', true);
+      PERFORM set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+              set_config('app.audience', 'staff', true);
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000000144', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000000144', true);
+      BEGIN
+        PERFORM * FROM app.list_decant_plan_lots('55555555-0000-0000-0000-000000000002');
+      EXCEPTION WHEN insufficient_privilege THEN
+        v_denegado := true;
+      END;
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000001440', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000001440', true);
+      SELECT count(*) INTO v_rows
+        FROM app.list_decant_plan_lots('55555555-0000-0000-0000-000000000002');
+      IF v_denegado AND v_rows = 1 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO denegado=% filas=% (esperado true y 1)', v_denegado, v_rows;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 145 ─ La función filtra por el tenant de la sesión: el dueño de OTRO tenant,
+-- con todos los permisos, no obtiene los lotes de una variante que no es suya.
+-- Un rechazo, no un vacío ni los lotes ajenos (una SECURITY DEFINER ve los
+-- de todos los tenants).
+SELECT pg_temp.expect_fail_like(145, 'El dueño de otro tenant no obtiene los lotes de una variante ajena',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('18181818-0000-0000-0000-000000000145', 'tenant-inv-145', 'Inv 145 SA', 'Inv 145');
+      PERFORM app.seed_roles('18181818-0000-0000-0000-000000000145');
+      PERFORM pg_temp.b18_actor('owner', 145, '18181818-0000-0000-0000-000000000145');
+      SET LOCAL ROLE joda_api;
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000000145', true),
+              set_config('app.tenant_id', '18181818-0000-0000-0000-000000000145', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000000145', true);
+      PERFORM * FROM app.list_decant_plan_lots('55555555-0000-0000-0000-000000000002');
+      RAISE EXCEPTION 'devolvió filas o un vacío';
+    END $x$
+  $$,
+  'La variante % no existe en el tenant de la sesión');
+
+-- 146 ─ Una línea de venta tiene una sola orden de fraccionamiento activa
+-- (H3): el smoke ya tiene una `done` para la línea `cccccccc-…-0a`, y una
+-- segunda, sea cual sea su estado salvo `cancelled`, la rechaza el índice
+-- único parcial y no otra barrera. La `Idempotency-Key` no lo garantiza: la
+-- elige el cliente.
+SELECT pg_temp.expect_fail_like(146, 'Segunda orden activa para la misma línea de venta',
+  $$INSERT INTO app.decant_work_orders
+      (tenant_id, source_lot_id, target_variant_id, sale_order_id, sale_order_line_id,
+       qty_units, ml_per_unit, ml_expected, waste_expected)
+    VALUES ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-000000000002',
+            '55555555-0000-0000-0000-000000000003', 'cccccccc-0000-0000-0000-000000000001',
+            'cccccccc-0000-0000-0000-00000000000a', 1, 10.000, 10.000, 0.200)$$,
+  '%decant_wo_one_active_per_line%');
+
+-- 147 ─ Control positivo de 146: cancelar la orden permite replanificar la
+-- línea, y las órdenes sin línea (decants para stock, C13b) conviven: un NULL
+-- no choca en un índice único. Sin esto, un índice que rechazara todo
+-- segundo insert, o que dejara una sola orden sin línea, pasaría el 146.
+SELECT pg_temp.expect_fail_like(147, 'Replanificar una línea tras cancelar su orden, y órdenes sin línea',
+  $$DO $x$
+    BEGIN
+      UPDATE app.decant_work_orders SET status = 'cancelled'
+       WHERE sale_order_line_id = 'cccccccc-0000-0000-0000-00000000000a';
+      INSERT INTO app.decant_work_orders
+        (tenant_id, source_lot_id, target_variant_id, sale_order_id, sale_order_line_id,
+         qty_units, ml_per_unit, ml_expected, waste_expected)
+      VALUES ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000003', 'cccccccc-0000-0000-0000-000000000001',
+              'cccccccc-0000-0000-0000-00000000000a', 1, 10.000, 10.000, 0.200);
+      INSERT INTO app.decant_work_orders
+        (tenant_id, source_lot_id, target_variant_id, qty_units, ml_per_unit, ml_expected,
+         waste_expected)
+      VALUES ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000003', 1, 10.000, 10.000, 0.200),
+             ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-000000000002',
+              '55555555-0000-0000-0000-000000000003', 1, 10.000, 10.000, 0.200);
+      RAISE EXCEPTION 'aceptado';
+    END $x$
+  $$,
+  'aceptado');
+
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-B11e (misma migración): las capas de costo de una salida exigen el
+-- permiso del movimiento al que pertenecen, y solo se atan a un movimiento de
+-- la transacción de quien las escribe. Como el 114 para el ledger, estos dos
+-- leen el TEXTO de la política y de la función: no prueban que hagan lo que
+-- dicen. Eso lo prueba, conectado como joda_api con cada rol,
+-- `write_permissions.test.ts`. Acá no se puede: los bloques de este archivo
+-- corren dentro de una subtransacción (el `EXCEPTION` de expect_*), y un
+-- movimiento insertado en una subtransacción no es «de esta transacción» para
+-- la función (su `xmin` es el de la subtransacción; falla cerrado).
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 148 ─ movement_cost_allocations tiene UNA política de escritura, la de
+-- INSERT, que consulta el permiso del movimiento por la función y no es
+-- `true`; ninguna de UPDATE, DELETE ni FOR ALL (las capas son append-only); y
+-- la política de INSERT no se queda en un `has_permission` suelto que
+-- ignore el tipo del movimiento. Con la `tenant_access_insert` (`true`) de
+-- 0037 el vendedor registraba capas sobre cualquier movimiento. El nombre
+-- lista las culpables.
+WITH politicas AS (
+  SELECT p.polname, p.polcmd,
+         COALESCE(pg_get_expr(p.polqual, p.polrelid), '')
+           || ' ' || COALESCE(pg_get_expr(p.polwithcheck, p.polrelid), '') AS expresion
+    FROM pg_policy p
+    JOIN pg_class c ON c.oid = p.polrelid
+    JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'app' AND c.relname = 'movement_cost_allocations'
+     AND p.polpermissive AND p.polcmd IN ('a', 'w', 'd', '*')
+), de_insert AS (
+  SELECT * FROM politicas WHERE polcmd = 'a'
+), sobran AS (
+  SELECT polname AS descripcion FROM politicas WHERE polcmd <> 'a'
+), sin_funcion AS (
+  SELECT polname AS descripcion FROM de_insert
+   WHERE expresion NOT LIKE '%can_allocate_cost_to_movement(movement_id)%'
+      OR expresion ~ '\mtrue\M'
+)
+SELECT pg_temp.expect_true(148,
+  'Capas de costo: una sola política de escritura (INSERT), por el permiso del movimiento y sin true'
+    || COALESCE(' — sobran: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sobran), '')
+    || COALESCE(' — sin la función: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM sin_funcion), ''),
+  (SELECT count(*) FROM de_insert) = 1 AND NOT EXISTS (SELECT 1 FROM sobran)
+  AND NOT EXISTS (SELECT 1 FROM sin_funcion));
+
+-- 149 ─ La función que decide la política nombra todos los valores de
+-- `movement_type` y los seis permisos del mapeo (el mismo del 114), pide que el
+-- movimiento sea de esta transacción (`xmin`), filtra por el tenant de la
+-- sesión, rechaza lo que no mapea (`ELSE false`) y solo la ejecuta `joda_api`.
+-- Un valor de enum agregado después y no mapeado se rechaza (falla cerrado),
+-- pero este invariante falla para obligar a decidirlo a propósito. Lleva su propia
+-- copia de los seis permisos: NO compara contra la política del movimiento (un
+-- cambio en 0034 no lo dispara); que el mapeo de las capas coincida con el del
+-- movimiento, tipo por tipo, lo prueban los casos de write_permissions.test.ts.
+-- El nombre lista las culpables.
+WITH f AS (
+  SELECT p.oid, p.prosecdef, p.proconfig, p.proacl, p.proowner, p.prosrc
+    FROM pg_proc p
+   WHERE p.pronamespace = 'app'::regnamespace AND p.proname = 'can_allocate_cost_to_movement'
+), tipos_sin_cubrir AS (
+  SELECT t::text AS descripcion
+    FROM unnest(enum_range(NULL::app.movement_type)) AS t, f
+   WHERE f.prosrc NOT LIKE '%WHEN ''' || t::text || '''%'
+), permisos_sin_usar AS (
+  SELECT v.permiso AS descripcion
+    FROM (VALUES ('sales.order:write'), ('inventory.stock:adjust'),
+                 ('inventory.decant:execute'), ('market.purchase_order:receive'),
+                 ('sales.order:refund'), ('market.purchase_order:write')) AS v(permiso), f
+   WHERE f.prosrc NOT LIKE '%has_permission(''' || v.permiso || '''%'
+)
+SELECT pg_temp.expect_true(149,
+  'La función de las capas cubre todo movement_type y los seis permisos, exige un movimiento de esta transacción y del tenant'
+    || COALESCE(' — tipos sin cubrir: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM tipos_sin_cubrir), '')
+    || COALESCE(' — permisos sin usar: '
+                || (SELECT string_agg(descripcion, ', ' ORDER BY descripcion) FROM permisos_sin_usar), ''),
+  (SELECT count(*) FROM f) = 1
+  AND (SELECT bool_and(prosecdef) FROM f)
+  AND (SELECT bool_and('search_path=app, pg_temp' = ANY (COALESCE(proconfig, '{}'))) FROM f)
+  AND NOT EXISTS (SELECT 1 FROM tipos_sin_cubrir)
+  AND NOT EXISTS (SELECT 1 FROM permisos_sin_usar)
+  AND (SELECT bool_and(prosrc LIKE '%m.xmin = pg_catalog.pg_current_xact_id()%') FROM f)
+  AND (SELECT bool_and(prosrc LIKE '%m.tenant_id = app.current_tenant_id()%') FROM f)
+  AND (SELECT bool_and(prosrc ~ 'ELSE\s+false') FROM f)
+  AND NOT EXISTS (SELECT 1 FROM f,
+                    aclexplode(COALESCE(f.proacl, acldefault('f', f.proowner))) a
+                   WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE')
+  AND (SELECT bool_and(has_function_privilege('joda_api', oid, 'EXECUTE')) FROM f));
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'

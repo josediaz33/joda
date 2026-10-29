@@ -1,5 +1,5 @@
 // Catálogo de permisos (docs/security-spec.md §2, forma
-// `recurso.subrecurso:acción`) — los mismos 28 códigos que siembra
+// `recurso.subrecurso:acción`) — los mismos 29 códigos que siembra
 // packages/db/seed/0001_seed_base.sql en la tabla `permissions`. Vive en
 // packages/contracts, no en packages/domain, porque es la única fuente de
 // verdad de tipos entre apps/api, apps/admin y apps/storefront
@@ -24,6 +24,7 @@ export const permissionCode = z.enum([
   "inventory.stock:read",
   "inventory.stock:adjust",
   "inventory.decant:execute",
+  "inventory.decant:plan",
   "sales.order:read",
   "sales.order:write",
   "sales.order:refund",

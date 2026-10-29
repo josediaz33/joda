@@ -499,7 +499,7 @@ Entre ambos no hay consumo de inventario, solo reserva.
 
 **Qué venta puede planificar** (decisión de José, 2026-10-07; la implementa WP-C19): `inventory.decant.plan` solo acepta ventas en `awaiting_payment` o `paid`; cualquier otro estado se rechaza.
 
-**Una orden por línea de venta** (decisión de José, 2026-10-08; la impone la base con WP-B18): mientras una orden de fraccionamiento no esté cancelada, su línea de venta no admite otra; cancelar permite replanificar. La `Idempotency-Key` de `plan` sigue siendo opcional y solo sirve para reintentos.
+**Una orden por línea de venta** (decisión de José, 2026-10-08; la impone la base desde WP-B18, `0039`: `decant_work_orders.sale_order_line_id` y el índice único parcial `decant_wo_one_active_per_line`): mientras una orden de fraccionamiento no esté cancelada, su línea de venta no admite otra; cancelar permite replanificar. La `Idempotency-Key` de `plan` sigue siendo opcional y solo sirve para reintentos.
 
 ### RN-FRA-02 · Cálculo de la reserva
 

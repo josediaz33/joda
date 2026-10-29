@@ -257,27 +257,29 @@ model customers {
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.
 /// This model contains row level security and requires additional setup for migrations. Visit https://pris.ly/d/row-level-security for more info.
 model decant_work_orders {
-  id                                                                String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenant_id                                                         String           @db.Uuid
-  source_lot_id                                                     String           @db.Uuid
-  target_variant_id                                                 String           @db.Uuid
-  sale_order_id                                                     String?          @db.Uuid
+  id                                                                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenant_id                                                         String            @db.Uuid
+  source_lot_id                                                     String            @db.Uuid
+  target_variant_id                                                 String            @db.Uuid
+  sale_order_id                                                     String?           @db.Uuid
   qty_units                                                         Int
-  ml_per_unit                                                       Decimal          @db.Decimal(10, 3)
-  ml_expected                                                       Decimal          @db.Decimal(10, 3)
-  waste_expected                                                    Decimal          @db.Decimal(10, 3)
-  waste_actual                                                      Decimal?         @db.Decimal(10, 3)
-  status                                                            decant_wo_status @default(pending)
-  executed_by                                                       String?          @db.Uuid
-  executed_at                                                       DateTime?        @db.Timestamptz(6)
-  created_at                                                        DateTime         @default(now()) @db.Timestamptz(6)
-  created_by                                                        String?          @db.Uuid
-  sale_orders                                                       sale_orders?     @relation(fields: [sale_order_id, tenant_id], references: [id, tenant_id], onDelete: NoAction, onUpdate: NoAction, map: "decant_wo_order_fk")
-  staff_users_decant_work_orders_created_by_tenant_idTostaff_users  staff_users?     @relation("decant_work_orders_created_by_tenant_idTostaff_users", fields: [created_by, tenant_id], references: [id, tenant_id], onDelete: NoAction, onUpdate: NoAction, map: "decant_work_orders_created_by_fkey")
-  staff_users_decant_work_orders_executed_by_tenant_idTostaff_users staff_users?     @relation("decant_work_orders_executed_by_tenant_idTostaff_users", fields: [executed_by, tenant_id], references: [id, tenant_id], onDelete: NoAction, onUpdate: NoAction, map: "decant_work_orders_executed_by_fkey")
-  inventory_lots                                                    inventory_lots   @relation(fields: [source_lot_id, tenant_id], references: [id, tenant_id], onUpdate: NoAction, map: "decant_work_orders_source_lot_id_fkey")
-  product_variants                                                  product_variants @relation(fields: [target_variant_id, tenant_id], references: [id, tenant_id], onUpdate: NoAction, map: "decant_work_orders_target_variant_id_fkey")
-  tenants                                                           tenants          @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  ml_per_unit                                                       Decimal           @db.Decimal(10, 3)
+  ml_expected                                                       Decimal           @db.Decimal(10, 3)
+  waste_expected                                                    Decimal           @db.Decimal(10, 3)
+  waste_actual                                                      Decimal?          @db.Decimal(10, 3)
+  status                                                            decant_wo_status  @default(pending)
+  executed_by                                                       String?           @db.Uuid
+  executed_at                                                       DateTime?         @db.Timestamptz(6)
+  created_at                                                        DateTime          @default(now()) @db.Timestamptz(6)
+  created_by                                                        String?           @db.Uuid
+  sale_order_line_id                                                String?           @db.Uuid
+  sale_orders                                                       sale_orders?      @relation(fields: [sale_order_id, tenant_id], references: [id, tenant_id], onDelete: NoAction, onUpdate: NoAction, map: "decant_wo_order_fk")
+  staff_users_decant_work_orders_created_by_tenant_idTostaff_users  staff_users?      @relation("decant_work_orders_created_by_tenant_idTostaff_users", fields: [created_by, tenant_id], references: [id, tenant_id], onDelete: NoAction, onUpdate: NoAction, map: "decant_work_orders_created_by_fkey")
+  staff_users_decant_work_orders_executed_by_tenant_idTostaff_users staff_users?      @relation("decant_work_orders_executed_by_tenant_idTostaff_users", fields: [executed_by, tenant_id], references: [id, tenant_id], onDelete: NoAction, onUpdate: NoAction, map: "decant_work_orders_executed_by_fkey")
+  sale_order_lines                                                  sale_order_lines? @relation(fields: [sale_order_line_id, tenant_id], references: [id, tenant_id], onUpdate: NoAction, map: "decant_work_orders_sale_order_line_id_fkey")
+  inventory_lots                                                    inventory_lots    @relation(fields: [source_lot_id, tenant_id], references: [id, tenant_id], onUpdate: NoAction, map: "decant_work_orders_source_lot_id_fkey")
+  product_variants                                                  product_variants  @relation(fields: [target_variant_id, tenant_id], references: [id, tenant_id], onUpdate: NoAction, map: "decant_work_orders_target_variant_id_fkey")
+  tenants                                                           tenants           @relation(fields: [tenant_id], references: [id], onDelete: Cascade, onUpdate: NoAction)
 
   @@schema("app")
 }
@@ -1008,6 +1010,7 @@ model sale_order_lines {
   cogs_pyg                                                                         BigInt                  @default(0)
   position                                                                         Int                     @default(0)
   tenant_id                                                                        String                  @db.Uuid
+  decant_work_orders                                                               decant_work_orders[]
   fiscal_document_lines                                                            fiscal_document_lines[]
   return_items                                                                     return_items[]
   sale_orders                                                                      sale_orders             @relation(fields: [sale_order_id, tenant_id], references: [id, tenant_id], onDelete: Cascade, onUpdate: NoAction, map: "sale_order_lines_sale_order_id_fkey")

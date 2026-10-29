@@ -13,6 +13,7 @@ INSERT INTO permissions (code, description) VALUES
   ('inventory.stock:read',          'Ver stock, lotes y costos de lote'),
   ('inventory.stock:adjust',        'Ajustar inventario'),
   ('inventory.decant:execute',      'Ejecutar órdenes de fraccionamiento'),
+  ('inventory.decant:plan',         'Planificar órdenes de fraccionamiento'),
   ('sales.order:read',              'Ver pedidos'),
   ('sales.order:write',             'Crear y confirmar pedidos'),
   ('sales.order:refund',            'Anular y reembolsar'),
@@ -137,11 +138,14 @@ BEGIN
   -- ni lo que te cuesta cada frasco. Sí maneja señas: las registra y las
   -- aplica al vender, y con RLS escribir una seña exige poder leerla
   -- (INSERT ... RETURNING y UPDATE ... WHERE evalúan la política de
-  -- lectura, WP-B11). `accounting.cashbox:read` sigue oculto.
+  -- lectura, WP-B11). `accounting.cashbox:read` sigue oculto. Planifica
+  -- decants al vender (`inventory.decant:plan`, WP-B18) sin `inventory.stock:read`:
+  -- los lotes candidatos le llegan por `app.list_decant_plan_lots`, sin costos.
   INSERT INTO role_permissions (tenant_id, role_id, permission_code) VALUES
     (p_tenant, v_vendedor, 'catalog.product:read'),
     (p_tenant, v_vendedor, 'sales.order:read'),
     (p_tenant, v_vendedor, 'sales.order:write'),
+    (p_tenant, v_vendedor, 'inventory.decant:plan'),
     (p_tenant, v_vendedor, 'accounting.deposit:read'),
     (p_tenant, v_vendedor, 'accounting.deposit:write'),
     (p_tenant, v_vendedor, 'fiscal.document:issue')
@@ -153,6 +157,7 @@ BEGIN
     (p_tenant, v_deposito, 'inventory.stock:read'),
     (p_tenant, v_deposito, 'inventory.stock:adjust'),
     (p_tenant, v_deposito, 'inventory.decant:execute'),
+    (p_tenant, v_deposito, 'inventory.decant:plan'),
     (p_tenant, v_deposito, 'market.purchase_order:receive')
   ON CONFLICT DO NOTHING;
 END $$;

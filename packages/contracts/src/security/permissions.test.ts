@@ -14,6 +14,7 @@ describe("docs/security-spec.md §2 · permissionCode — catálogo exacto", () 
       "inventory.stock:read",
       "inventory.stock:adjust",
       "inventory.decant:execute",
+      "inventory.decant:plan",
       "sales.order:read",
       "sales.order:write",
       "sales.order:refund",
