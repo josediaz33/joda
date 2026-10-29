@@ -1003,8 +1003,9 @@ describe("RLS aísla por tenant con el rol de aplicación joda_api (docs/securit
       // que el trigger diferido; y desde WP-B11e (0039) la política de INSERT
       // de las capas lo rechaza antes que la FK: el movimiento del tenant real
       // es invisible para el vecino (y no es de su transacción). La FK
-      // compuesta sigue ahí (cross_tenant_fks.test.ts la verifica) y el
-      // trigger, aislado, lo prueba el invariante 35.
+      // compuesta sigue ahí (cross_tenant_fks.test.ts comprueba que exista y
+      // write_permissions.test.ts la ejerce con RLS eludida) y el trigger,
+      // aislado, lo prueba el invariante 35.
       await expect(
         api.query(
           `INSERT INTO app.movement_cost_allocations

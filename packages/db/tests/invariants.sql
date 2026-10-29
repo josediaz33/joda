@@ -2972,7 +2972,7 @@ SELECT pg_temp.expect_true(138,
 -- ya cubren el dueño y el `search_path` de toda SECURITY DEFINER; acá se pide
 -- por nombre para que borrarla o ensancharla no pase desapercibido.
 WITH f AS (
-  SELECT p.oid, p.prosecdef, p.proconfig, p.proacl, p.proowner,
+  SELECT p.oid, p.prosecdef, p.provolatile, p.proconfig, p.proacl, p.proowner,
          p.proargnames, p.proargmodes, p.proallargtypes
     FROM pg_proc p
    WHERE p.pronamespace = 'app'::regnamespace AND p.proname = 'list_decant_plan_lots'
@@ -2982,6 +2982,7 @@ SELECT pg_temp.expect_true(139,
   (SELECT count(*) FROM f) = 1
   AND (SELECT bool_and(prosecdef) FROM f)
   AND (SELECT bool_and('search_path=app, pg_temp' = ANY (COALESCE(proconfig, '{}'))) FROM f)
+  AND (SELECT bool_and(provolatile = 's') FROM f)
   AND (SELECT bool_and(proargnames = ARRAY['p_variant_id', 'lot_id', 'available', 'opened_at']
                        AND proargmodes = ARRAY['i', 't', 't', 't']::"char"[]
                        AND proallargtypes = ARRAY['uuid'::regtype::oid, 'uuid'::regtype::oid,
@@ -3126,7 +3127,7 @@ SELECT pg_temp.expect_fail_like(143, 'Sin tenant en el contexto la función rech
 -- 144 ─ Una sombra en `pg_temp` no cambia nada. En una SECURITY DEFINER sin
 -- `search_path` fijo, `pg_temp` se busca primero (verificado como `joda_api`
 -- en WP-B10 sobre has_permission). Con tablas temporales falsas de
--- `role_permissions`, `staff_user_roles`, `staff_sessions`, `inventory_lots`,
+-- `role_permissions`, `staff_user_roles`, `inventory_lots`,
 -- `inventory_balances` y `product_variants`, y `pg_temp` primero en el
 -- `search_path` de la sesión: (a) quien NO tiene el permiso sigue rechazado
 -- aunque la sombra se lo otorgue, y (b) quien lo tiene sigue recibiendo los
@@ -3287,9 +3288,11 @@ SELECT pg_temp.expect_true(148,
 -- movimiento sea de esta transacción (`xmin`), filtra por el tenant de la
 -- sesión, rechaza lo que no mapea (`ELSE false`) y solo la ejecuta `joda_api`.
 -- Un valor de enum agregado después y no mapeado se rechaza (falla cerrado),
--- pero este invariante falla para obligar a decidirlo a propósito, y para que
--- el mapeo de las capas no se separe del del movimiento. El nombre lista las
--- culpables.
+-- pero este invariante falla para obligar a decidirlo a propósito. Lleva su propia
+-- copia de los seis permisos: NO compara contra la política del movimiento (un
+-- cambio en 0034 no lo dispara); que el mapeo de las capas coincida con el del
+-- movimiento, tipo por tipo, lo prueban los casos de write_permissions.test.ts.
+-- El nombre lista las culpables.
 WITH f AS (
   SELECT p.oid, p.prosecdef, p.proconfig, p.proacl, p.proowner, p.prosrc
     FROM pg_proc p

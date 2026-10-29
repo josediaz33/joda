@@ -1509,9 +1509,10 @@ venta). El esquema (permiso, función, columna e índice) lo puso WP-B18
 componente del BOM, sin costos; el `LotSnapshot` de `plan` sin `unitCost`;
 el vendedor no pasa `sourceLotId`); las cuatro preguntas que había ahí
 quedaron resueltas el 2026-10-08. De WP-B11e (0039): una capa de costo se
-escribe en la MISMA transacción que su movimiento y sin savepoints de por
-medio (la política de las capas compara el `xmin` del movimiento), con el
-permiso del `movement_type`.
+escribe en la MISMA transacción que su movimiento, y el movimiento no se
+inserta dentro de un savepoint ni de un bloque con EXCEPTION (la política de
+las capas compara el `xmin` del movimiento), con el permiso del
+`movement_type`.
 
 Objetivo: confirmación de venta — consumo real de inventario, cálculo y
 persistencia del COGS por línea, con bloqueo de lotes ordenado para

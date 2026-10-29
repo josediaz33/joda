@@ -407,7 +407,7 @@ describe("planificar un decant sin leer lotes y sin duplicar la orden (WP-B18, R
       expect(JSON.stringify(rows)).not.toContain(String(OWN_SUPPLY_UNIT_COST));
     });
 
-    it("el estado lo decide el tipo de la variante, no quien llama: la del smoke devuelve su único granel abierto", async () => {
+    it("la variante de granel del smoke devuelve su único lote abierto", async () => {
       const { rows } = await as(seller, CANDIDATES_OF(SMOKE_BULK_VARIANT_ID));
 
       expect(rows.map((row) => row.lot_id)).toEqual([SMOKE_BULK_LOT_ID]);
@@ -423,7 +423,7 @@ describe("planificar un decant sin leer lotes y sin duplicar la orden (WP-B18, R
       expect(rows.map((row) => row.lot_id)).toEqual([OLDEST_LOT_ID, TIED_LOT_A_ID, TIED_LOT_B_ID]);
     });
 
-    it("no escribe nada: el saldo del lote es el mismo antes y después de llamarla", async () => {
+    it("llamarla no cambia el saldo del lote", async () => {
       const before = await as(
         owner,
         `SELECT on_hand FROM app.inventory_balances WHERE lot_id = '${OLDEST_LOT_ID}'`,
@@ -658,6 +658,17 @@ describe("planificar un decant sin leer lotes y sin duplicar la orden (WP-B18, R
       const other = await api.query(INSERT_ORDER(LINE(LINE_B_ID)));
 
       expect(other.rowCount).toBe(1);
+    });
+
+    it("la línea de una orden activa no se borra: la FK es ON DELETE RESTRICT (23503)", async () => {
+      await as(seller, INSERT_ORDER(LINE(LINE_B_ID)));
+
+      await expect(
+        api.query(`DELETE FROM app.sale_order_lines WHERE id = '${LINE_B_ID}'`),
+      ).rejects.toMatchObject({
+        code: "23503",
+        constraint: "decant_work_orders_sale_order_line_id_fkey",
+      });
     });
 
     it("las órdenes sin línea (decants para stock) conviven: un NULL no choca en un índice único", async () => {

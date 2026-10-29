@@ -69,6 +69,11 @@ const SALE_ORDER_IDS = {
   refunded: "b1100000-0000-0000-0000-000000000508",
 } as const;
 const SCENARIO_LINE_ID = "b1100000-0000-0000-0000-0000000000f2";
+// WP-B11e: un granel abierto del tenant vecino, para las pruebas de capas que
+// cruzan tenants (un movimiento del vecino).
+const PEER_PRODUCT_ID = "b11e0000-0000-0000-0000-0000000000a1";
+const PEER_VARIANT_ID = "b11e0000-0000-0000-0000-0000000000b1";
+const PEER_LOT_ID = "b11e0000-0000-0000-0000-0000000000c1";
 
 interface Actor {
   userId: string;
@@ -445,6 +450,24 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       SELECT app.seed_roles('${PEER_TENANT_ID}');
     `);
     peerOwner = await seedRoleActor("000", PEER_TENANT_ID, "owner");
+    await db.client.query(`
+      INSERT INTO app.products (id, tenant_id, kind, slug, name, status)
+      VALUES ('${PEER_PRODUCT_ID}', '${PEER_TENANT_ID}', 'perfume', 'vecino-b11e',
+              'Perfume vecino B11e', 'active');
+      INSERT INTO app.perfume_details
+        (tenant_id, product_id, concentration, nominal_volume_ml, olfactory_family,
+         waste_factor, unusable_residue_ml)
+      VALUES ('${PEER_TENANT_ID}', '${PEER_PRODUCT_ID}', 'edp', 100, 'Cítrico', 0.02, 2.5);
+      INSERT INTO app.product_variants
+        (id, tenant_id, product_id, sku, variant_type, uom, price_pyg, online_visible)
+      VALUES ('${PEER_VARIANT_ID}', '${PEER_TENANT_ID}', '${PEER_PRODUCT_ID}', 'VECINO-B11E-BULK',
+              'bulk', 'ml', 0, false);
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, status, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg, opened_at)
+      VALUES ('${PEER_LOT_ID}', '${PEER_TENANT_ID}', '${PEER_VARIANT_ID}', 'open_for_decant', 80,
+              'ml', 100, 'PYG', 1, 8000, 100, now());
+    `);
 
     // El owner del smoke no tiene sesión viva: has_permission() la exige.
     owner = {
@@ -2235,7 +2258,10 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       });
     });
 
-    it("el owner de otro tenant no agrega una capa al ledger del tenant real (42501)", async () => {
+    // Esta prueba la frena el aislamiento por tenant (`tenant_isolation`), no la
+    // función: pasa también con la política `true` de 0037. La que discrimina el
+    // filtro de tenant de la función es la de abajo.
+    it("el owner de otro tenant no agrega una capa al ledger del tenant real (42501, tenant_isolation)", async () => {
       await expect(
         as(peerOwner, INSERT_COST_LAYER_ON(unlayeredMovementId, 1), PEER_TENANT_ID),
       ).rejects.toMatchObject({ code: "42501" });
@@ -2265,18 +2291,76 @@ describe("escribir en las tablas sensibles exige el permiso de escritura, no sol
       expect(rowCount).toBe(1);
     });
 
+    // Lo que discrimina el filtro de tenant de la función: un movimiento del
+    // tenant VECINO, creado en esta misma transacción (se cambia de contexto a mitad
+    // de camino), por lo demás pasaría la condición de la transacción y el permiso
+    // del dueño. Con el filtro lo rechaza la política (42501); sin él, la política
+    // lo dejaría pasar y lo rechazaría la FK compuesta (23503).
+    it("un movimiento del tenant vecino, creado en esta misma transacción, no sirve a una capa del tenant real: lo rechaza la política (42501) y no la FK (23503)", async () => {
+      await as(
+        peerOwner,
+        `INSERT INTO app.inventory_movements
+           (tenant_id, lot_id, variant_id, qty, uom, movement_type)
+         VALUES ('${PEER_TENANT_ID}', '${PEER_LOT_ID}', '${PEER_VARIANT_ID}', 1, 'ml', 'adjustment')`,
+        PEER_TENANT_ID,
+      );
+      await actAs(owner, REAL_TENANT_ID);
+
+      await expect(api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(COST))).rejects.toMatchObject({
+        code: "42501",
+        message: expect.stringMatching(RLS_ON_LAYERS),
+      });
+    });
+
+    // La política rechaza antes que la FK compuesta, así que ninguna prueba con
+    // RLS puesta llega a ejercerla. Con el superusuario, que elude RLS, sí: una
+    // capa del tenant vecino sobre un movimiento del tenant real (con un lote del
+    // vecino, para que lo único que falle sea la FK del movimiento).
+    it("la FK compuesta de la capa sigue ahí: con RLS eludida, una capa del vecino sobre un movimiento del tenant real se rechaza por la FK (23503)", async () => {
+      await expect(
+        db.client.query(
+          `INSERT INTO app.movement_cost_allocations
+             (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+           VALUES ('${PEER_TENANT_ID}', ${costedMovementId}, '${PEER_LOT_ID}', 1, 1, 1)`,
+        ),
+      ).rejects.toMatchObject({
+        code: "23503",
+        constraint: "movement_cost_allocations_movement_id_fkey",
+      });
+    });
+
     // LÍMITE CONOCIDO, que falla cerrado. `xmin` de un movimiento insertado
-    // dentro de un SAVEPOINT es el id de la subtransacción, y la función compara
+    // DENTRO de un SAVEPOINT es el id de la subtransacción, y la función compara
     // con el de la transacción. Ni withTenantTx ni Prisma abren savepoints en
-    // una transacción interactiva; esta prueba lo deja escrito para quien lo
-    // haga: el movimiento y sus capas van del mismo lado del savepoint.
-    it("límite conocido: un movimiento insertado dentro de un SAVEPOINT no sirve para atar capas (42501)", async () => {
+    // una transacción interactiva; estas pruebas dejan escrito para quien lo haga
+    // qué sirve y qué no: el movimiento se inserta FUERA de todo savepoint; uno
+    // abierto después de insertarlo no afecta a sus capas.
+    it("límite conocido: un movimiento insertado dentro de un SAVEPOINT no sirve para atar capas, aunque la capa vaya en el mismo savepoint (42501)", async () => {
       await as(owner, "SAVEPOINT antes_del_movimiento");
       await api.query(INSERT_MOVEMENT("sale", -1, "NULL", String(COST)));
 
       await expect(api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(COST))).rejects.toMatchObject({
         code: "42501",
       });
+    });
+
+    it("límite conocido: liberar el savepoint (RELEASE) no ayuda, el xmin del movimiento sigue siendo el de la subtransacción (42501)", async () => {
+      await as(owner, "SAVEPOINT antes_del_movimiento");
+      await api.query(INSERT_MOVEMENT("sale", -1, "NULL", String(COST)));
+      await api.query("RELEASE SAVEPOINT antes_del_movimiento");
+
+      await expect(api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(COST))).rejects.toMatchObject({
+        code: "42501",
+      });
+    });
+
+    it("un savepoint abierto después de insertar el movimiento no afecta a sus capas: el movimiento es de la transacción y la capa se registra", async () => {
+      await as(owner, INSERT_MOVEMENT("sale", -1, "NULL", String(COST)));
+      await api.query("SAVEPOINT despues_del_movimiento");
+      const layer = await api.query(INSERT_COST_LAYER_FOR_LAST_MOVEMENT(COST));
+      const check = await api.query(CHECK_COST_LAYERS_NOW);
+
+      expect({ layer: layer.rowCount, check: check.command }).toEqual({ layer: 1, check: "SET" });
     });
 
     it("el storefront (joda_readonly) no ejecuta la función que decide la política: es de la API", async () => {

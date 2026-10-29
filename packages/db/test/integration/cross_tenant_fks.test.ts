@@ -184,7 +184,7 @@ const REJECTED_BEFORE_THE_FK: Record<string, { code: string; message: RegExp; wh
   "movement_cost_allocations.movement_id": {
     code: "42501",
     message: /^new row violates row-level security policy for table "movement_cost_allocations"$/,
-    why: "WP-B11e (0039): el movimiento del tenant vecino es invisible para la función de la política de INSERT de las capas (filtra por el tenant de la sesión), así que RLS rechaza antes que la FK",
+    why: "WP-B11e (0039): el movimiento copiado es de otra transacción (el de la fila del tenant real, ya confirmada), así que la condición de la política de INSERT de las capas lo rechaza antes que la FK. Que el filtro por tenant de esa función discrimina algo lo prueba write_permissions.test.ts, con un movimiento del vecino creado en la misma transacción; la FK de movement_id, con RLS eludida, también",
   },
   "purchase_order_lines.purchase_order_id": {
     code: "23514",

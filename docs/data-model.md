@@ -349,7 +349,7 @@ Los estados de los que la base impone que no se vuelva (ADR-026). El ADR guarda 
 
 - **Por qué la segunda condición.** El cuadre (`trg_cost_allocation_matches`) es una constraint diferida que se verifica al `COMMIT` de la transacción que escribió el movimiento y sus capas; ningún flujo legítimo agrega capas a un movimiento de otra transacción. Cierra la prueba por igualdad que dejaba el rechazo sin cifras de 0037.
 - **Por qué una función.** El vendedor no ve el movimiento que acaba de insertar (`movements_read`, 0037), y un `EXISTS` bajo RLS lo rechazaría.
-- **Límite que falla cerrado.** Un movimiento insertado dentro de un `SAVEPOINT` (o de un bloque PL/pgSQL con `EXCEPTION`) lleva el `xmin` de la subtransacción y no sirve para atar capas: el movimiento y sus capas van del mismo lado del savepoint.
+- **Límite que falla cerrado.** Un movimiento insertado dentro de un `SAVEPOINT` (o de un bloque PL/pgSQL con `EXCEPTION`) lleva el `xmin` de la subtransacción y no sirve para atar capas, ni siquiera tras un `RELEASE`: **el movimiento se inserta fuera de todo savepoint**; uno abierto después de insertarlo no afecta a sus capas. Y la vuelta del contador de 32 bits del `xmin` (más de 4.290 millones de transacciones) queda aceptada.
 - **Verificación.** Invariantes 148 (una sola política de escritura, de INSERT, por la función y sin `true`) y 149 (la función cubre todo `movement_type` y los seis permisos, y exige movimiento de esta transacción y del tenant), como el 114 para el movimiento. El comportamiento, por cada permiso del mapeo y con la forma de cada rol, está en `write_permissions.test.ts`.
 
 ---

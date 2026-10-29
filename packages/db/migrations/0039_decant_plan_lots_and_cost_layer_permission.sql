@@ -22,8 +22,9 @@
 -- No se crea acá: el catálogo `permissions` y los otorgamientos por rol los
 -- carga `seed/0001_seed_base.sql` (`permissions` y `app.seed_roles`), y el
 -- código vive también en `packages/contracts/src/security/permissions.ts`.
--- Los tres dicen lo mismo y los compara
--- `permissionsParity.integration.test.ts` (WP-M11). Lo reciben `vendedor` y
+-- `permissionsParity.integration.test.ts` (WP-M11) compara esos dos catálogos;
+-- los otorgamientos por rol los fijan los invariantes 137 y 138, y la tabla de
+-- `docs/security-spec.md` §2 no la compara nadie. Lo reciben `vendedor` y
 -- `deposito` por seed; `owner` y `manager` lo reciben porque el seed les da
 -- todos los permisos (al `manager`, todos menos `settings.user:write`).
 -- Planificar exige exactamente ese permiso, sin «cualquiera de los dos»: el
@@ -183,11 +184,22 @@
 --
 -- CÓMO SE SABE QUE EL MOVIMIENTO ES DE ESTA TRANSACCIÓN: `xmin` de su fila es
 -- el id de transacción que la insertó (`xmin = pg_current_xact_id()::xid`).
--- Es lo que ve la base sin agregar una columna al ledger. El límite, que falla
--- cerrado: un movimiento insertado dentro de un `SAVEPOINT` lleva el id de la
--- subtransacción y no coincide. Ni `withTenantTx` ni Prisma abren savepoints
--- en una transacción interactiva; si algún día hace falta, se insertan el
--- movimiento y sus capas del mismo lado del savepoint.
+-- Es lo que ve la base sin agregar una columna al ledger. Dos límites, que
+-- fallan cerrado:
+--   · Subtransacciones. Un movimiento insertado DENTRO de un `SAVEPOINT` (o de
+--     un bloque PL/pgSQL con `EXCEPTION`, que es uno) lleva el id de la
+--     subtransacción, y `pg_current_xact_id()` devuelve el de la transacción:
+--     no coincide, ni siquiera tras un `RELEASE`, y sus capas se rechazan
+--     aunque las inserte el mismo bloque. La regla para quien use savepoints:
+--     el MOVIMIENTO se inserta fuera de todo savepoint; un savepoint abierto
+--     después de insertarlo no afecta a sus capas. Ni `withTenantTx` ni Prisma
+--     abren savepoints en una transacción interactiva.
+--   · Vuelta del contador. `xmin` es de 32 bits y `pg_current_xact_id()::xid`
+--     lo trunca: una transacción cuyo id coincida módulo 2^32 con el de un
+--     movimiento viejo (que conserva su `xmin` original aunque esté congelado)
+--     podría atarle una capa, siempre con el permiso del tipo y el tenant
+--     correctos. Hacen falta más de 4.290 millones de transacciones entre las
+--     dos; se acepta.
 --
 -- Sin UPDATE ni DELETE (la tabla es append-only y `joda_api` no tiene esos
 -- privilegios, 0010); el SELECT sigue exigiendo `inventory.stock:read` (0037).
@@ -279,7 +291,8 @@ GRANT EXECUTE ON FUNCTION app.list_decant_plan_lots(uuid) TO joda_api;
 -- WP-B11e · El permiso del movimiento al que pertenece una capa de costo
 --
 -- No escribe nada y es SECURITY DEFINER (ve el ledger sin importar quién
--- escribe), con `search_path` fijo y falla cerrado: un movimiento que no se
+-- escribe; su dueño tiene que eludir RLS, invariante 30), con `search_path`
+-- fijo y falla cerrado: un movimiento que no se
 -- encuentra, que es de otro tenant o que no es de esta transacción da falso,
 -- igual que un `movement_type` sin mapear. Devuelve un booleano y nada más.
 --
