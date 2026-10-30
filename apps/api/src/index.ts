@@ -4,7 +4,7 @@
 import fastifyCookie from "@fastify/cookie";
 import { fastifyTRPCPlugin } from "@trpc/server/adapters/fastify";
 import type { ObjectStorage } from "@joda/domain";
-import Fastify from "fastify";
+import Fastify, { type FastifyInstance } from "fastify";
 import { createRedisClient } from "./adapters/redisClient.js";
 import { createSupabasePasswordProvider } from "./adapters/staffAuth/supabasePasswordProvider.js";
 import {
@@ -12,7 +12,7 @@ import {
   createLocalDiskStorage,
 } from "./adapters/storage/localDiskStorage.js";
 import { systemClock } from "./adapters/systemClock.js";
-import { loadEnv } from "./config/env.js";
+import { loadEnv, type Env } from "./config/env.js";
 import { assertRlsNotBypassed, createPrismaClient } from "./db/client.js";
 import type { AuthServiceDeps } from "./modules/auth/service.js";
 import { registerMediaHttpRoutes } from "./modules/media/httpRoutes.js";
@@ -67,6 +67,28 @@ export function buildServer(
   });
 
   return app;
+}
+
+/**
+ * Pone a escuchar la API y el servidor de medios en la interfaz de `API_HOST` (WP-M18);
+ * sin ella, 0.0.0.0 como siempre (despliegue en contenedor, donde el proceso tiene que
+ * ser alcanzable desde fuera). El entorno local la fija en 127.0.0.1. `HOST`, la variable
+ * genérica, no cuenta: ver config/env.ts.
+ */
+export async function startListening({
+  app,
+  mediaServer,
+  env,
+  mediaPort,
+}: {
+  readonly app: FastifyInstance;
+  readonly mediaServer: FastifyInstance;
+  readonly env: Pick<Env, "API_HOST" | "PORT">;
+  readonly mediaPort: number;
+}): Promise<void> {
+  const host = env.API_HOST ?? "0.0.0.0";
+  await app.listen({ port: env.PORT ?? 3333, host });
+  await mediaServer.listen({ port: mediaPort, host });
 }
 
 async function main() {
@@ -124,10 +146,7 @@ async function main() {
 
   try {
     await assertRlsNotBypassed(db);
-    // WP-M18: `HOST` (opcional) acota la interfaz; sin él, 0.0.0.0 como siempre.
-    const host = env.HOST ?? "0.0.0.0";
-    await app.listen({ port: env.PORT ?? 3333, host });
-    await mediaServer.listen({ port: mediaPort, host });
+    await startListening({ app, mediaServer, env, mediaPort });
   } catch (error) {
     app.log.error(error);
     process.exit(1);

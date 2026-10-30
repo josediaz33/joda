@@ -132,7 +132,7 @@ export function resolveLocalEnv({ existing, overrides, repoRoot, randomHex, nowS
     APP_URL: `http://localhost:${ports.JODA_API_PORT}`,
     ADMIN_URL: `http://localhost:${ports.JODA_ADMIN_PORT}`,
     // Solo loopback: el admin de desarrollo tiene usuarios de prueba.
-    HOST: "127.0.0.1",
+    API_HOST: "127.0.0.1",
     PORT: String(ports.JODA_API_PORT),
     MEDIA_STORAGE_DIR: mediaDir,
     // `media.localhost` es otro HOST que APP_URL (docs/security-spec.md §5) y
@@ -183,7 +183,7 @@ export function formatLocalEnv(values) {
           "MFA_ENCRYPTION_KEY",
           "APP_URL",
           "ADMIN_URL",
-          "HOST",
+          "API_HOST",
           "PORT",
           "MEDIA_STORAGE_DIR",
           "MEDIA_PUBLIC_BASE_URL",

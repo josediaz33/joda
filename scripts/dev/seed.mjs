@@ -10,7 +10,7 @@ import { seedSampleData } from "./lib/sampleData.mjs";
 
 async function main() {
   // Primero la baranda: con NODE_ENV=production no se toca nada, ni siquiera
-  // .env.local (scripts/dev/seed.test.mjs lo comprueba).
+  // .env.local (scripts/dev/entrypoints.test.mjs lo comprueba).
   assertDevelopmentEnvironment({ env: process.env });
 
   const values = readLocalEnv();

@@ -156,25 +156,34 @@ describe("loadEnv exige APP_URL, MEDIA_STORAGE_DIR, MEDIA_PUBLIC_BASE_URL, y que
   });
 });
 
-// WP-M18: HOST es opcional y acota la interfaz de escucha (el entorno local la fija
+// WP-M18: API_HOST es opcional y acota la interfaz de escucha (el entorno local la fija
 // en 127.0.0.1); no es una regla de negocio, es la convención de arranque de
-// docs/runbooks/entorno-local.md.
-describe("loadEnv acepta un HOST de escucha opcional (docs/runbooks/entorno-local.md)", () => {
+// docs/runbooks/entorno-local.md. Que el arranque la use de verdad lo prueba
+// startListening.test.ts.
+describe("loadEnv acepta un API_HOST de escucha opcional (docs/runbooks/entorno-local.md)", () => {
   const DATABASE_URL_API = "postgresql://joda_api:joda_api@localhost:55432/joda";
 
-  it("sin HOST, el proceso sigue arrancando (escucha en 0.0.0.0)", () => {
+  it("sin API_HOST, el proceso sigue arrancando (escucha en 0.0.0.0)", () => {
     const env = loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV });
 
-    expect(env.HOST).toBeUndefined();
+    expect(env.API_HOST).toBeUndefined();
   });
 
-  it("con HOST, lo devuelve tal cual", () => {
-    const env = loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV, HOST: "127.0.0.1" });
+  it("con API_HOST, lo devuelve tal cual", () => {
+    const env = loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV, API_HOST: "127.0.0.1" });
 
-    expect(env.HOST).toBe("127.0.0.1");
+    expect(env.API_HOST).toBe("127.0.0.1");
   });
 
-  it("rechaza un HOST vacío", () => {
-    expect(() => loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV, HOST: "" })).toThrow(/HOST/);
+  it("rechaza un API_HOST vacío", () => {
+    expect(() => loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV, API_HOST: "" })).toThrow(
+      /API_HOST/,
+    );
+  });
+
+  it("ignora la variable genérica HOST: no mueve la interfaz de escucha", () => {
+    const env = loadEnv({ DATABASE_URL_API, ...VALID_SESSION_ENV, HOST: "10.200.11.34" });
+
+    expect(env.API_HOST).toBeUndefined();
   });
 });

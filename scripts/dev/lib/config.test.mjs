@@ -211,14 +211,14 @@ describe("resolveLocalEnv: puertos y proyecto sobrescribibles (WP-M18, punto 7 d
     );
   });
 
-  test("DEFAULT_PORTS no pisa ningún puerto de las pruebas ni de los bloques", () => {
+  test("DEFAULT_PORTS son los de siempre: Postgres 55432, Redis 6379, Auth 54321, API 3333, medios 3334, admin 5173", () => {
     assert.deepEqual(Object.values(DEFAULT_PORTS), [55432, 6379, 54321, 3333, 3334, 5173]);
   });
 });
 
 describe("resolveLocalEnv: la API y los medios escuchan solo en loopback y en hosts distintos (docs/security-spec.md §5)", () => {
-  test("HOST es 127.0.0.1", () => {
-    assert.equal(resolve().HOST, "127.0.0.1");
+  test("API_HOST es 127.0.0.1", () => {
+    assert.equal(resolve().API_HOST, "127.0.0.1");
   });
 
   test("los medios se sirven desde media.localhost, no desde el host de APP_URL", () => {
