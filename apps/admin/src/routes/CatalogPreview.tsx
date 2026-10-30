@@ -258,7 +258,11 @@ export default function CatalogPreview() {
             <p className="py-8 text-text-secondary">No hay productos con estos filtros.</p>
           )}
           {products.data.items.map((product) => (
-            <div key={product.id} className="border-b border-border-subtle py-4 last:border-0">
+            <div
+              key={product.id}
+              data-testid="product-row"
+              className="border-b border-border-subtle py-4 last:border-0"
+            >
               <div className="flex flex-wrap items-center justify-between gap-4">
                 <div>
                   <p

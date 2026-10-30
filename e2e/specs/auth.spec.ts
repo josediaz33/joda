@@ -9,7 +9,7 @@ function mainNav(page: Page) {
   return page.getByRole("navigation", { name: "Principal" });
 }
 
-test.describe("el personal entra al admin con contraseña y segundo factor (docs/security-spec.md §4.3)", () => {
+test.describe("el personal entra al admin con contraseña y segundo factor (RF-SEG-01, docs/security-spec.md §4.3)", () => {
   test("el dueño entra y ve catálogo, contabilidad y sourcing", async ({ page }) => {
     await loginAs(page, "owner");
 
@@ -54,7 +54,7 @@ test.describe("el personal entra al admin con contraseña y segundo factor (docs
   });
 });
 
-test.describe("el ingreso rechaza lo que no es válido (docs/security-spec.md §5.1)", () => {
+test.describe("el ingreso rechaza lo que no es válido (RF-SEG-01, docs/security-spec.md §5.1)", () => {
   test("una contraseña incorrecta muestra el error y no pide el segundo factor", async ({
     page,
   }) => {

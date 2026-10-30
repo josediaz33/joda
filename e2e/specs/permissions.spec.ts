@@ -15,7 +15,7 @@ async function casioLot() {
 // contabilidad ni por URL directa», y los costos (lo que pagó JODA por la mercadería, el
 // proveedor) no salen de la API para quien no tiene el permiso: un procedimiento no
 // autorizado responde 404, no 403 (docs/api-conventions.md §4, .claude/rules/api.md).
-test.describe("el vendedor no ve costos ni proveedores (docs/security-spec.md §3, RF-SEG-03)", () => {
+test.describe("el vendedor no ve costos ni proveedores (docs/security-spec.md §3, RF-SEG-02)", () => {
   test("por URL directa, contabilidad y sourcing lo devuelven al inicio", async ({ page }) => {
     await loginAs(page, "vendedor");
 

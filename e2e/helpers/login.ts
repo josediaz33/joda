@@ -2,7 +2,15 @@ import { expect, type Page } from "@playwright/test";
 import { readTotpSecrets, totpCode } from "../../scripts/dev/lib/totp.mjs";
 import { devUser, type DevRole } from "./roles";
 
-/** El código de 6 dígitos vigente del segundo factor de un usuario de prueba (el mismo que da `pnpm dev:totp`). */
+/**
+ * El código de 6 dígitos vigente del segundo factor de un usuario de prueba (el mismo que da `pnpm dev:totp`).
+ *
+ * SUPUESTO DEL HUMO: varios ingresos seguidos del mismo rol (un `loginAs` por spec, más los
+ * `apiAs` de los helpers) usan el MISMO código dentro de su ventana de 30 s. Anda porque la
+ * API hoy acepta un código ya usado en la misma ventana (no hay anti-replay). Si la API llega
+ * a rechazarlo (un código de un solo uso), este helper tiene que esperar a la ventana
+ * siguiente antes de devolver un código ya consumido, y el humo se vuelve más lento.
+ */
 export function currentTotp(role: DevRole): string {
   const secret = readTotpSecrets()[role];
   if (!secret) {
