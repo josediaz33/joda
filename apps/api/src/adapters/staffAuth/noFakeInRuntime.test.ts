@@ -23,6 +23,9 @@ function findRepoRoot(from: string): string {
 
 const SRC_ROOT = join(findRepoRoot(dirname(fileURLToPath(import.meta.url))), "apps/api/src");
 
+// Un import estático o dinámico del módulo; una mención en un comentario no cuenta.
+const IMPORTS_THE_FAKE = /(?:from|import\()\s*["'][^"']*fakeStaffAuthProvider/;
+
 function productionSourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const path = join(dir, entry.name);
@@ -34,7 +37,7 @@ function productionSourceFiles(dir: string): string[] {
 describe("el proveedor de auth falso no es alcanzable en producción (docs/security-spec.md §4, WP-M18)", () => {
   it("ningún archivo de producción de apps/api/src importa fakeStaffAuthProvider", () => {
     const importers = productionSourceFiles(SRC_ROOT)
-      .filter((path) => /fakeStaffAuthProvider/.test(readFileSync(path, "utf8")))
+      .filter((path) => IMPORTS_THE_FAKE.test(readFileSync(path, "utf8")))
       .map((path) => relative(SRC_ROOT, path).replaceAll("\\", "/"));
 
     expect(importers).toEqual([]);
