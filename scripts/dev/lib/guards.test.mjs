@@ -21,12 +21,51 @@ describe("assertDevelopmentEnvironment se niega a correr fuera del entorno local
     );
   });
 
+  // La comparación es con el valor normalizado: una grafía distinta de `production`
+  // no puede dejar pasar (falla abierta).
+  for (const [label, value] of [
+    ["Production", "Production"],
+    ["PRODUCTION", "PRODUCTION"],
+    ["con espacio delante", " production"],
+    ["con espacios alrededor", "  production  "],
+    ["con salto de línea", "production\n"],
+    ["con tabulación", "\tproduction"],
+  ]) {
+    test(`rechaza NODE_ENV escrito ${label}`, () => {
+      assert.throws(
+        () => assertDevelopmentEnvironment({ env: { NODE_ENV: value } }),
+        /NODE_ENV=production/,
+      );
+    });
+
+    test(`rechaza JODA_ENV escrito ${label}`, () => {
+      assert.throws(
+        () => assertDevelopmentEnvironment({ env: { JODA_ENV: value } }),
+        /NODE_ENV=production/,
+      );
+    });
+  }
+
   test("acepta NODE_ENV=development", () => {
     assert.doesNotThrow(() => assertDevelopmentEnvironment({ env: { NODE_ENV: "development" } }));
   });
 
   test("acepta un entorno sin NODE_ENV", () => {
     assert.doesNotThrow(() => assertDevelopmentEnvironment({ env: {} }));
+  });
+
+  test("no confunde una palabra parecida con producción", () => {
+    assert.doesNotThrow(() =>
+      assertDevelopmentEnvironment({
+        env: { NODE_ENV: "preproduction", JODA_ENV: "production-like" },
+      }),
+    );
+  });
+
+  test("acepta NODE_ENV=test y un JODA_ENV vacío", () => {
+    assert.doesNotThrow(() =>
+      assertDevelopmentEnvironment({ env: { NODE_ENV: "test", JODA_ENV: "" } }),
+    );
   });
 
   test("rechaza una base que no está en esta máquina", () => {

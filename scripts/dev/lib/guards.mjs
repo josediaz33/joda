@@ -26,6 +26,22 @@ export function isLoopbackHost(hostname) {
 }
 
 /**
+ * ¿La variable dice «producción»? Sin distinguir mayúsculas ni espacios o saltos
+ * de línea alrededor: `Production`, `PRODUCTION`, ` production` y `production\n`
+ * (un `.env` editado a mano, o un valor pegado de una consola) son producción
+ * igual. Una baranda que solo reconoce el literal `production` falla abierta.
+ *
+ * @param {string | undefined} value
+ */
+export function isProductionValue(value) {
+  return (
+    String(value ?? "")
+      .trim()
+      .toLowerCase() === "production"
+  );
+}
+
+/**
  * Lanza si el entorno no es de desarrollo local:
  *   - `NODE_ENV=production` (o `JODA_ENV=production`): nunca.
  *   - cualquiera de las URLs que el script va a tocar apunta fuera de esta máquina.
@@ -33,9 +49,9 @@ export function isLoopbackHost(hostname) {
  * @param {{ env: Record<string, string | undefined>; urls?: ReadonlyArray<readonly [string, string | undefined]> }} input
  */
 export function assertDevelopmentEnvironment({ env, urls = [] }) {
-  if (env.NODE_ENV === "production" || env.JODA_ENV === "production") {
+  if (isProductionValue(env.NODE_ENV) || isProductionValue(env.JODA_ENV)) {
     throw new Error(
-      "Los scripts de scripts/dev/ no corren con NODE_ENV=production: crean usuarios con contraseñas de desarrollo y datos de muestra, y reinician la base. Son solo para el entorno local (docs/runbooks/entorno-local.md).",
+      "Los scripts de scripts/dev/ no corren con NODE_ENV=production (ni JODA_ENV=production, con cualquier grafía): crean usuarios con contraseñas de desarrollo y datos de muestra, y reinician la base. Son solo para el entorno local (docs/runbooks/entorno-local.md).",
     );
   }
   for (const [name, value] of urls) {
