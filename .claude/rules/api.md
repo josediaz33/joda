@@ -62,8 +62,9 @@ en el código: es el tipo de detalle que alguien "limpia" en un refactor.
 lotes**, en todo camino que decide sobre stock: es el orden único del sistema
 (`docs/domain-rules.md` RN-RES-07). Lotes sin variante primero = interbloqueo.
 **Hoy ningún camino existente cumple este orden** (todos bloquean solo lotes);
-los migra WP-C18b/C19 todos juntos. No migres un camino aislado ni agregues uno
-nuevo con orden distinto antes de eso: el estado mixto se interbloquea.
+WP-C18b migra todos los caminos existentes en un solo PR; WP-C19 agrega su
+camino nuevo ya en el orden. No migres un camino aislado ni agregues uno nuevo
+con orden distinto antes de eso: el estado mixto se interbloquea.
 
 ## Otras
 
