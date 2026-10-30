@@ -1451,16 +1451,17 @@ sesiones propias.
 
 ---
 
-### Sesión 38 — WP-C18 · Ventas: reservas con TTL
+### Sesión 38 — WP-C18b · Ventas: reservas con TTL
 
 ```
-Antes de tocar nada: git checkout -b feat/c18-reservations
+Antes de tocar nada: git checkout -b feat/c18b-reservations
 
-Tomá WP-C18 del backlog.
+Tomá WP-C18b del backlog (WP-C18 quedó reemplazado por C18a, el esquema,
+ya hecho, y C18b, la API: leé «Decisiones (C18)» en el backlog).
 
 Leé primero: .claude/rules/api.md, .claude/rules/domain.md,
-docs/domain-rules.md (RN-RES completo), ADR-019,
-packages/domain/src/sales/reservation.ts (WP-A09).
+docs/domain-rules.md (RN-RES completo, en especial RN-RES-06 y RN-RES-07),
+ADR-019, packages/domain/src/sales/reservation.ts (WP-A09).
 
 Objetivo: reservas de stock al comprometer una venta, con TTL según medio
 de pago y un job que libera las vencidas.
@@ -1481,6 +1482,21 @@ TRAMPAS DE ESTA TAREA:
   cálculo que WP-C10 (saldos) va a necesitar extender una vez que esta
   sesión exista — decilo en el PR si C10 ya está cerrado y necesita un
   ajuste, no lo edites en silencio.
+· RN-RES-06: la reserva es POR VARIANTE por defecto; `lot_id` y
+  `serial_unit_id` son opcionales. Un reloj serializado reserva su unidad;
+  un plan de decant reserva el lote de granel elegido y sus insumos, por
+  variante. La base ya impone con FK compuestas (WP-C18a, 0040) que el lote
+  y la unidad sean de la variante de la reserva: no lo dupliques con un
+  SELECT previo ni vuelvas `lot_id` obligatorio.
+· RN-RES-07: orden de bloqueo ÚNICO en todo el sistema — la fila de
+  `product_variants` (`FOR UPDATE`, por id ascendente) primero y después los
+  lotes por id ascendente. Hoy NINGÚN camino existente lo cumple (todos
+  bloquean solo lotes): esta sesión y C19 los migran TODOS juntos
+  (apertura, ajustes, alta de unidades, plan y ejecución de decants,
+  updateVariant). No migres un camino aislado ni agregues uno nuevo con
+  otro orden: el estado mixto se interbloquea (un `FOR UPDATE` sobre la
+  variante espera a todo INSERT que la referencie, por el `FOR KEY SHARE`
+  de la FK). Probalo con un test de concurrencia.
 
 Alcance: reservas y el job de liberación. El conflicto en checkout
 (RN-RES-05, qué pasa si la reserva venció al confirmar el pago) es de
@@ -1793,26 +1809,26 @@ visualización — eso es reportes (bloque E/G), no de esta sesión.
 
 El criterio de esta tabla es **qué escribe en el ledger de inventario** (`inventory_movements`, append-only desde WP-B01). CLAUDE.md ya lo dice para el código en sí — corregir un error ahí es insertar un movimiento de ajuste, nunca editar uno existente — y eso vale tanto para quien lo escribe como para quien lo revisa después: un `git revert` deshace el código que produjo una fila mal escrita, pero no deshace la fila ya insertada en un Postgres compartido. Los paquetes que insertan movimientos reales del ledger quedan con Claude Code, que tiene encima los guardas mecánicos de `.claude/` (bloqueo de `prisma migrate`, formateo automático, hooks). El resto puede repartirse con Codex, porque AGENTS.md es explícito en que **esos guardas mecánicos no protegen a Codex** — ahí las reglas "mecánicas" de Claude Code vuelven a ser de confianza, y conviene reservar esa situación para paquetes donde un descuido de implementación sale barato de corregir. Cuando Codex implementa un paquete de riesgo alto según §6, la revisión en sesión limpia le toca a Claude Code — nunca a Codex revisándose a sí mismo.
 
-| Sesión | WP  | ¿Escribe en `inventory_movements`?                           | Implementa                      | Por qué                                                                                                                 |
-| ------ | --- | ------------------------------------------------------------ | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| 28     | C08 | No                                                           | Codex                           | Catálogo puro, sin tocar stock.                                                                                         |
-| 29     | C09 | No                                                           | Codex                           | Archivos y derivados, sin tocar stock — pero riesgo alto igual por §6 (carga de archivos), con revisión de Claude Code. |
-| 30     | C10 | Sí (ajustes)                                                 | **Claude Code**                 | Un ajuste mal escrito es una fila de ledger real, no reversible con `git revert`.                                       |
-| 31     | C11 | Sí                                                           | **Claude Code**                 | Conversión de lote en cuatro pasos transaccionales (ADR-009); un error deja un frasco a medio abrir.                    |
-| 32     | C12 | Sí (indirecto, vía venta/transferencia)                      | **Claude Code**                 | Trazabilidad serial es tan irreversible como el resto del ledger.                                                       |
-| 33     | C13 | Sí                                                           | **Claude Code**                 | Ejecución consume granel + insumos reales; la mitad más delicada del dominio (WP-A07).                                  |
-| 34     | C14 | No                                                           | Codex                           | La orden de compra no genera stock hasta la recepción (C15).                                                            |
-| 35     | C15 | Sí                                                           | **Claude Code**                 | Genera lotes y sus movimientos de entrada, de forma transaccional.                                                      |
-| 36     | C16 | No, por diseño (RF-SRC-04)                                   | Codex                           | Un escenario no debe tocar inventario ni caja — si lo hiciera, sería el bug del WP.                                     |
-| 37     | C17 | No (RN-VTA-02: se consume al confirmar el pago, no al crear) | Codex                           | El pedido en sí no mueve stock todavía — pero riesgo alto igual por §6 (dinero/totales), con revisión de Claude Code.   |
-| 38     | C18 | No (reservas son su propia tabla)                            | Codex                           | El job de liberación no inserta movimientos del ledger.                                                                 |
-| 39     | C19 | Sí — el de mayor riesgo del proyecto                         | **Claude Code, exclusivamente** | Consumo real + COGS + bloqueo bajo concurrencia. Revisión en sesión limpia obligatoria además (§6).                     |
-| 40     | C20 | No (toca caja/pasivo, no inventario)                         | Codex                           | Dinero, pero no el ledger de stock — riesgo alto igual por §6, con revisión de Claude Code.                             |
-| 41     | C21 | Sí (`return_in`)                                             | **Claude Code**                 | Inserta movimientos de reversión reales hacia lotes reales.                                                             |
-| 42     | C22 | No (caja/plan de cuentas, no inventario)                     | Codex                           | Dinero, pero no el ledger de stock — riesgo alto igual por §6, con revisión de Claude Code.                             |
-| 43     | C23 | No                                                           | Codex                           | Documentos fiscales, sin tocar stock ni caja — riesgo alto igual por §6 (frontera fiscal).                              |
-| 44     | C24 | No                                                           | Codex                           | Sensible por seguridad, no escribe el ledger — riesgo alto igual por §6 (permisos), con revisión de Claude Code.        |
-| 45     | C25 | No                                                           | Codex                           | Solo lectura y configuración de alertas.                                                                                |
+| Sesión | WP   | ¿Escribe en `inventory_movements`?                           | Implementa                      | Por qué                                                                                                                 |
+| ------ | ---- | ------------------------------------------------------------ | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| 28     | C08  | No                                                           | Codex                           | Catálogo puro, sin tocar stock.                                                                                         |
+| 29     | C09  | No                                                           | Codex                           | Archivos y derivados, sin tocar stock — pero riesgo alto igual por §6 (carga de archivos), con revisión de Claude Code. |
+| 30     | C10  | Sí (ajustes)                                                 | **Claude Code**                 | Un ajuste mal escrito es una fila de ledger real, no reversible con `git revert`.                                       |
+| 31     | C11  | Sí                                                           | **Claude Code**                 | Conversión de lote en cuatro pasos transaccionales (ADR-009); un error deja un frasco a medio abrir.                    |
+| 32     | C12  | Sí (indirecto, vía venta/transferencia)                      | **Claude Code**                 | Trazabilidad serial es tan irreversible como el resto del ledger.                                                       |
+| 33     | C13  | Sí                                                           | **Claude Code**                 | Ejecución consume granel + insumos reales; la mitad más delicada del dominio (WP-A07).                                  |
+| 34     | C14  | No                                                           | Codex                           | La orden de compra no genera stock hasta la recepción (C15).                                                            |
+| 35     | C15  | Sí                                                           | **Claude Code**                 | Genera lotes y sus movimientos de entrada, de forma transaccional.                                                      |
+| 36     | C16  | No, por diseño (RF-SRC-04)                                   | Codex                           | Un escenario no debe tocar inventario ni caja — si lo hiciera, sería el bug del WP.                                     |
+| 37     | C17  | No (RN-VTA-02: se consume al confirmar el pago, no al crear) | Codex                           | El pedido en sí no mueve stock todavía — pero riesgo alto igual por §6 (dinero/totales), con revisión de Claude Code.   |
+| 38     | C18b | No (reservas son su propia tabla)                            | Codex                           | El job de liberación no inserta movimientos del ledger.                                                                 |
+| 39     | C19  | Sí — el de mayor riesgo del proyecto                         | **Claude Code, exclusivamente** | Consumo real + COGS + bloqueo bajo concurrencia. Revisión en sesión limpia obligatoria además (§6).                     |
+| 40     | C20  | No (toca caja/pasivo, no inventario)                         | Codex                           | Dinero, pero no el ledger de stock — riesgo alto igual por §6, con revisión de Claude Code.                             |
+| 41     | C21  | Sí (`return_in`)                                             | **Claude Code**                 | Inserta movimientos de reversión reales hacia lotes reales.                                                             |
+| 42     | C22  | No (caja/plan de cuentas, no inventario)                     | Codex                           | Dinero, pero no el ledger de stock — riesgo alto igual por §6, con revisión de Claude Code.                             |
+| 43     | C23  | No                                                           | Codex                           | Documentos fiscales, sin tocar stock ni caja — riesgo alto igual por §6 (frontera fiscal).                              |
+| 44     | C24  | No                                                           | Codex                           | Sensible por seguridad, no escribe el ledger — riesgo alto igual por §6 (permisos), con revisión de Claude Code.        |
+| 45     | C25  | No                                                           | Codex                           | Solo lectura y configuración de alertas.                                                                                |
 
 La Fase 1 (Sesiones 21 a 27) queda fuera de este reparto porque es secuencial y de cimiento: conviene que la lleve una sola sesión/agente de punta a punta para que `withTenantTx`, el mapeador de errores y el middleware de permisos salgan coherentes entre sí, en vez de conciliar cuatro estilos distintos después. Todas sus sesiones son riesgo alto según §6 salvo C01, C06 y C07.
 
@@ -2087,7 +2103,7 @@ Alcance: solo WP-E07. Si el alcance crece, pará y consultá.
 
 ### Sesión E08 — WP-E08 · Ventas de mostrador
 
-**Dependencias:** C17, C18, C19, C20, C21 y E04. **Estado hoy:** esperando todas.
+**Dependencias:** C17, C18b, C19, C20, C21 y E04. **Estado hoy:** esperando todas.
 
 ```
 Antes de tocar nada: git checkout -b feat/e08-admin-sales

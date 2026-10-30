@@ -3332,15 +3332,18 @@ SELECT pg_temp.expect_true(149,
 -- reserva es la de su lote y la de su unidad serializada. Mismo patrón que el
 -- 68 (movimientos) y el 86 (unidades), ahora para `stock_reservations`.
 --
--- Todos los intentos corren conectados como `joda_api` (`SET LOCAL ROLE`, la
--- credencial del runtime y no el superusuario, que elude RLS) con el contexto
--- de tenant fijado como lo hace `withTenantTx`; el nombre de la restricción
--- que rechaza va en el patrón, porque "hubo un error" no prueba que haya sido
--- la FK de esta migración. Cada bloque termina en una excepción: así se
--- revierte todo lo que creó, incluido el `SET LOCAL ROLE`, que de otro modo
--- dejaría al resto del archivo corriendo como `joda_api`. Los datos de
--- partida salen del smoke: dos variantes de insumo del tenant real
--- (`…a001` con el lote `…a1`, y `…a002`).
+-- Los intentos de 150 a 157 corren conectados como `joda_api` (`SET LOCAL
+-- ROLE`, la credencial del runtime y no el superusuario, que elude RLS) con el
+-- contexto de tenant fijado como lo hace `withTenantTx`; los datos de partida
+-- de cada bloque se crean antes, como superusuario, porque después de `SET
+-- LOCAL ROLE` ya no se puede. El 158 corre como superusuario a propósito: no
+-- hay política de DELETE, y como `joda_api` el borrado daría cero filas. El
+-- nombre de la restricción que rechaza va en el patrón, porque "hubo un
+-- error" no prueba que haya sido la FK de esta migración. Cada bloque termina
+-- en una excepción: así se revierte todo lo que creó, incluido el `SET LOCAL
+-- ROLE`, que de otro modo dejaría al resto del archivo corriendo como
+-- `joda_api`. Los datos de partida salen del smoke: dos variantes de insumo
+-- del tenant real (`…a001` con el lote `…a1`, y `…a002`).
 -- ─────────────────────────────────────────────────────────────────────
 
 -- Un dueño con sesión viva en el tenant (por defecto, el del smoke) y la
@@ -3485,18 +3488,22 @@ SELECT pg_temp.expect_fail_like(153, 'Reserva con el lote y la unidad de su vari
   'aceptado');
 
 -- 154 ─ (d) Un lote de OTRO tenant no sirve a una reserva, en ninguna de las
--- dos direcciones. Una FK no evalúa RLS (0023): la FK compuesta es el único
--- cierre, y el reemplazo de la de 0023 no puede perder `tenant_id`.
+-- dos direcciones. Una FK no evalúa RLS (0023): son las FK de la tabla las que
+-- cierran el cruce. Este invariante prueba el comportamiento, no la forma de
+-- la FK: no detecta que el reemplazo de la de 0023 pierda `tenant_id`, porque
+-- la FK de la variante, `(variant_id, tenant_id)`, ya ata el tenant, y la FK
+-- del lote `(lot_id, variant_id)` rechazaría igual por la variante. El guardia
+-- de que toda FK entre tablas con `tenant_id` lo incluya es el invariante 67.
 --   · Con el contexto del tenant real, una reserva propia que apunta a la
 --     variante y al lote del vecino (coherentes entre sí). La rechaza una FK
 --     de la tabla, la del lote o la de la variante: cuál dispara primero
 --     depende del orden de creación de los triggers de las FKs, y a este
 --     intento le da igual.
 --   · Con el contexto del vecino, una reserva del vecino (variante suya) que
---     apunta a un lote del tenant real. La variante es válida, así que solo
---     puede rechazarla la FK del lote: es la que prueba que `tenant_id`
---     sigue en la clave compuesta. (La política de la tabla solo mira el
---     tenant del contexto; el usuario y la sesión son los del primer intento.)
+--     apunta a un lote del tenant real. La rechaza la FK del lote (la
+--     variante del reservante es válida): por tenant y por variante a la vez,
+--     que acá no se distinguen. (La política de la tabla solo mira el tenant
+--     del contexto; el usuario y la sesión son los del primer intento.)
 SELECT pg_temp.expect_fail_like(154, 'Reserva con un lote de otro tenant, como joda_api',
   $$DO $x$
     DECLARE
@@ -3545,8 +3552,10 @@ SELECT pg_temp.expect_fail_like(154, 'Reserva con un lote de otro tenant, como j
   'aceptado');
 
 -- 155 ─ (d) Lo mismo con la unidad serializada de otro tenant, en las dos
--- direcciones. En la segunda la variante es válida, así que solo puede
--- rechazarla la FK de la unidad.
+-- direcciones. En la segunda la variante del reservante es válida, así que
+-- la rechaza la FK de la unidad. Como el 154, prueba el comportamiento y no
+-- detecta la pérdida de `tenant_id` en esa FK (la variante ya ata el tenant);
+-- ese guardia es el invariante 67.
 SELECT pg_temp.expect_fail_like(155, 'Reserva con una unidad serializada de otro tenant, como joda_api',
   $$DO $x$
     DECLARE
