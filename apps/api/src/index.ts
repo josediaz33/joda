@@ -124,8 +124,10 @@ async function main() {
 
   try {
     await assertRlsNotBypassed(db);
-    await app.listen({ port: env.PORT ?? 3333, host: "0.0.0.0" });
-    await mediaServer.listen({ port: mediaPort, host: "0.0.0.0" });
+    // WP-M18: `HOST` (opcional) acota la interfaz; sin él, 0.0.0.0 como siempre.
+    const host = env.HOST ?? "0.0.0.0";
+    await app.listen({ port: env.PORT ?? 3333, host });
+    await mediaServer.listen({ port: mediaPort, host });
   } catch (error) {
     app.log.error(error);
     process.exit(1);

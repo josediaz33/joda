@@ -54,6 +54,11 @@ const envSchema = z.object({
         "para cifrar el secreto TOTP de personal (docs/security-spec.md §4.3).",
     ),
   PORT: z.coerce.number().int().positive().optional(),
+  // WP-M18: interfaz en la que escuchan la API y el servidor de medios. Sin valor,
+  // 0.0.0.0 (despliegue en contenedor, donde el proceso tiene que ser alcanzable
+  // desde fuera). El entorno local la fija en 127.0.0.1: el admin de desarrollo, con
+  // usuarios de prueba, no tiene por qué ser alcanzable desde la red.
+  HOST: z.string().min(1).optional(),
   // WP-C09 (docs/security-spec.md §5, fila "Carga de archivos": "servidos
   // desde dominio distinto al del admin"). `APP_URL` es el origen público
   // de ESTE proceso — el que emite la cookie de sesión `__Host-joda_a`

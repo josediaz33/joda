@@ -1,0 +1,49 @@
+# Proxy mínimo delante de GoTrue para el entorno local (WP-M18).
+#
+# Lo que hace el gateway de Supabase y GoTrue pelado no hace:
+#   1. Servir GoTrue bajo /auth/v1 (el adaptador llama a
+#      ${SUPABASE_URL}/auth/v1/token?grant_type=password).
+#   2. Exigir la cabecera `apikey` con la clave anónima o la de servicio.
+#
+# El contenedor de nginx reemplaza ${SUPABASE_ANON_KEY} y
+# ${SUPABASE_SERVICE_ROLE_KEY} al arrancar (NGINX_ENVSUBST_FILTER=^SUPABASE_);
+# el resto de los `$...` son variables de nginx y no se tocan.
+
+# Resolución dinámica: si GoTrue se recrea y cambia de IP, nginx no se queda
+# con la vieja.
+resolver 127.0.0.11 valid=5s;
+
+# Las claves son JWT de ~200 caracteres: más que el tamaño por defecto del mapa.
+map_hash_bucket_size 512;
+
+map $http_apikey $joda_apikey_valida {
+  default 0;
+  "${SUPABASE_ANON_KEY}" 1;
+  "${SUPABASE_SERVICE_ROLE_KEY}" 1;
+}
+
+server {
+  listen 80;
+  default_type application/json;
+
+  location = /healthz {
+    return 200 '{"status":"ok"}';
+  }
+
+  location /auth/v1/ {
+    # Falla cerrado: si las claves quedaron vacías en el entorno, el mapa de
+    # arriba aceptaría una `apikey` vacía; este chequeo la rechaza antes.
+    if ($http_apikey = "") {
+      return 401 '{"message":"No API key found in request"}';
+    }
+    if ($joda_apikey_valida = 0) {
+      return 401 '{"message":"Invalid API key"}';
+    }
+
+    set $gotrue http://auth:9999;
+    rewrite ^/auth/v1/(.*)$ /$1 break;
+    proxy_pass $gotrue;
+    proxy_set_header Host $host;
+    proxy_set_header X-Forwarded-For $remote_addr;
+  }
+}
