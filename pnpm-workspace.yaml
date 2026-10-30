@@ -1,6 +1,7 @@
 packages:
   - "apps/*"
   - "packages/*"
+  - "e2e"
 
 # Versiones únicas para las herramientas compartidas entre paquetes.
 # Cada package.json referencia estas versiones con "catalog:" en vez de

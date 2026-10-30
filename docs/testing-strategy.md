@@ -222,6 +222,8 @@ Playwright, solo para flujos donde la integración del navegador es parte del ri
 
 Corren en el CI de la rama principal y antes de cada despliegue a producción, no en cada PR: son lentos.
 
+Excepción acotada (WP-M18): el **humo del entorno local** (`pnpm e2e:smoke`, `docs/runbooks/entorno-local.md`) corre en cada PR como job aparte. No cubre un flujo de negocio: comprueba que el entorno de desarrollo (Auth local, API, admin, base) sigue andando de punta a punta y que los permisos por rol se respetan.
+
 ---
 
 ## 7. Qué exige cada PR

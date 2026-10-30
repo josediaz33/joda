@@ -1,0 +1,22 @@
+{
+  "name": "@joda/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Humo de punta a punta del entorno local (WP-M18, Playwright): el admin real contra la API real, Postgres, Redis y el Auth local. Un archivo de spec por módulo del admin; ver docs/runbooks/entorno-local.md.",
+  "scripts": {
+    "smoke": "playwright test",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "catalog:",
+    "@playwright/test": "1.64.1",
+    "@types/node": "catalog:",
+    "eslint": "catalog:",
+    "eslint-config-prettier": "catalog:",
+    "eslint-plugin-boundaries": "catalog:",
+    "typescript": "catalog:",
+    "typescript-eslint": "catalog:"
+  }
+}

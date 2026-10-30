@@ -88,3 +88,39 @@ jobs:
             echo "::error::schema.prisma (o prisma/views) está desactualizado. Corré 'pnpm db:pull' y commiteá el resultado.";
             exit 1;
           }
+
+  # WP-M18 — humo del entorno local de punta a punta (docs/runbooks/entorno-local.md):
+  # `pnpm dev:setup` levanta Postgres, Redis y el Auth local (GoTrue + proxy) con
+  # docker compose, reinicia la base, da de alta un usuario por rol y siembra los
+  # datos de muestra POR LA API; después corre el contrato de StaffAuthProvider contra
+  # ese GoTrue y el humo de Playwright (login con segundo factor por rol, catálogo,
+  # alta de un producto, el vendedor sin costos). Versiones fijas: GoTrue, Postgres,
+  # Redis y nginx en docker-compose.yml; Playwright en e2e/package.json.
+  e2e:
+    name: E2E smoke (entorno local)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Caché de navegadores de Playwright
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-1.64.1
+      - run: pnpm --filter @joda/e2e exec playwright install --with-deps chromium
+      - run: pnpm dev:setup
+      - run: pnpm test:auth-local
+      - run: pnpm e2e:smoke
+      - name: Registros de docker compose
+        if: failure()
+        run: docker compose -p joda --env-file .env.local -f infra/docker/docker-compose.yml --profile auth logs --tail=200
+      - name: Informe y trazas de Playwright
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-e2e
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          if-no-files-found: ignore
