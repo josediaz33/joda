@@ -9,7 +9,7 @@ Lo que queda funcionando al terminar:
 - **Datos de muestra** creados por la API: tres perfumes con frasco sellado, granel y decants, un reloj Casio serializado, un proveedor, una orden de compra y stock recibido.
 - Un **humo de Playwright** (`pnpm e2e:smoke`) que entra con cada rol, navega el catálogo, crea un producto y comprueba que el vendedor no ve costos.
 
-> **Todo esto es solo para desarrollo en tu máquina.** Los usuarios tienen contraseñas conocidas (están abajo, en este mismo archivo). Los scripts se niegan a correr con `NODE_ENV=production` y contra cualquier servidor que no sea `localhost`/`127.0.0.1`. Nunca reutilices estas contraseñas en un entorno real.
+> **Todo esto es solo para desarrollo en tu máquina.** Los usuarios tienen contraseñas conocidas (están abajo, en este mismo archivo). Los scripts se niegan a correr con `NODE_ENV=production` o `JODA_ENV=production` (en cualquier grafía: `Production`, ` production`…) y contra cualquier servidor que no sea `localhost`/`127.0.0.1`; el humo de Playwright también, aunque lo corras a mano con `playwright test`. Nunca reutilices estas contraseñas en un entorno real.
 
 ---
 
@@ -17,7 +17,7 @@ Lo que queda funcionando al terminar:
 
 | Qué                    | Detalle                                                                                                                              |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| Node                   | 22 o más. `node -v`.                                                                                                                 |
+| Node                   | 22.9 o más (`node -v`): la API arranca con `--env-file-if-exists`, que apareció en 22.9.                                             |
 | pnpm                   | 9 o más. `pnpm -v`.                                                                                                                  |
 | Git                    | Con `git config core.hooksPath .githooks` (ver `CONTRIBUTING.md` §1).                                                                |
 | **Docker Desktop**     | Abierto y en «Engine running» antes de empezar. Con el backend WSL 2, el predeterminado.                                             |
@@ -41,13 +41,15 @@ pnpm dev
 
 1. Escribe **`.env.local`** (no versionado) con **secretos al azar por máquina**: `SESSION_SECRET`, `MFA_ENCRYPTION_KEY`, el secreto de firma de GoTrue, la contraseña de `joda_api` y las dos claves de Supabase (JWT con rol `anon` y `service_role`, firmados con ese secreto). Si el archivo ya existe, **conserva los secretos**.
 2. Levanta con `docker compose` Postgres 16, Redis 7, **GoTrue** (`supabase/gotrue`, versión fija) y un **nginx** mínimo que lo expone en `/auth/v1` y exige la cabecera `apikey`, como el gateway de Supabase. Espera a que los cuatro estén sanos.
-3. Corre **`pnpm db:reset`**: borra y recrea toda la base `joda` (migraciones + seed base). Fija la contraseña de `joda_api` (la del `.env.local`) con un `ALTER ROLE` del setup. **Vacía también el Redis del proyecto** (sesiones y permisos en caché de una base anterior no valen).
+3. **Comprueba que no borra lo que no creó él** (ver el aviso de abajo) y corre **`pnpm db:reset`**: borra y recrea toda la base `joda` (migraciones + seed base). Fija la contraseña de `joda_api` (la del `.env.local`) con un `ALTER ROLE` del setup. **Vacía también el Redis del proyecto** (sesiones y permisos en caché de una base anterior no valen).
 4. Da de alta los cuatro usuarios **en GoTrue** (Admin API, correo confirmado) y **en `staff_users`**, con su rol, en el tenant `joda`.
 5. Levanta la API un rato y **siembra por la API** (HTTP + tRPC, con la sesión del dueño) el segundo factor de los cuatro usuarios y los datos de muestra. La apaga al terminar.
 
 **Es re-ejecutable.** Cada corrida termina en el mismo estado, con la base reiniciada. Si solo querés reponer los datos de muestra sin tocar la base, con la API ya levantada (`pnpm dev`): `pnpm dev:seed`.
 
-> **Ojo:** `pnpm dev:setup` **borra todo el contenido** de la base `joda` y del Redis de su proyecto de compose, sin preguntar. Es lo que se espera de un entorno de desarrollo; si tenés datos que querés conservar en el Postgres de `55432`, hacé un `pg_dump` antes.
+> **Ojo:** `pnpm dev:setup` **borra todo el contenido** de la base `joda` y del Redis de su proyecto de compose. Con los valores por defecto (proyecto `joda`, puertos `55432` y `6379`) esos son el Postgres y el Redis de desarrollo de siempre: si tenés datos que querés conservar ahí, hacé un `pg_dump` antes.
+>
+> Para que no se lleve por delante lo que no creó él, el setup deja una **marca** (un comentario en la base `joda` y la clave `joda:dev-setup` en Redis). Un reinicio sobre una base o un Redis **con la marca** sigue sin preguntar; sobre una base con tablas o un Redis con claves **sin marca** (la primera vez sobre un entorno que armaste a mano) pide confirmación: en una terminal, escribí `si`; en un script o sin terminal, repetí con `pnpm dev:setup --yes` o con `JODA_DEV_SETUP_YES=1`. Sin eso se niega y no borra nada. Una base vacía o que no existe todavía no pregunta.
 
 ## 3. Qué quedó corriendo
 
@@ -66,14 +68,14 @@ Valores por defecto (los del entorno de siempre). Todos los puertos de host se p
 **Para mover un puerto o tener dos entornos a la vez**, fijá las variables al correr el setup (se guardan en `.env.local`):
 
 ```powershell
-$env:JODA_COMPOSE_PROJECT = "joda-otro"; $env:JODA_PG_PORT = "55440"; $env:JODA_REDIS_PORT = "55441"
-$env:JODA_SUPABASE_PORT = "55442"; $env:JODA_API_PORT = "3433"; $env:JODA_MEDIA_PORT = "3434"; $env:JODA_ADMIN_PORT = "5273"
+$env:JODA_COMPOSE_PROJECT = "joda-otro"; $env:JODA_PG_PORT = "55640"; $env:JODA_REDIS_PORT = "55641"
+$env:JODA_SUPABASE_PORT = "55642"; $env:JODA_API_PORT = "3433"; $env:JODA_MEDIA_PORT = "3434"; $env:JODA_ADMIN_PORT = "5273"
 pnpm dev:setup
 ```
 
-Los contenedores de prueba de los bloques de trabajo (Testcontainers usa puertos aleatorios; los `joda-b1-*` otro rango) no chocan con estos.
+Los contenedores de las pruebas automáticas (Testcontainers usa puertos aleatorios) no chocan con estos. Si ya tenés otros contenedores de Postgres o Redis en tu máquina, elegí puertos que estén libres (`docker ps`).
 
-**La API conecta siempre como `joda_api`** (`NOBYPASSRLS`, la credencial `DATABASE_URL_API`). El superusuario (`DATABASE_URL`) solo lo usan el setup y los scripts de `packages/db` para migrar y sembrar; la API no lo ve.
+**La API conecta siempre como `joda_api`** (`NOBYPASSRLS`, la credencial `DATABASE_URL_API`) y escucha solo en `127.0.0.1` (`API_HOST`). El superusuario (`DATABASE_URL`) y la clave de servicio de Supabase (`SUPABASE_SERVICE_ROLE_KEY`) los usan el setup, el seed y los scripts de `packages/db` para migrar y sembrar; la API **no los usa**: el código solo lee `DATABASE_URL_API`, y `assertRlsNotBypassed` aborta el arranque si esa conexión pudiera saltarse RLS. Ojo, sin embargo: `pnpm dev` carga el `.env.local` entero con `--env-file-if-exists`, así que esas dos variables **sí quedan en el entorno del proceso de la API** aunque nada las lea. Separarlas en otro archivo es el trabajo pendiente WP-M20 (`docs/backlog.md`).
 
 ## 4. Usuarios de prueba
 
@@ -131,6 +133,8 @@ pnpm e2e:smoke --grep "vendedor"   # solo lo que coincida
 
 Compila los paquetes, instala Chromium de Playwright la primera vez y corre `e2e/`. Si la API y el admin ya están corriendo (`pnpm dev`) los reutiliza; si no, Playwright los levanta. Necesita el entorno sembrado (`pnpm dev:setup`).
 
+Se puede correr **cuantas veces quieras sobre la misma base**: el humo busca los productos sembrados por nombre (paginando, no por posición en la lista) y archiva por la API los que crea, así que no se rompe a medida que la base crece.
+
 Cubre: el ingreso de **cada rol** con contraseña y segundo factor (y los rechazos: contraseña mala, código malo, sin sesión, salir); la **lista de catálogo** sembrada y el **alta de un producto** desde el formulario; y que el **vendedor no ve costos**: ni el menú de contabilidad y sourcing, ni por URL directa, y la API le responde 404 en proveedores, órdenes de compra y costo de lotes mientras el dueño recibe el costo puesto.
 
 **Cómo sumar pantallas** (WP-E06, WP-E07, …): un archivo `e2e/specs/<módulo>.spec.ts` por módulo del admin. `e2e/specs/catalog.spec.ts` es el modelo.
@@ -149,7 +153,9 @@ test.describe("<flujo> (<RF-XXX-nn, WP>)", () => {
 });
 ```
 
-Si la pantalla necesita datos que la muestra no trae, se agregan **por la API** en `scripts/dev/lib/sampleData.mjs` (no en el spec). Los specs que crean datos usan nombres únicos, para poder correrse más de una vez.
+Si la pantalla necesita datos que la muestra no trae, se agregan **por la API** en `scripts/dev/lib/sampleData.mjs` (no en el spec). Para que el humo no envejezca, dos reglas: los productos sembrados se buscan por nombre con `findProductRow` (`e2e/helpers/catalog.ts`, que pagina hasta encontrarlos; nunca "lo que haya en la primera pantalla", porque la lista va de lo más nuevo a lo más viejo y la API no borra productos), y lo que un spec crea lleva un nombre único con un prefijo conocido y se archiva al terminar (`archiveSmokeProducts`).
+
+**Un supuesto del humo:** los `loginAs`/`apiAs` de un mismo rol usan el mismo código TOTP dentro de su ventana de 30 s. Anda porque la API hoy acepta un código ya usado en la misma ventana. Si algún día se le agrega anti-replay (un código de un solo uso), hay que ajustar `currentTotp` en `e2e/helpers/login.ts` para esperar a la ventana siguiente.
 
 En CI corre el job `E2E smoke (entorno local)`: levanta el mismo compose, corre `pnpm dev:setup`, el contrato de auth y el humo.
 

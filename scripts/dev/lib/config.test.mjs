@@ -186,10 +186,7 @@ describe("resolveLocalEnv: puertos y proyecto sobrescribibles (WP-M18, punto 7 d
   });
 
   test("el nombre de proyecto se puede cambiar", () => {
-    assert.equal(
-      resolve({ JODA_COMPOSE_PROJECT: "joda-b2-m18" }).JODA_COMPOSE_PROJECT,
-      "joda-b2-m18",
-    );
+    assert.equal(resolve({ JODA_COMPOSE_PROJECT: "joda-otro" }).JODA_COMPOSE_PROJECT, "joda-otro");
   });
 
   test("rechaza un nombre de proyecto que compose no acepta", () => {

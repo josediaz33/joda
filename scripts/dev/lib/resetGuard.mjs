@@ -32,12 +32,12 @@ export function unmarkedDataReasons({ database, redis, ports }) {
   const reasons = [];
   if (database.tables > 0 && !database.marked) {
     reasons.push(
-      `la base «joda» de 127.0.0.1:${ports.postgres} tiene ${database.tables} tablas y no la creó \`pnpm dev:setup\` (db:reset las borra)`,
+      `la base «joda» de 127.0.0.1:${ports.postgres} tiene ${database.tables} ${database.tables === 1 ? "tabla" : "tablas"} y no la creó \`pnpm dev:setup\` (db:reset las borra)`,
     );
   }
   if (redis.keys > 0 && !redis.marked) {
     reasons.push(
-      `el Redis de 127.0.0.1:${ports.redis} tiene ${redis.keys} claves y no lo preparó \`pnpm dev:setup\` (FLUSHALL las borra)`,
+      `el Redis de 127.0.0.1:${ports.redis} tiene ${redis.keys} ${redis.keys === 1 ? "clave" : "claves"} y no lo preparó \`pnpm dev:setup\` (FLUSHALL las borra)`,
     );
   }
   return reasons;

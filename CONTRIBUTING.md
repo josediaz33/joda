@@ -7,7 +7,7 @@ Flujo de trabajo, convenciones y criterios de aceptación. Aplica igual a person
 ## 1. Entorno local
 
 ```bash
-# requisitos: Node 22+, pnpm 9+, Docker (Docker Desktop en Windows)
+# requisitos: Node 22.9+, pnpm 9+, Docker (Docker Desktop en Windows)
 git clone <repo> && cd joda
 git config core.hooksPath .githooks   # activa los hooks de .githooks/, ver abajo
 pnpm install
@@ -47,7 +47,7 @@ push origin main` por costumbre.
 ### Decisiones de versión (WP-A01)
 
 - **ESLint 9.39.5, no 10.x:** ESLint 10 exige Node ≥22.13 dentro de la línea
-  22.x; este repo solo pide "Node 22+" a secas. Reevaluar cuando se suba el
+  22.x; este repo solo pide "Node 22.9+" (por `--env-file-if-exists`, WP-M18). Reevaluar cuando se suba el
   piso de Node del proyecto.
 - **pnpm 9.15.4, no la última 12.x:** cumple el "pnpm 9+" de arriba sin forzar
   una migración de major que ningún paquete de trabajo pidió todavía.
