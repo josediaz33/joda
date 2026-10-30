@@ -7,7 +7,7 @@
 //
 // Avanza WP-C03b pero no lo cierra: ese WP es contra un proyecto REAL de Supabase.
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { REPO_ROOT } from "./lib/config.mjs";
 import { assertDevelopmentEnvironment } from "./lib/guards.mjs";
 import { run } from "./lib/process.mjs";
@@ -22,7 +22,9 @@ async function main() {
   });
 
   const apiDir = join(REPO_ROOT, "apps", "api");
-  const vitestCli = createRequire(join(apiDir, "package.json")).resolve("vitest/vitest.mjs");
+  // El paquete no exporta su CLI: se llega a él desde su package.json (que sí exporta).
+  const vitestPackage = createRequire(join(apiDir, "package.json")).resolve("vitest/package.json");
+  const vitestCli = join(dirname(vitestPackage), "vitest.mjs");
   const { code } = await run(
     process.execPath,
     [vitestCli, "run", "src/adapters/staffAuth/staffAuthProvider.contract.test.ts"],
