@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
+import { createInterface } from "node:readline/promises";
 import { COMPOSE_FILE, ENV_LOCAL_PATH, REPO_ROOT } from "./config.mjs";
 
 // Ejecución de procesos para los scripts de scripts/dev/ (WP-M18). Sin `shell`:
@@ -147,5 +148,20 @@ export async function assertPortsFree(ports) {
         probe.listen(port, host, () => probe.close(() => done(undefined)));
       });
     }
+  }
+}
+
+/**
+ * Hace una pregunta en la terminal y devuelve lo que se escribió. Solo para cuando hay
+ * terminal (`process.stdin.isTTY`): sin ella, el que llama no pregunta.
+ *
+ * @param {string} question
+ */
+export async function askQuestion(question) {
+  const readline = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await readline.question(question);
+  } finally {
+    readline.close();
   }
 }

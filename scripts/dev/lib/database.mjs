@@ -1,5 +1,6 @@
 import pg from "pg";
 import { DEV_TENANT } from "./devUsers.mjs";
+import { DATABASE_MARK } from "./resetGuard.mjs";
 
 // Lo que el entorno local necesita de Postgres y que NO es una migración
 // (WP-M18): roles y bases del Auth local, la contraseña de `joda_api`, el tenant
@@ -254,5 +255,51 @@ export async function findStaffId(databaseUrl, tenantId, email) {
       [tenantId, email],
     );
     return result.rows[0]?.id ?? null;
+  });
+}
+
+/**
+ * Cuántas tablas tiene la base y si lleva la marca de un `pnpm dev:setup` previo
+ * (resetGuard.mjs). Lo que `db:reset` borra son los esquemas `app` y `public`: eso se cuenta.
+ * Una base que todavía no existe no tiene nada que perder.
+ *
+ * @param {string} databaseUrl
+ * @returns {Promise<{ tables: number; marked: boolean }>}
+ */
+export async function inspectDatabase(databaseUrl) {
+  try {
+    return await withSuperuser(databaseUrl, async (client) => {
+      const tables = await client.query(
+        "SELECT count(*)::int AS n FROM pg_tables WHERE schemaname IN ('app', 'public')",
+      );
+      const comment = await client.query(
+        "SELECT shobj_description(oid, 'pg_database') AS comment FROM pg_database WHERE datname = current_database()",
+      );
+      return {
+        tables: tables.rows[0].n,
+        marked: comment.rows[0]?.comment === DATABASE_MARK,
+      };
+    });
+  } catch (error) {
+    // 3D000: invalid_catalog_name, la base no existe.
+    if (error.code === "3D000") return { tables: 0, marked: false };
+    throw error;
+  }
+}
+
+/**
+ * Deja la marca de que esta base la reinicia `pnpm dev:setup`. `db:reset` borra esquemas, no
+ * la base, así que la marca sobrevive; así el siguiente setup no pregunta.
+ *
+ * @param {string} databaseUrl
+ */
+export async function markDatabase(databaseUrl) {
+  await withSuperuser(databaseUrl, async (client) => {
+    const name = (await client.query("SELECT current_database() AS name")).rows[0].name;
+    // Ni el nombre ni la marca admiten parámetros en un DDL: el nombre se escapa como
+    // identificador y la marca es una constante nuestra.
+    await client.query(
+      `COMMENT ON DATABASE ${client.escapeIdentifier(name)} IS ${client.escapeLiteral(DATABASE_MARK)}`,
+    );
   });
 }
