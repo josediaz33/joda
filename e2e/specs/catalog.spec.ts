@@ -54,8 +54,8 @@ test.describe("el dueño crea un producto desde el admin (RF-CAT-01, WP-E05)", (
 
     await page.getByRole("button", { name: "Nuevo accesorio" }).click();
     const dialog = page.getByRole("dialog");
-    await dialog.getByLabel("Nombre", { exact: true }).fill(name);
-    await dialog.getByLabel("Slug", { exact: true }).fill(`estuche-de-humo-${suffix}`);
+    await dialog.getByLabel(/^Nombre/).fill(name);
+    await dialog.getByLabel(/^Slug/).fill(`estuche-de-humo-${suffix}`);
     await dialog.getByRole("checkbox", { name: /Perfumes/ }).check();
     await dialog.getByRole("button", { name: "Crear producto" }).click();
 
