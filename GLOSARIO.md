@@ -88,6 +88,8 @@ Bloqueo temporal de stock, **separado del ledger**. El carrito no reserva; la re
 
 **Disponible = saldo proyectado − reservas vivas.**
 
+La reserva es **por variante por defecto**; atarla a un lote (un plan de decant reserva su granel) o a una unidad serializada (un reloj reserva su unidad) es opcional, y lo atado es siempre de la variante de la reserva. Una reserva viva es la que no se liberó (`released_at` nulo) y no venció (`expires_at`). RN-RES-06.
+
 ### Unidad serializada (`serialized_units`)
 
 Un reloj concreto, con número de serie, garantía y trazabilidad de dueño. Un reloj **no es** `cantidad = 1`: es una entidad. El número de serie es único por tenant, la unidad es de la variante de su lote, y las unidades registradas de un lote no superan su `qty_initial`. Ver RN-SER-01…04.

@@ -3327,6 +3327,471 @@ SELECT pg_temp.expect_true(149,
                    WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE')
   AND (SELECT bool_and(has_function_privilege('joda_api', oid, 'EXECUTE')) FROM f));
 
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-C18a (0040_stock_reservation_lot_unit_variant.sql): la variante de una
+-- reserva es la de su lote y la de su unidad serializada. Mismo patrón que el
+-- 68 (movimientos) y el 86 (unidades), ahora para `stock_reservations`.
+--
+-- Los intentos de 150 a 157 corren conectados como `joda_api` (`SET LOCAL
+-- ROLE`, la credencial del runtime y no el superusuario, que elude RLS) con el
+-- contexto de tenant fijado como lo hace `withTenantTx`; los datos de partida
+-- de cada bloque se crean antes, como superusuario, porque después de `SET
+-- LOCAL ROLE` ya no se puede. El 158 corre como superusuario a propósito: no
+-- hay política de DELETE, y como `joda_api` el borrado daría cero filas. El
+-- nombre de la restricción que rechaza va en el patrón, porque "hubo un
+-- error" no prueba que haya sido la FK de esta migración. Cada bloque termina
+-- en una excepción: así se revierte todo lo que creó, incluido el `SET LOCAL
+-- ROLE`, que de otro modo dejaría al resto del archivo corriendo como
+-- `joda_api`. Los datos de partida salen del smoke: dos variantes de insumo
+-- del tenant real (`…a001` con el lote `…a1`, y `…a002`).
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Un dueño con sesión viva en el tenant (por defecto, el del smoke) y la
+-- conexión convertida en `joda_api` con el contexto que fija la API. Se llama
+-- ANTES de tocar nada como joda_api: después de `SET LOCAL ROLE` ya no se
+-- pueden crear usuarios ni sesiones. El id de usuario es `b1800000-…-<n>`.
+CREATE OR REPLACE FUNCTION pg_temp.c18a_as_api(
+  p_n int, p_tenant uuid DEFAULT '11111111-1111-1111-1111-111111111111'
+) RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM pg_temp.b18_actor('owner', p_n, p_tenant);
+  SET LOCAL ROLE joda_api;
+  PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-' || lpad(p_n::text, 12, '0'), true),
+          set_config('app.tenant_id', p_tenant::text, true),
+          set_config('app.audience', 'staff', true),
+          set_config('app.session_id', 'b1850000-0000-0000-0000-' || lpad(p_n::text, 12, '0'), true);
+END $$;
+
+-- Un segundo tenant con una variante, un lote y una unidad serializada propios
+-- (`c18a0001-…`). Se crea como superusuario, ANTES de `c18a_as_api`.
+CREATE OR REPLACE FUNCTION pg_temp.c18a_peer_tenant() RETURNS void LANGUAGE plpgsql AS $$
+BEGIN
+  INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+  VALUES ('c18a0001-0000-0000-0000-000000000000', 'tenant-c18a', 'C18a SA', 'C18a');
+  INSERT INTO app.products (id, tenant_id, kind, slug, name, status)
+  VALUES ('c18a0001-0000-0000-0000-0000000000a1', 'c18a0001-0000-0000-0000-000000000000',
+          'accessory', 'c18a', 'C18a', 'draft');
+  INSERT INTO app.product_variants (id, tenant_id, product_id, sku, variant_type, uom, price_pyg)
+  VALUES ('c18a0001-0000-0000-0000-0000000000b1', 'c18a0001-0000-0000-0000-000000000000',
+          'c18a0001-0000-0000-0000-0000000000a1', 'C18A', 'unit', 'unit', 0);
+  INSERT INTO app.inventory_lots
+    (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+     fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+  VALUES ('c18a0001-0000-0000-0000-0000000000c1', 'c18a0001-0000-0000-0000-000000000000',
+          'c18a0001-0000-0000-0000-0000000000b1', 1, 'unit', 0, 'PYG', 1, 0, 0);
+  INSERT INTO app.serialized_units (id, tenant_id, variant_id, serial_number)
+  VALUES ('c18a0001-0000-0000-0000-0000000000d1', 'c18a0001-0000-0000-0000-000000000000',
+          'c18a0001-0000-0000-0000-0000000000b1', 'SN-C18A-PEER');
+END $$;
+
+-- 150 ─ (a) Una reserva no puede declarar otra variante que la de su lote. La
+-- variante la declaraba quien inserta, y la reserva quedaba descontando el
+-- disponible de una variante y apuntando al lote de otra. Antes de 0040 la FK
+-- del lote era `(lot_id, tenant_id)` y esto se aceptaba. Lo único que puede
+-- rechazarlo es la FK compuesta lote+variante.
+SELECT pg_temp.expect_fail_like(150, 'Reserva con un lote de otra variante, como joda_api',
+  $$DO $x$
+    BEGIN
+      PERFORM pg_temp.c18a_as_api(150);
+      INSERT INTO app.stock_reservations
+        (tenant_id, variant_id, lot_id, qty, reason, expires_at)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a002',
+              '99999999-0000-0000-0000-0000000000a1', 1, 'checkout', now() + interval '1 hour');
+      RAISE EXCEPTION 'FALLO: la reserva con un lote de otra variante fue aceptada';
+    END $x$
+  $$,
+  '%stock_reservations_lot_id_fkey%');
+
+-- 151 ─ (b) Lo mismo con la unidad serializada: la reserva de una variante no
+-- puede apuntar a la unidad de otra. La unidad se crea sin lote (puede existir
+-- sin lote), así que la única barrera es la FK compuesta unidad+variante, que
+-- necesita el UNIQUE (id, variant_id, tenant_id) de `serialized_units`.
+SELECT pg_temp.expect_fail_like(151, 'Reserva con una unidad serializada de otra variante, como joda_api',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.serialized_units (id, tenant_id, variant_id, serial_number)
+      VALUES ('c18a0000-0000-0000-0000-000000000151', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 'SN-INV-151');
+      PERFORM pg_temp.c18a_as_api(151);
+      INSERT INTO app.stock_reservations
+        (tenant_id, variant_id, serial_unit_id, qty, reason, expires_at)
+      VALUES ('11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a002',
+              'c18a0000-0000-0000-0000-000000000151', 1, 'checkout', now() + interval '1 hour');
+      RAISE EXCEPTION 'FALLO: la reserva con una unidad de otra variante fue aceptada';
+    END $x$
+  $$,
+  '%stock_reservations_serial_unit_id_fkey%');
+
+-- 152 ─ Control positivo de la regla "la reserva es por variante por defecto":
+-- sin lote y sin unidad (MATCH SIMPLE no verifica nada con las dos en NULL), la
+-- reserva se acepta, la lee quien la escribió y cuenta en el disponible de la
+-- variante (`v_stock_available`, RN-RES-03). Sin este control, un cambio que
+-- volviera obligatorio el lote o la unidad pasaría todos los rechazos de arriba.
+SELECT pg_temp.expect_fail_like(152, 'Reserva por variante, sin lote ni unidad, como joda_api',
+  $$DO $x$
+    DECLARE
+      v_leida int;
+      v_reservada numeric;
+    BEGIN
+      PERFORM pg_temp.c18a_as_api(152);
+      INSERT INTO app.stock_reservations
+        (id, tenant_id, variant_id, qty, reason, expires_at)
+      VALUES ('c18a0000-0000-0000-0000-000000000152', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 3, 'checkout', now() + interval '1 hour');
+      SELECT count(*) INTO v_leida
+        FROM app.stock_reservations WHERE id = 'c18a0000-0000-0000-0000-000000000152';
+      SELECT reserved INTO v_reservada
+        FROM app.v_stock_available WHERE variant_id = '55555555-0000-0000-0000-00000000a001';
+      IF v_leida = 1 AND v_reservada = 3 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO leida=% reservada=% (esperado 1 y 3)', v_leida, v_reservada;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 153 ─ Control positivo de los rechazos 150 y 151: con el lote de SU variante,
+-- con la unidad de SU variante y con las dos juntas (una unidad del lote), la
+-- reserva se acepta. Un reloj serializado reserva su unidad; un plan de decant
+-- reserva el lote de granel elegido.
+SELECT pg_temp.expect_fail_like(153, 'Reserva con el lote y la unidad de su variante, como joda_api',
+  $$DO $x$
+    DECLARE
+      v_filas int;
+    BEGIN
+      INSERT INTO app.serialized_units (id, tenant_id, variant_id, lot_id, serial_number)
+      VALUES ('c18a0000-0000-0000-0000-000000000153', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001',
+              '99999999-0000-0000-0000-0000000000a1', 'SN-INV-153');
+      PERFORM pg_temp.c18a_as_api(153);
+      INSERT INTO app.stock_reservations
+        (tenant_id, variant_id, lot_id, serial_unit_id, qty, reason, expires_at)
+      VALUES ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+              '99999999-0000-0000-0000-0000000000a1', NULL, 1, 'checkout',
+              now() + interval '1 hour'),
+             ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+              NULL, 'c18a0000-0000-0000-0000-000000000153', 1, 'checkout',
+              now() + interval '1 hour'),
+             ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+              '99999999-0000-0000-0000-0000000000a1',
+              'c18a0000-0000-0000-0000-000000000153', 1, 'checkout',
+              now() + interval '1 hour');
+      GET DIAGNOSTICS v_filas = ROW_COUNT;
+      IF v_filas = 3 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO filas=% (esperado 3)', v_filas;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 154 ─ (d) Un lote de OTRO tenant no sirve a una reserva, en ninguna de las
+-- dos direcciones. Una FK no evalúa RLS (0023): son las FK de la tabla las que
+-- cierran el cruce. Este invariante prueba el comportamiento, no la forma de
+-- la FK: no detecta que el reemplazo de la de 0023 pierda `tenant_id`, porque
+-- la FK de la variante, `(variant_id, tenant_id)`, ya ata el tenant, y la FK
+-- del lote `(lot_id, variant_id)` rechazaría igual por la variante. El guardia
+-- de que toda FK entre tablas con `tenant_id` lo incluya es el invariante 67.
+--   · Con el contexto del tenant real, una reserva propia que apunta a la
+--     variante y al lote del vecino (coherentes entre sí). La rechaza una FK
+--     de la tabla, la del lote o la de la variante: cuál dispara primero
+--     depende del orden de creación de los triggers de las FKs, y a este
+--     intento le da igual.
+--   · Con el contexto del vecino, una reserva del vecino (variante suya) que
+--     apunta a un lote del tenant real. La rechaza la FK del lote (la
+--     variante del reservante es válida): por tenant y por variante a la vez,
+--     que acá no se distinguen. (La política de la tabla solo mira el tenant
+--     del contexto; el usuario y la sesión son los del primer intento.)
+SELECT pg_temp.expect_fail_like(154, 'Reserva con un lote de otro tenant, como joda_api',
+  $$DO $x$
+    DECLARE
+      v_intento record;
+      v_constraint text;
+      v_rechazos int := 0;
+    BEGIN
+      PERFORM pg_temp.c18a_peer_tenant();
+      PERFORM pg_temp.c18a_as_api(154);
+      FOR v_intento IN
+        SELECT * FROM (VALUES
+          ('el tenant real reserva el lote del vecino', '11111111-1111-1111-1111-111111111111',
+           $q$INSERT INTO app.stock_reservations
+                (tenant_id, variant_id, lot_id, qty, reason, expires_at)
+              VALUES ('11111111-1111-1111-1111-111111111111',
+                      'c18a0001-0000-0000-0000-0000000000b1',
+                      'c18a0001-0000-0000-0000-0000000000c1', 1, 'checkout',
+                      now() + interval '1 hour')$q$,
+           ARRAY['stock_reservations_lot_id_fkey', 'stock_reservations_variant_id_fkey']),
+          ('el vecino reserva un lote del tenant real', 'c18a0001-0000-0000-0000-000000000000',
+           $q$INSERT INTO app.stock_reservations
+                (tenant_id, variant_id, lot_id, qty, reason, expires_at)
+              VALUES ('c18a0001-0000-0000-0000-000000000000',
+                      'c18a0001-0000-0000-0000-0000000000b1',
+                      '99999999-0000-0000-0000-0000000000a1', 1, 'checkout',
+                      now() + interval '1 hour')$q$,
+           ARRAY['stock_reservations_lot_id_fkey'])
+        ) AS t(que, tenant, sentencia, restricciones)
+      LOOP
+        PERFORM set_config('app.tenant_id', v_intento.tenant, true);
+        BEGIN
+          EXECUTE v_intento.sentencia;
+        EXCEPTION WHEN foreign_key_violation THEN
+          GET STACKED DIAGNOSTICS v_constraint = CONSTRAINT_NAME;
+          IF v_constraint = ANY (v_intento.restricciones) THEN
+            v_rechazos := v_rechazos + 1;
+          END IF;
+        END;
+      END LOOP;
+      IF v_rechazos = 2 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO solo % de 2 reservas cruzadas fueron rechazadas por su FK', v_rechazos;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 155 ─ (d) Lo mismo con la unidad serializada de otro tenant, en las dos
+-- direcciones. En la segunda la variante del reservante es válida, así que
+-- la rechaza la FK de la unidad. Como el 154, prueba el comportamiento y no
+-- detecta la pérdida de `tenant_id` en esa FK (la variante ya ata el tenant);
+-- ese guardia es el invariante 67.
+SELECT pg_temp.expect_fail_like(155, 'Reserva con una unidad serializada de otro tenant, como joda_api',
+  $$DO $x$
+    DECLARE
+      v_intento record;
+      v_constraint text;
+      v_rechazos int := 0;
+    BEGIN
+      INSERT INTO app.serialized_units (id, tenant_id, variant_id, serial_number)
+      VALUES ('c18a0000-0000-0000-0000-000000000155', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 'SN-INV-155');
+      PERFORM pg_temp.c18a_peer_tenant();
+      PERFORM pg_temp.c18a_as_api(155);
+      FOR v_intento IN
+        SELECT * FROM (VALUES
+          ('el tenant real reserva la unidad del vecino', '11111111-1111-1111-1111-111111111111',
+           $q$INSERT INTO app.stock_reservations
+                (tenant_id, variant_id, serial_unit_id, qty, reason, expires_at)
+              VALUES ('11111111-1111-1111-1111-111111111111',
+                      'c18a0001-0000-0000-0000-0000000000b1',
+                      'c18a0001-0000-0000-0000-0000000000d1', 1, 'checkout',
+                      now() + interval '1 hour')$q$,
+           ARRAY['stock_reservations_serial_unit_id_fkey', 'stock_reservations_variant_id_fkey']),
+          ('el vecino reserva una unidad del tenant real', 'c18a0001-0000-0000-0000-000000000000',
+           $q$INSERT INTO app.stock_reservations
+                (tenant_id, variant_id, serial_unit_id, qty, reason, expires_at)
+              VALUES ('c18a0001-0000-0000-0000-000000000000',
+                      'c18a0001-0000-0000-0000-0000000000b1',
+                      'c18a0000-0000-0000-0000-000000000155', 1, 'checkout',
+                      now() + interval '1 hour')$q$,
+           ARRAY['stock_reservations_serial_unit_id_fkey'])
+        ) AS t(que, tenant, sentencia, restricciones)
+      LOOP
+        PERFORM set_config('app.tenant_id', v_intento.tenant, true);
+        BEGIN
+          EXECUTE v_intento.sentencia;
+        EXCEPTION WHEN foreign_key_violation THEN
+          GET STACKED DIAGNOSTICS v_constraint = CONSTRAINT_NAME;
+          IF v_constraint = ANY (v_intento.restricciones) THEN
+            v_rechazos := v_rechazos + 1;
+          END IF;
+        END;
+      END LOOP;
+      IF v_rechazos = 2 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO solo % de 2 reservas cruzadas fueron rechazadas por su FK', v_rechazos;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 156 ─ Una reserva ya creada tampoco se mueve a una variante distinta de la
+-- de su lote o de su unidad: sin esto, los rechazos 150 y 151 se eludían
+-- insertando la reserva coherente y cambiando después `variant_id`, `lot_id`
+-- o `serial_unit_id` con un UPDATE. Cuatro intentos, y cada uno tiene que
+-- caer en la FK que corresponde.
+SELECT pg_temp.expect_fail_like(156, 'Un UPDATE no mueve una reserva a otra variante que la de su lote o su unidad, como joda_api',
+  $$DO $x$
+    DECLARE
+      v_intento record;
+      v_constraint text;
+      v_rechazos int := 0;
+    BEGIN
+      INSERT INTO app.serialized_units (id, tenant_id, variant_id, serial_number)
+      VALUES ('c18a0000-0000-0000-0000-000000000156', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 'SN-INV-156');
+      PERFORM pg_temp.c18a_as_api(156);
+      INSERT INTO app.stock_reservations
+        (id, tenant_id, variant_id, lot_id, qty, reason, expires_at)
+      VALUES ('c18a0000-0000-0000-0000-0000000001a6', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001',
+              '99999999-0000-0000-0000-0000000000a1', 1, 'checkout', now() + interval '1 hour');
+      INSERT INTO app.stock_reservations
+        (id, tenant_id, variant_id, serial_unit_id, qty, reason, expires_at)
+      VALUES ('c18a0000-0000-0000-0000-0000000001b6', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001',
+              'c18a0000-0000-0000-0000-000000000156', 1, 'checkout', now() + interval '1 hour');
+      INSERT INTO app.stock_reservations
+        (id, tenant_id, variant_id, qty, reason, expires_at)
+      VALUES ('c18a0000-0000-0000-0000-0000000001c6', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a002', 1, 'checkout', now() + interval '1 hour');
+
+      FOR v_intento IN
+        SELECT * FROM (VALUES
+          ('la variante de una reserva con lote',
+           $q$UPDATE app.stock_reservations SET variant_id = '55555555-0000-0000-0000-00000000a002'
+               WHERE id = 'c18a0000-0000-0000-0000-0000000001a6'$q$,
+           'stock_reservations_lot_id_fkey'),
+          ('la variante de una reserva con unidad',
+           $q$UPDATE app.stock_reservations SET variant_id = '55555555-0000-0000-0000-00000000a002'
+               WHERE id = 'c18a0000-0000-0000-0000-0000000001b6'$q$,
+           'stock_reservations_serial_unit_id_fkey'),
+          ('el lote de una reserva de otra variante',
+           $q$UPDATE app.stock_reservations SET lot_id = '99999999-0000-0000-0000-0000000000a1'
+               WHERE id = 'c18a0000-0000-0000-0000-0000000001c6'$q$,
+           'stock_reservations_lot_id_fkey'),
+          ('la unidad de una reserva de otra variante',
+           $q$UPDATE app.stock_reservations SET serial_unit_id = 'c18a0000-0000-0000-0000-000000000156'
+               WHERE id = 'c18a0000-0000-0000-0000-0000000001c6'$q$,
+           'stock_reservations_serial_unit_id_fkey')
+        ) AS t(que, sentencia, restriccion)
+      LOOP
+        BEGIN
+          EXECUTE v_intento.sentencia;
+        EXCEPTION WHEN foreign_key_violation THEN
+          GET STACKED DIAGNOSTICS v_constraint = CONSTRAINT_NAME;
+          IF v_constraint = v_intento.restriccion THEN
+            v_rechazos := v_rechazos + 1;
+          END IF;
+        END;
+      END LOOP;
+      IF v_rechazos = 4 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO solo % de 4 cambios fueron rechazados por su FK', v_rechazos;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 157 ─ Efecto lateral buscado, como el 88 para las unidades: un lote o una
+-- unidad con reservas no cambia de variante. Sin esto, el 150 y el 151 se
+-- eludían cambiando la variante del lote o de la unidad DESPUÉS de reservar.
+-- Lote y unidad nuevos, sin movimientos ni unidades: la única barrera es la
+-- de la reserva. La fila de la reserva queda aunque se libere (`released_at`
+-- no la borra), así que el lote o la unidad que reservó ya no cambia de
+-- variante nunca.
+SELECT pg_temp.expect_fail_like(157, 'Un lote o una unidad con reservas cambia de variante, como joda_api',
+  $$DO $x$
+    DECLARE
+      v_intento record;
+      v_constraint text;
+      v_rechazos int := 0;
+    BEGIN
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('c18a0000-0000-0000-0000-0000000000f7', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'unit', 0, 'PYG', 1, 0, 0);
+      INSERT INTO app.serialized_units (id, tenant_id, variant_id, serial_number)
+      VALUES ('c18a0000-0000-0000-0000-000000000157', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 'SN-INV-157');
+      PERFORM pg_temp.c18a_as_api(157);
+      INSERT INTO app.stock_reservations
+        (tenant_id, variant_id, lot_id, qty, reason, expires_at)
+      VALUES ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+              'c18a0000-0000-0000-0000-0000000000f7', 1, 'checkout', now() + interval '1 hour');
+      INSERT INTO app.stock_reservations
+        (tenant_id, variant_id, serial_unit_id, qty, reason, expires_at)
+      VALUES ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+              'c18a0000-0000-0000-0000-000000000157', 1, 'checkout', now() + interval '1 hour');
+
+      FOR v_intento IN
+        SELECT * FROM (VALUES
+          ('el lote',
+           $q$UPDATE app.inventory_lots SET variant_id = '55555555-0000-0000-0000-00000000a002'
+               WHERE id = 'c18a0000-0000-0000-0000-0000000000f7'$q$,
+           'stock_reservations_lot_id_fkey'),
+          ('la unidad',
+           $q$UPDATE app.serialized_units SET variant_id = '55555555-0000-0000-0000-00000000a002'
+               WHERE id = 'c18a0000-0000-0000-0000-000000000157'$q$,
+           'stock_reservations_serial_unit_id_fkey')
+        ) AS t(que, sentencia, restriccion)
+      LOOP
+        BEGIN
+          EXECUTE v_intento.sentencia;
+        EXCEPTION WHEN foreign_key_violation THEN
+          GET STACKED DIAGNOSTICS v_constraint = CONSTRAINT_NAME;
+          IF v_constraint = v_intento.restriccion THEN
+            v_rechazos := v_rechazos + 1;
+          END IF;
+        END;
+      END LOOP;
+      IF v_rechazos = 2 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO solo % de 2 cambios de variante fueron rechazados por la FK de la reserva', v_rechazos;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 158 ─ Las FKs nuevas conservan la acción de las que reemplazan, ON DELETE
+-- RESTRICT: borrar un lote o una unidad con reservas se rechaza, no se lleva
+-- la reserva por delante (un CASCADE borraría en silencio el compromiso con un
+-- cliente que ya pagó). Como superusuario a propósito: `inventory_lots` no
+-- tiene política de DELETE, así que como joda_api el borrado daría cero filas
+-- por RLS y no probaría la FK; RESTRICT no depende de RLS.
+SELECT pg_temp.expect_fail_like(158, 'Borrar un lote o una unidad con reservas se rechaza (RESTRICT)',
+  $$DO $x$
+    DECLARE
+      v_intento record;
+      v_constraint text;
+      v_rechazos int := 0;
+    BEGIN
+      INSERT INTO app.inventory_lots
+        (id, tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency,
+         fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg)
+      VALUES ('c18a0000-0000-0000-0000-0000000000f8', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'unit', 0, 'PYG', 1, 0, 0);
+      INSERT INTO app.serialized_units (id, tenant_id, variant_id, serial_number)
+      VALUES ('c18a0000-0000-0000-0000-000000000158', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 'SN-INV-158');
+      INSERT INTO app.stock_reservations
+        (tenant_id, variant_id, lot_id, qty, reason, expires_at)
+      VALUES ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+              'c18a0000-0000-0000-0000-0000000000f8', 1, 'checkout', now() + interval '1 hour');
+      INSERT INTO app.stock_reservations
+        (tenant_id, variant_id, serial_unit_id, qty, reason, expires_at)
+      VALUES ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+              'c18a0000-0000-0000-0000-000000000158', 1, 'checkout', now() + interval '1 hour');
+
+      FOR v_intento IN
+        SELECT * FROM (VALUES
+          ('el lote',
+           $q$DELETE FROM app.inventory_lots WHERE id = 'c18a0000-0000-0000-0000-0000000000f8'$q$,
+           'stock_reservations_lot_id_fkey'),
+          ('la unidad',
+           $q$DELETE FROM app.serialized_units WHERE id = 'c18a0000-0000-0000-0000-000000000158'$q$,
+           'stock_reservations_serial_unit_id_fkey')
+        ) AS t(que, sentencia, restriccion)
+      LOOP
+        BEGIN
+          EXECUTE v_intento.sentencia;
+        EXCEPTION WHEN foreign_key_violation THEN
+          GET STACKED DIAGNOSTICS v_constraint = CONSTRAINT_NAME;
+          IF v_constraint = v_intento.restriccion THEN
+            v_rechazos := v_rechazos + 1;
+          END IF;
+        END;
+      END LOOP;
+      IF v_rechazos = 2 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO solo % de 2 borrados fueron rechazados por RESTRICT', v_rechazos;
+    END $x$
+  $$,
+  'aceptado');
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'

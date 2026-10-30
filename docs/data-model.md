@@ -178,7 +178,7 @@ unposted_events ─────────────────────�
 
 ## 4. Catálogo de invariantes
 
-Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 149: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
+Los 18 originales verificados en `packages/db/tests/invariants.sql` (el archivo tiene hoy 158: los de WP-C03 en adelante no están en esta tabla). **Agregar un invariante nuevo obliga a agregar su test.**
 
 | #   | Invariante                                        | Mecanismo                                                              |
 | --- | ------------------------------------------------- | ---------------------------------------------------------------------- |
@@ -247,7 +247,8 @@ Desde `0023_cross_tenant_fks.sql`, cada FK entre dos tablas con `tenant_id` es c
 - **Una tabla nueva sigue el mismo patrón.** El invariante 67 falla si aparece una FK entre tablas con `tenant_id` que no incluya `tenant_id`. `cross_tenant_fks.test.ts` compara su inventario contra `pg_constraint` y prueba cada FK como `joda_api`.
 - **ON DELETE SET NULL se escribe `SET NULL (col)`.** Sin la lista de columnas, Postgres pondría en NULL también `tenant_id`.
 - **`inventory_movements.lot_id` incluye además la variante:** `(lot_id, variant_id, tenant_id) REFERENCES inventory_lots (id, variant_id, tenant_id)`. La variante de un movimiento es la de su lote. Un lote con movimientos no cambia de variante.
-- **`serialized_units.lot_id` incluye además la variante** (WP-C12, `0029_serialized_unit_lot_variant.sql`): `(lot_id, variant_id, tenant_id) REFERENCES inventory_lots (id, variant_id, tenant_id)`. La variante de una unidad serializada es la de su lote (RN-SER-04), el mismo patrón que los movimientos. Con `lot_id` nulo no verifica nada (una unidad puede existir sin lote), y un lote con unidades no cambia de variante. `stock_reservations` (lote y unidad serializada) hereda lo mismo en WP-C18.
+- **`serialized_units.lot_id` incluye además la variante** (WP-C12, `0029_serialized_unit_lot_variant.sql`): `(lot_id, variant_id, tenant_id) REFERENCES inventory_lots (id, variant_id, tenant_id)`. La variante de una unidad serializada es la de su lote (RN-SER-04), el mismo patrón que los movimientos. Con `lot_id` nulo no verifica nada (una unidad puede existir sin lote), y un lote con unidades no cambia de variante.
+- **`stock_reservations.lot_id` y `.serial_unit_id` incluyen además la variante** (WP-C18a, `0040_stock_reservation_lot_unit_variant.sql`): `(lot_id, variant_id, tenant_id) REFERENCES inventory_lots (id, variant_id, tenant_id)` y `(serial_unit_id, variant_id, tenant_id) REFERENCES serialized_units (id, variant_id, tenant_id)`, ambas `ON DELETE RESTRICT`, con el nombre de las FK que reemplazan. La variante de una reserva es la de su lote y la de su unidad (RN-RES-06). La segunda necesita `UNIQUE (id, variant_id, tenant_id)` en `serialized_units`, que la migración agrega; `inventory_lots` ya lo tenía desde 0023. Con `lot_id` o `serial_unit_id` nulos no verifica nada: la reserva es por variante por defecto. Un lote o una unidad con reservas, vivas o liberadas, no cambia de variante. Invariantes 150 a 158; el comportamiento, con la conexión real de `joda_api`, en `rls_isolation.test.ts`.
 - **Los triggers de 0018 siguen verificando el tenant por su cuenta.** Corren antes que las FKs, que son AFTER, y no dependen de ellas (§4.2).
 
 ### 4.4 La apertura de frasco (WP-C11, `0028_sealed_open_single_unit.sql`)
