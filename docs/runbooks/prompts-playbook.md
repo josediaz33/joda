@@ -1113,8 +1113,8 @@ TRAMPAS DE ESTA TAREA:
   negativo también es una salida y también necesita sus capas, o el COGS
   deja de cerrar.
 · "Saldo disponible" no es lo mismo que "saldo proyectado" (RN-RES-03,
-  para cuando llegue C18): esta sesión expone el saldo del libro, sin
-  descontar reservas todavía porque las reservas ni existen hasta C18.
+  para cuando llegue C18b): esta sesión expone el saldo del libro, sin
+  descontar reservas todavía porque las reservas ni existen hasta C18b.
 
 Alcance: consulta de saldos, ajustes, historial. Apertura de frasco (C11),
 serializados (C12) y fraccionamiento (C13) son sesiones propias.
