@@ -13,7 +13,9 @@ test.describe("el personal entra al admin con contraseña y segundo factor (docs
   test("el dueño entra y ve catálogo, contabilidad y sourcing", async ({ page }) => {
     await loginAs(page, "owner");
 
-    await expect(page.getByRole("heading", { name: `Buen día, ${devUser("owner").fullName}` })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: `Buen día, ${devUser("owner").fullName}` }),
+    ).toBeVisible();
     await expect(mainNav(page).getByRole("link", { name: "Catálogo" })).toBeVisible();
     await expect(mainNav(page).getByRole("link", { name: "Contabilidad" })).toBeVisible();
     await expect(mainNav(page).getByRole("link", { name: "Sourcing" })).toBeVisible();
@@ -22,7 +24,9 @@ test.describe("el personal entra al admin con contraseña y segundo factor (docs
   test("el encargado entra y ve catálogo, contabilidad y sourcing", async ({ page }) => {
     await loginAs(page, "manager");
 
-    await expect(page.getByRole("heading", { name: `Buen día, ${devUser("manager").fullName}` })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: `Buen día, ${devUser("manager").fullName}` }),
+    ).toBeVisible();
     await expect(mainNav(page).getByRole("link", { name: "Contabilidad" })).toBeVisible();
     await expect(mainNav(page).getByRole("link", { name: "Sourcing" })).toBeVisible();
   });
@@ -30,7 +34,9 @@ test.describe("el personal entra al admin con contraseña y segundo factor (docs
   test("el vendedor entra y ve el catálogo, sin contabilidad ni sourcing", async ({ page }) => {
     await loginAs(page, "vendedor");
 
-    await expect(page.getByRole("heading", { name: `Buen día, ${devUser("vendedor").fullName}` })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: `Buen día, ${devUser("vendedor").fullName}` }),
+    ).toBeVisible();
     await expect(mainNav(page).getByRole("link", { name: "Catálogo" })).toBeVisible();
     await expect(mainNav(page).getByRole("link", { name: "Contabilidad" })).toHaveCount(0);
     await expect(mainNav(page).getByRole("link", { name: "Sourcing" })).toHaveCount(0);
@@ -39,7 +45,9 @@ test.describe("el personal entra al admin con contraseña y segundo factor (docs
   test("el de depósito entra y ve el catálogo, sin contabilidad ni sourcing", async ({ page }) => {
     await loginAs(page, "deposito");
 
-    await expect(page.getByRole("heading", { name: `Buen día, ${devUser("deposito").fullName}` })).toBeVisible();
+    await expect(
+      page.getByRole("heading", { name: `Buen día, ${devUser("deposito").fullName}` }),
+    ).toBeVisible();
     await expect(mainNav(page).getByRole("link", { name: "Catálogo" })).toBeVisible();
     await expect(mainNav(page).getByRole("link", { name: "Contabilidad" })).toHaveCount(0);
     await expect(mainNav(page).getByRole("link", { name: "Sourcing" })).toHaveCount(0);
@@ -47,7 +55,9 @@ test.describe("el personal entra al admin con contraseña y segundo factor (docs
 });
 
 test.describe("el ingreso rechaza lo que no es válido (docs/security-spec.md §5.1)", () => {
-  test("una contraseña incorrecta muestra el error y no pide el segundo factor", async ({ page }) => {
+  test("una contraseña incorrecta muestra el error y no pide el segundo factor", async ({
+    page,
+  }) => {
     await submitPassword(page, "owner", "esta-no-es-la-contraseña");
 
     await expect(page.getByRole("alert")).toContainText("Email o contraseña incorrectos.");

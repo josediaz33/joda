@@ -27,7 +27,10 @@ export const DEFAULT_PORTS = Object.freeze({
 export const DEFAULT_COMPOSE_PROJECT = "joda";
 
 /** Variables que se pueden fijar en el entorno del proceso al correr `pnpm dev:setup`. */
-export const OVERRIDABLE_KEYS = Object.freeze(["JODA_COMPOSE_PROJECT", ...Object.keys(DEFAULT_PORTS)]);
+export const OVERRIDABLE_KEYS = Object.freeze([
+  "JODA_COMPOSE_PROJECT",
+  ...Object.keys(DEFAULT_PORTS),
+]);
 
 /** Diez años: las claves locales no se rotan; se regeneran con el resto al borrar `.env.local`. */
 const LOCAL_KEY_TTL_SECONDS = 10 * 365 * 24 * 3600;
@@ -41,7 +44,9 @@ function readPort(key, raw, fallback) {
   if (raw === undefined || raw === "") return fallback;
   const port = Number(raw);
   if (!Number.isInteger(port) || port < 1024 || port > 65535) {
-    throw new Error(`${key} tiene que ser un puerto entre 1024 y 65535 (valor recibido: "${raw}").`);
+    throw new Error(
+      `${key} tiene que ser un puerto entre 1024 y 65535 (valor recibido: "${raw}").`,
+    );
   }
   return port;
 }
@@ -86,7 +91,8 @@ export function resolveLocalEnv({ existing, overrides, repoRoot, randomHex, nowS
   const jwtSecret = keep("GOTRUE_JWT_SECRET", 32);
   const keyFor = (/** @type {"anon" | "service_role"} */ role, /** @type {string} */ name) => {
     const current = existing[name];
-    if (current && isValidLocalJwt(current, { secret: jwtSecret, role, nowSeconds })) return current;
+    if (current && isValidLocalJwt(current, { secret: jwtSecret, role, nowSeconds }))
+      return current;
     return signLocalJwt({
       secret: jwtSecret,
       role,
@@ -148,7 +154,11 @@ export function formatLocalEnv(values) {
       {
         comment:
           "Proyecto de compose y puertos de host (todos en 127.0.0.1). Se pueden sobrescribir\ncon variables de entorno al correr `pnpm dev:setup`.",
-        entries: pickEntries(["JODA_COMPOSE_PROJECT", ...Object.keys(DEFAULT_PORTS), "JODA_API_URL"]),
+        entries: pickEntries([
+          "JODA_COMPOSE_PROJECT",
+          ...Object.keys(DEFAULT_PORTS),
+          "JODA_API_URL",
+        ]),
       },
       {
         comment:

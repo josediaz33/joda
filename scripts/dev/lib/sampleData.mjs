@@ -148,7 +148,9 @@ export async function seedSampleData({ apiUrl, databaseUrl }) {
   async function ensureVariants(productId, wanted) {
     const existing = await client.query("catalog.variant.list", { productId });
     for (const spec of wanted) {
-      const found = existing.find((/** @type {{ sku: string }} */ variant) => variant.sku === spec.sku);
+      const found = existing.find(
+        (/** @type {{ sku: string }} */ variant) => variant.sku === spec.sku,
+      );
       if (found) {
         variantIds[spec.sku] = found.id;
         continue;

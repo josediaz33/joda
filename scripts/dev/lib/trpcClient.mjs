@@ -77,7 +77,12 @@ export function createTrpcClient(baseUrl) {
     try {
       body = JSON.parse(text);
     } catch {
-      throw new TrpcCallError(path, response.status, text.slice(0, 200) || "respuesta vacía", undefined);
+      throw new TrpcCallError(
+        path,
+        response.status,
+        text.slice(0, 200) || "respuesta vacía",
+        undefined,
+      );
     }
     if (body?.error) {
       throw new TrpcCallError(

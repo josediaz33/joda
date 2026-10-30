@@ -9,7 +9,10 @@ test.describe("el dueño navega el catálogo sembrado (RF-CAT-01, WP-E05)", () =
   test("la lista muestra los productos de muestra con su estado", async ({ page }) => {
     await loginAs(page, "owner");
 
-    await page.getByRole("navigation", { name: "Principal" }).getByRole("link", { name: "Catálogo" }).click();
+    await page
+      .getByRole("navigation", { name: "Principal" })
+      .getByRole("link", { name: "Catálogo" })
+      .click();
 
     await expect(page.getByRole("heading", { name: "Productos" })).toBeVisible();
     for (const name of [
@@ -26,8 +29,12 @@ test.describe("el dueño navega el catálogo sembrado (RF-CAT-01, WP-E05)", () =
     await loginAs(page, "owner");
     await page.goto("/vista-catalogo");
 
-    const layton = page.locator("div", { has: page.getByText("Layton — Parfums de Marly", { exact: true }) }).last();
-    const aventus = page.locator("div", { has: page.getByText("Aventus — Creed", { exact: true }) }).last();
+    const layton = page
+      .locator("div", { has: page.getByText("Layton — Parfums de Marly", { exact: true }) })
+      .last();
+    const aventus = page
+      .locator("div", { has: page.getByText("Aventus — Creed", { exact: true }) })
+      .last();
 
     await expect(layton).toContainText("Estado interno: Activo");
     await expect(layton).toContainText("Publicación: Publicado");

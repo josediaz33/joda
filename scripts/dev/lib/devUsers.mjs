@@ -49,7 +49,9 @@ export const DEV_ROLES = Object.freeze(DEV_USERS.map((user) => user.role));
 export function devUserFor(role) {
   const user = DEV_USERS.find((candidate) => candidate.role === role);
   if (!user) {
-    throw new Error(`Rol desconocido: "${role}". Los roles de prueba son: ${DEV_ROLES.join(", ")}.`);
+    throw new Error(
+      `Rol desconocido: "${role}". Los roles de prueba son: ${DEV_ROLES.join(", ")}.`,
+    );
   }
   return user;
 }

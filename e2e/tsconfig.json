@@ -8,13 +8,7 @@
     "declarationMap": false,
     "allowJs": true,
     "checkJs": false,
-    "types": [
-      "node"
-    ]
+    "types": ["node"]
   },
-  "include": [
-    "playwright.config.ts",
-    "helpers",
-    "specs"
-  ]
+  "include": ["playwright.config.ts", "helpers", "specs"]
 }

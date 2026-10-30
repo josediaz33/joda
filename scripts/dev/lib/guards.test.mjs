@@ -79,10 +79,13 @@ describe("assertDevelopmentEnvironment se niega a correr fuera del entorno local
 
 describe("isLoopbackHost (docs/runbooks/entorno-local.md)", () => {
   test("reconoce localhost, 127.0.0.1 y ::1", () => {
-    assert.deepEqual(
-      ["localhost", "LOCALHOST", "127.0.0.1", "::1", "[::1]"].map(isLoopbackHost),
-      [true, true, true, true, true],
-    );
+    assert.deepEqual(["localhost", "LOCALHOST", "127.0.0.1", "::1", "[::1]"].map(isLoopbackHost), [
+      true,
+      true,
+      true,
+      true,
+      true,
+    ]);
   });
 
   test("no reconoce una IP de la red", () => {

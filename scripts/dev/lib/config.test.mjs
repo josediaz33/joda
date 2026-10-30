@@ -229,10 +229,7 @@ describe("resolveLocalEnv: la API y los medios escuchan solo en loopback y en ho
   });
 
   test("MEDIA_STORAGE_DIR usa barras y cuelga de .data/ del repo", () => {
-    assert.equal(
-      resolve().MEDIA_STORAGE_DIR,
-      "C:/Users/jose/JODA Parfums ERP Ecomm/.data/media",
-    );
+    assert.equal(resolve().MEDIA_STORAGE_DIR, "C:/Users/jose/JODA Parfums ERP Ecomm/.data/media");
   });
 });
 
@@ -257,9 +254,6 @@ describe("formatLocalEnv escribe un .env que leen node, compose y Vite (WP-M18)"
   });
 
   test("rechaza un valor con comillas o $", () => {
-    assert.throws(
-      () => formatLocalEnv({ ...resolve(), SESSION_SECRET: 'a"b' }),
-      /comillas/,
-    );
+    assert.throws(() => formatLocalEnv({ ...resolve(), SESSION_SECRET: 'a"b' }), /comillas/);
   });
 });

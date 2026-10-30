@@ -18,7 +18,12 @@ import {
   randomHexSecret,
   resolveLocalEnv,
 } from "./lib/config.mjs";
-import { ensureAuthDatabase, seedTenantAndStaff, setApiRolePassword, withSuperuser } from "./lib/database.mjs";
+import {
+  ensureAuthDatabase,
+  seedTenantAndStaff,
+  setApiRolePassword,
+  withSuperuser,
+} from "./lib/database.mjs";
 import { DEV_USERS } from "./lib/devUsers.mjs";
 import { parseDotenv } from "./lib/dotenv.mjs";
 import { createGoTrueAdmin } from "./lib/gotrue.mjs";
@@ -61,7 +66,9 @@ async function main() {
     ],
   });
   writeFileSync(ENV_LOCAL_PATH, formatLocalEnv(values), { mode: 0o600 });
-  log(`.env.local ${hadEnvLocal ? "actualizado (se conservan los secretos)" : "creado"} — proyecto de compose: ${values.JODA_COMPOSE_PROJECT}`);
+  log(
+    `.env.local ${hadEnvLocal ? "actualizado (se conservan los secretos)" : "creado"} — proyecto de compose: ${values.JODA_COMPOSE_PROJECT}`,
+  );
 
   const project = values.JODA_COMPOSE_PROJECT;
   // NODE_ENV explícito: con `test` en la shell, la API no arrancaría.

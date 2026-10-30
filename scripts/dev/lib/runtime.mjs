@@ -45,11 +45,11 @@ export async function startApiForSeeding(values) {
   const tsxCli = requireFromApi.resolve("tsx/cli");
   const apiCwd = join(REPO_ROOT, "apps", "api");
 
-  const child = spawn(
-    process.execPath,
-    [tsxCli, `--env-file=${ENV_LOCAL_PATH}`, "src/index.ts"],
-    { cwd: apiCwd, env: { ...process.env, ...values }, stdio: ["ignore", "pipe", "pipe"] },
-  );
+  const child = spawn(process.execPath, [tsxCli, `--env-file=${ENV_LOCAL_PATH}`, "src/index.ts"], {
+    cwd: apiCwd,
+    env: { ...process.env, ...values },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   let output = "";
   child.stdout?.on("data", (chunk) => (output += chunk));
   child.stderr?.on("data", (chunk) => (output += chunk));
