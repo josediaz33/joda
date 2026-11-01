@@ -5,9 +5,9 @@
 //
 //   1. genera .env.local (secretos al azar por máquina; los conserva si ya existe)
 //   2. levanta Postgres, Redis, GoTrue y su proxy (docker compose) y espera a que estén sanos
-//   3. pnpm db:reset (migraciones + seed base) y fija la contraseña de `joda_api`. Antes,
-//      si la base o Redis tienen datos que este setup no creó, pide confirmación
-//      (`--yes` o JODA_DEV_SETUP_YES=1; sin terminal y sin la bandera, se niega)
+//   3. pnpm db:reset (migraciones + seed base), fija la contraseña de `joda_api` y vacía la base 0
+//      de Redis. Antes, si la base o Redis tienen datos que este setup no creó, pide
+//      confirmación (`--yes` o JODA_DEV_SETUP_YES=1; sin terminal y sin la bandera, se niega)
 //   4. da de alta en GoTrue y en staff_users un usuario por rol
 //   5. levanta la API un rato y siembra los datos de muestra POR LA API
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -41,8 +41,9 @@ import {
   runOrFail,
   waitFor,
 } from "./lib/process.mjs";
-import { flushRedis, inspectRedis, markRedis } from "./lib/redis.mjs";
+import { composeRedisCli, flushRedis, inspectRedis, markRedis } from "./lib/redis.mjs";
 import { confirmDestructiveReset } from "./lib/resetGuard.mjs";
+import { resetLocalState } from "./lib/resetSequence.mjs";
 import { buildWorkspaceDependencies, startApiForSeeding } from "./lib/runtime.mjs";
 import { seedSampleData } from "./lib/sampleData.mjs";
 import { writeTotpSecrets } from "./lib/totp.mjs";
@@ -89,40 +90,48 @@ async function main() {
     timeoutMs: 60_000,
   });
 
-  // Antes de borrar nada: ¿lo que hay lo creó este setup? Si no, hace falta confirmación.
-  await confirmDestructiveReset({
-    state: {
-      database: await inspectDatabase(values.DATABASE_URL),
-      redis: await inspectRedis(project),
-      ports: { postgres: Number(values.JODA_PG_PORT), redis: Number(values.JODA_REDIS_PORT) },
+  // --- 3. Lo destructivo, en este orden (resetSequence.mjs) -----------------
+  // Confirmar, preparar el Auth local, marcar la base, db:reset y vaciar Redis. La marca va
+  // justo antes del reset: una falla previa (bajar GoTrue, crear su base) no deja marcada
+  // una base que todavía tiene sus datos.
+  const redisCli = composeRedisCli(project);
+  await resetLocalState({
+    confirm: async () =>
+      confirmDestructiveReset({
+        state: {
+          database: await inspectDatabase(values.DATABASE_URL),
+          redis: await inspectRedis(redisCli),
+          ports: { postgres: Number(values.JODA_PG_PORT), redis: Number(values.JODA_REDIS_PORT) },
+        },
+        argv: process.argv.slice(2),
+        env: process.env,
+        interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
+        ask: askQuestion,
+        warn: log,
+      }),
+    prepareAuth: async () => {
+      log("preparando la base del Auth local…");
+      await ensureAuthDatabase(values.DATABASE_URL, values.GOTRUE_DB_PASSWORD);
+      log("levantando el Auth local (GoTrue + proxy)…");
+      await composeUp(project, ["auth", "auth-proxy"], values);
     },
-    argv: process.argv.slice(2),
-    env: process.env,
-    interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
-    ask: askQuestion,
-    warn: log,
+    markDatabase: () => markDatabase(values.DATABASE_URL),
+    resetDatabase: async () => {
+      log("db:reset — OJO: borra y recrea TODO el contenido de la base `joda` local");
+      await runOrFail(
+        process.execPath,
+        [join(REPO_ROOT, "packages", "db", "scripts", "reset.mjs")],
+        { env: { DATABASE_URL: values.DATABASE_URL } },
+      );
+      const apiPassword = decodeURIComponent(new URL(values.DATABASE_URL_API).password);
+      await setApiRolePassword(values.DATABASE_URL, apiPassword);
+      log("contraseña de joda_api fijada desde .env.local (NOBYPASSRLS, la única que usa la API)");
+    },
+    // Las sesiones y permisos cacheados de una base anterior no valen para esta. Solo la
+    // base 0 de Redis (la de la API): las otras bases del mismo Redis no son del entorno.
+    flushRedis: () => flushRedis(redisCli),
+    markRedis: () => markRedis(redisCli),
   });
-  // La marca se deja ANTES del reset: db:reset borra esquemas, no la base, y una corrida
-  // cortada a la mitad no tiene que volver a preguntar por lo que ya confirmaste.
-  await markDatabase(values.DATABASE_URL);
-
-  log("preparando la base del Auth local…");
-  await ensureAuthDatabase(values.DATABASE_URL, values.GOTRUE_DB_PASSWORD);
-  log("levantando el Auth local (GoTrue + proxy)…");
-  await composeUp(project, ["auth", "auth-proxy"], values);
-
-  // --- 3. Base de datos -----------------------------------------------
-  log("db:reset — OJO: borra y recrea TODO el contenido de la base `joda` local");
-  await runOrFail(process.execPath, [join(REPO_ROOT, "packages", "db", "scripts", "reset.mjs")], {
-    env: { DATABASE_URL: values.DATABASE_URL },
-  });
-  const apiPassword = decodeURIComponent(new URL(values.DATABASE_URL_API).password);
-  await setApiRolePassword(values.DATABASE_URL, apiPassword);
-  log("contraseña de joda_api fijada desde .env.local (NOBYPASSRLS, la única que usa la API)");
-
-  // Las sesiones y permisos cacheados de una base anterior no valen para esta.
-  await flushRedis(project);
-  await markRedis(project);
 
   // --- 4. Usuarios: GoTrue y staff_users --------------------------------
   const goTrue = createGoTrueAdmin({

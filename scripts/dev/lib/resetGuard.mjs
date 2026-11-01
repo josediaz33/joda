@@ -1,7 +1,7 @@
 // Confirmación antes de borrar lo que `pnpm dev:setup` no creó (WP-M18).
 //
 // `pnpm dev:setup` reinicia la base `joda` (db:reset) y vacía el Redis de su proyecto de
-// compose (FLUSHALL). Con los valores por defecto (proyecto `joda`, puertos 55432 y 6379)
+// compose (su base 0, con FLUSHDB). Con los valores por defecto (proyecto `joda`, puertos 55432 y 6379)
 // esos son los mismos contenedores del Postgres y el Redis de desarrollo de siempre, que
 // pueden tener datos de quien lo corre. El entorno local es descartable POR DEFINICIÓN
 // solo cuando lo creó este mismo setup: por eso cada reinicio deja una marca (un
@@ -37,7 +37,7 @@ export function unmarkedDataReasons({ database, redis, ports }) {
   }
   if (redis.keys > 0 && !redis.marked) {
     reasons.push(
-      `el Redis de 127.0.0.1:${ports.redis} tiene ${redis.keys} ${redis.keys === 1 ? "clave" : "claves"} y no lo preparó \`pnpm dev:setup\` (FLUSHALL las borra)`,
+      `el Redis de 127.0.0.1:${ports.redis} tiene ${redis.keys} ${redis.keys === 1 ? "clave" : "claves"} en su base 0 y no lo preparó \`pnpm dev:setup\` (FLUSHDB las borra)`,
     );
   }
   return reasons;
