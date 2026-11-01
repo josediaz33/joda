@@ -1175,11 +1175,12 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
   // WP-C08h, decisión de José (2026-10-11): cambiar `requires_serial` de un reloj se
   // propaga a las variantes que ya existen, que heredan `is_serialized` de él.
   async function variantsOf(productId: string) {
-    return call<
-      { id: string; sku: string; isSerialized: boolean; allocationPolicy: string }[]
-    >("catalog.variant.list", {
-      productId,
-    });
+    return call<{ id: string; sku: string; isSerialized: boolean; allocationPolicy: string }[]>(
+      "catalog.variant.list",
+      {
+        productId,
+      },
+    );
   }
 
   function setRequiresSerial(productId: string, requiresSerial: boolean, extra = {}) {
@@ -1324,7 +1325,9 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
 
   // WP-E05d, decisión de José: la variante de un reloj con `requires_serial` nace con
   // `allocation_policy = 'serial'` (RN-LOT-05: la unidad se elige explícitamente). Misma
-  // herencia que `is_serialized` (E05c): vive en el servicio, no en la base.
+  // herencia que `is_serialized` (E05c): vive en el servicio, no en la base. Lo demás que
+  // prueba este bloque (los rechazos, `updateVariant`, la propagación) es provisional:
+  // docs/decisiones-provisionales.md.
   describe("WP-E05d · allocation_policy de la variante de un reloj (RN-LOT-05, RN-SER-02)", () => {
     async function storedVariants(productId: string) {
       const result = await testDb.superuserClient.query<{
