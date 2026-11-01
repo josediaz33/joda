@@ -10,6 +10,7 @@ import {
   type CreateProductInput,
   type CreateTagInput,
   type ActivateProductInput,
+  type AllocationPolicy,
   type CreateVariantInput,
   type ListProductsInput,
   type SetProductPublicationInput,
@@ -307,6 +308,10 @@ const requiresSerialUnitsRegisteredError = (registeredUnits: number) =>
  * anterior a E05c. Con el bloqueo tomado, las variantes que se crean o se
  * actualizan al mismo tiempo esperan (`readWatchRequiresSerialShared`) y las que
  * ya estaban leyendo terminan antes de que se listen acá.
+ *
+ * WP-E05d: `setVariantsSerialized` acompaña la política de asignación de esas variantes
+ * (`serial` al serializarlas), para que la propagación no deje una variante que el alta
+ * nunca produciría (serializada con otra política).
  *
  * Devuelve `null` si no hay nada que propagar.
  */
@@ -796,12 +801,26 @@ function serializedRequiresUnitError(message: string) {
   return toTRPCError(appError("VALIDATION_SERIALIZED_REQUIRES_UNIT", 400, message));
 }
 
-async function resolveIsSerialized(
+/**
+ * Lo que el producto dicta a sus variantes: `requires_serial` si es un reloj,
+ * `null` si no lo es (un perfume o un accesorio no dictan nada). Se lee con
+ * `FOR SHARE`, ver la nota de arriba.
+ */
+async function readInheritedSerial(
   tx: TenantTx,
   product: repo.ProductRow,
+): Promise<boolean | null> {
+  if (product.kind !== "watch") return null;
+  const inherited = await repo.readWatchRequiresSerialShared(tx, product.id);
+  if (inherited === null) throw new Error(`producto ${product.id} es kind=watch sin watch_details`);
+  return inherited;
+}
+
+function resolveIsSerialized(
+  inherited: boolean | null,
   input: { readonly isSerialized?: boolean; readonly uom: CreateVariantInput["uom"] },
-): Promise<boolean | undefined> {
-  if (product.kind !== "watch") {
+): boolean | undefined {
+  if (inherited === null) {
     if (input.isSerialized === true && input.uom !== "unit") {
       throw serializedRequiresUnitError(
         "Una variante con número de serie se mide en unidades enteras (uom = unit).",
@@ -809,8 +828,6 @@ async function resolveIsSerialized(
     }
     return input.isSerialized;
   }
-  const inherited = await repo.readWatchRequiresSerialShared(tx, product.id);
-  if (inherited === null) throw new Error(`producto ${product.id} es kind=watch sin watch_details`);
   if (input.isSerialized !== undefined && input.isSerialized !== inherited) {
     throw toTRPCError(
       appError(
@@ -828,6 +845,42 @@ async function resolveIsSerialized(
   return inherited;
 }
 
+// WP-E05d, decisión de José: la variante de un reloj con `requires_serial` nace con
+// `allocation_policy = 'serial'` (RN-LOT-05: la unidad se elige explícitamente). Es la
+// misma herencia que `is_serialized`: vive en el servicio, no en la base, y sale de la
+// misma lectura del producto (`readInheritedSerial`). Se rechaza lo que la contradice, en
+// los dos sentidos: otra política en un reloj con serie (elegir la unidad es lo que
+// hace una variante serializada) y `serial` en uno sin serie (no hay unidad que elegir).
+// Un perfume o un accesorio no heredan nada: lo que se manda se respeta.
+function resolveAllocationPolicy(
+  inherited: boolean | null,
+  sent: AllocationPolicy | undefined,
+): AllocationPolicy | undefined {
+  if (inherited === null) return sent;
+  if (inherited) {
+    if (sent !== undefined && sent !== "serial") {
+      throw toTRPCError(
+        appError(
+          "VALIDATION_ALLOCATION_POLICY_INHERITED",
+          400,
+          `Las variantes de un reloj con número de serie usan la política serial (la unidad se elige explícitamente); no se puede usar ${sent}.`,
+        ),
+      );
+    }
+    return "serial";
+  }
+  if (sent === "serial") {
+    throw toTRPCError(
+      appError(
+        "VALIDATION_ALLOCATION_POLICY_INHERITED",
+        400,
+        "Este reloj no lleva número de serie (requiresSerial = no): sus variantes no usan la política serial, porque no hay unidad que elegir.",
+      ),
+    );
+  }
+  return sent;
+}
+
 export async function createVariant(
   db: PrismaClient,
   ctx: TenantTxContext,
@@ -836,7 +889,9 @@ export async function createVariant(
   return withTenantTx(db, ctx, async (tx) => {
     const product = await repo.findProductRow(tx, { id: input.productId });
     if (!product) throw toTRPCError(NOT_FOUND_ERROR);
-    const isSerialized = await resolveIsSerialized(tx, product, input);
+    const inherited = await readInheritedSerial(tx, product);
+    const isSerialized = resolveIsSerialized(inherited, input);
+    const allocationPolicy = resolveAllocationPolicy(inherited, input.allocationPolicy);
     await assertSourceVariantUsable(tx, input.sourceVariantId, { productId: product.id });
 
     // El índice único parcial de 0028 lo impone la base; esto adelanta el
@@ -855,7 +910,7 @@ export async function createVariant(
       pricePyg: parsePygAmount(input.pricePyg),
       compareAtPyg: input.compareAtPyg != null ? parsePygAmount(input.compareAtPyg) : null,
       vatRate: input.vatRate,
-      allocationPolicy: input.allocationPolicy,
+      allocationPolicy,
       productionMode: input.productionMode,
       sourceVariantId: input.sourceVariantId ?? null,
       isSerialized,
@@ -915,15 +970,21 @@ export async function updateVariant(
       variantId: existing.id,
     });
 
-    // WP-C08f. Solo si el pedido toca `isSerialized`: el producto no se lee de más.
+    // WP-C08f / WP-E05d. Solo si el pedido toca `isSerialized` o `allocationPolicy`: el
+    // producto no se lee de más.
     let isSerialized: boolean | undefined;
-    if (input.isSerialized !== undefined) {
+    let allocationPolicy = input.allocationPolicy;
+    if (input.isSerialized !== undefined || input.allocationPolicy !== undefined) {
       const product = await repo.findProductRow(tx, { id: existing.product_id });
       if (!product) throw new Error(`variante ${existing.id} sin producto ${existing.product_id}`);
-      isSerialized = await resolveIsSerialized(tx, product, {
-        isSerialized: input.isSerialized,
-        uom: existing.uom,
-      });
+      const inherited = await readInheritedSerial(tx, product);
+      if (input.isSerialized !== undefined) {
+        isSerialized = resolveIsSerialized(inherited, {
+          isSerialized: input.isSerialized,
+          uom: existing.uom,
+        });
+      }
+      allocationPolicy = resolveAllocationPolicy(inherited, input.allocationPolicy);
     }
     // Solo al apagar: encender no tiene este problema (el CHECK de la base ya exige `unit`).
     if (isSerialized === false && existing.is_serialized) {
@@ -940,7 +1001,7 @@ export async function updateVariant(
             ? null
             : parsePygAmount(input.compareAtPyg),
       vatRate: input.vatRate,
-      allocationPolicy: input.allocationPolicy,
+      allocationPolicy,
       productionMode: input.productionMode,
       sourceVariantId: input.sourceVariantId,
       isSerialized,
