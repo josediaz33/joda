@@ -1175,7 +1175,9 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
   // WP-C08h, decisión de José (2026-10-11): cambiar `requires_serial` de un reloj se
   // propaga a las variantes que ya existen, que heredan `is_serialized` de él.
   async function variantsOf(productId: string) {
-    return call<{ id: string; sku: string; isSerialized: boolean }[]>("catalog.variant.list", {
+    return call<
+      { id: string; sku: string; isSerialized: boolean; allocationPolicy: string }[]
+    >("catalog.variant.list", {
       productId,
     });
   }
@@ -1599,6 +1601,85 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       expect(repaired.allocationPolicy).toBe("serial");
     });
 
+    // El camino de reparación de C08f es `{id, isSerialized: true}`. Con una variante de
+    // reloj anterior a E05d (sin serie y con la política que alguien eligió) no puede
+    // arrastrar la política: eso solo lo hace quien manda `allocationPolicy`.
+    async function createLegacyWatchVariant(
+      productId: string,
+      sku: string,
+      allocationPolicy: string,
+    ) {
+      const variant = await mutateOk<{ id: string }>(
+        "catalog.variant.create",
+        unitVariantPayload(productId, sku, {}),
+      );
+      await testDb.superuserClient.query(
+        `UPDATE app.product_variants SET is_serialized = false, allocation_policy = $2
+          WHERE id = $1`,
+        [variant.id, allocationPolicy],
+      );
+      return variant;
+    }
+
+    it("RN-LOT-05 · reparar una variante de reloj anterior a E05d con solo isSerialized: true no le cambia la política (manual ni fifo)", async () => {
+      const watch = await createWatchProduct("e05d-reparar", true);
+      const manual = await createLegacyWatchVariant(watch.id, "RELOJ-E05D-REP-MANUAL", "manual");
+      const fifo = await createLegacyWatchVariant(watch.id, "RELOJ-E05D-REP-FIFO", "fifo");
+
+      const repairedManual = await mutateOk<{ allocationPolicy: string; isSerialized: boolean }>(
+        "catalog.variant.update",
+        { id: manual.id, isSerialized: true },
+      );
+      const repairedFifo = await mutateOk<{ allocationPolicy: string; isSerialized: boolean }>(
+        "catalog.variant.update",
+        { id: fifo.id, isSerialized: true },
+      );
+
+      expect(repairedManual.allocationPolicy).toBe("manual");
+      expect(repairedManual.isSerialized).toBe(true);
+      expect(repairedFifo.allocationPolicy).toBe("fifo");
+      expect(repairedFifo.isSerialized).toBe(true);
+      expect(await storedVariants(watch.id)).toEqual([
+        { sku: "RELOJ-E05D-REP-FIFO", allocation_policy: "fifo", is_serialized: true },
+        { sku: "RELOJ-E05D-REP-MANUAL", allocation_policy: "manual", is_serialized: true },
+      ]);
+    });
+
+    it("RN-LOT-05 · mandar allocationPolicy serial a una variante de reloj anterior a E05d sí le cambia la política, sola o junto con isSerialized", async () => {
+      const watch = await createWatchProduct("e05d-reparar-serial", true);
+      const manual = await createLegacyWatchVariant(watch.id, "RELOJ-E05D-RS-MANUAL", "manual");
+      const fifo = await createLegacyWatchVariant(watch.id, "RELOJ-E05D-RS-FIFO", "fifo");
+
+      await mutateOk("catalog.variant.update", {
+        id: manual.id,
+        isSerialized: true,
+        allocationPolicy: "serial",
+      });
+      await mutateOk("catalog.variant.update", { id: fifo.id, allocationPolicy: "serial" });
+
+      expect(await storedVariants(watch.id)).toEqual([
+        { sku: "RELOJ-E05D-RS-FIFO", allocation_policy: "serial", is_serialized: false },
+        { sku: "RELOJ-E05D-RS-MANUAL", allocation_policy: "serial", is_serialized: true },
+      ]);
+    });
+
+    it("RN-LOT-05 · reparar con isSerialized: true y una política que contradice al reloj se rechaza y no cambia nada de la variante", async () => {
+      const watch = await createWatchProduct("e05d-reparar-contra", true);
+      const manual = await createLegacyWatchVariant(watch.id, "RELOJ-E05D-RC-MANUAL", "manual");
+
+      const rejected = await mutate("catalog.variant.update", {
+        id: manual.id,
+        isSerialized: true,
+        allocationPolicy: "fefo",
+      });
+
+      expect(rejected.statusCode).toBe(400);
+      expect(rejected.json().error.data.appCode).toBe("VALIDATION_ALLOCATION_POLICY_INHERITED");
+      expect(await storedVariants(watch.id)).toEqual([
+        { sku: "RELOJ-E05D-RC-MANUAL", allocation_policy: "manual", is_serialized: false },
+      ]);
+    });
+
     it("RN-LOT-05 · pasar requiresSerial a «sí» lleva las variantes del reloj a serial, sea cual fuera su política, y no toca las de otro reloj", async () => {
       const watch = await createWatchProduct("e05d-prop-si", false);
       const other = await createWatchProduct("e05d-prop-si-otro", false);
@@ -1739,6 +1820,8 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
 
       expect(response.statusCode).toBe(200);
       expect(response.json().result.data.isSerialized).toBe(true);
+      // WP-E05d: la política sale de la misma lectura bloqueada del producto (RN-LOT-05).
+      expect(response.json().result.data.allocationPolicy).toBe("serial");
     },
     RACE_TEST_TIMEOUT_MS,
   );
@@ -1792,6 +1875,8 @@ describe("WP-C08 · módulo catálogo (RF-CAT-01…07)", () => {
       expect(response.statusCode).toBe(200);
       const variants = await variantsOf(watch.id);
       expect(variants.map((variant) => variant.isSerialized)).toEqual([true]);
+      // WP-E05d: la propagación también lleva la política de esa variante (RN-LOT-05).
+      expect(variants.map((variant) => variant.allocationPolicy)).toEqual(["serial"]);
     },
     RACE_TEST_TIMEOUT_MS,
   );

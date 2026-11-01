@@ -846,12 +846,13 @@ function resolveIsSerialized(
 }
 
 // WP-E05d, decisión de José: la variante de un reloj con `requires_serial` nace con
-// `allocation_policy = 'serial'` (RN-LOT-05: la unidad se elige explícitamente). Es la
-// misma herencia que `is_serialized`: vive en el servicio, no en la base, y sale de la
-// misma lectura del producto (`readInheritedSerial`). Se rechaza lo que la contradice, en
-// los dos sentidos: otra política en un reloj con serie (elegir la unidad es lo que
-// hace una variante serializada) y `serial` en uno sin serie (no hay unidad que elegir).
-// Un perfume o un accesorio no heredan nada: lo que se manda se respeta.
+// `allocation_policy = 'serial'` (RN-LOT-05: la unidad se elige explícitamente). Esa es la
+// única parte decidida. Lo demás es provisional (docs/decisiones-provisionales.md): que sea
+// la misma herencia que `is_serialized` (en el servicio, no en la base, desde la misma
+// lectura del producto, `readInheritedSerial`) y que se rechace lo que la contradice, en
+// los dos sentidos (otra política en un reloj con serie; `serial` en uno sin serie).
+// `createVariant` usa el valor derivado; `updateVariant` solo comprueba lo que el pedido
+// trae y no deriva nada. Un perfume o un accesorio no heredan: lo que se manda se respeta.
 function resolveAllocationPolicy(
   inherited: boolean | null,
   sent: AllocationPolicy | undefined,
@@ -971,9 +972,12 @@ export async function updateVariant(
     });
 
     // WP-C08f / WP-E05d. Solo si el pedido toca `isSerialized` o `allocationPolicy`: el
-    // producto no se lee de más.
+    // producto no se lee de más. La política se escribe SOLO si el pedido la trae (se
+    // comprueba contra el producto, pero no se deriva): una variante de reloj anterior a
+    // E05d, en `fifo`, `fefo` o `manual`, que se repara con `{isSerialized: true}` conserva
+    // su política hasta que alguien mande `allocationPolicy`.
     let isSerialized: boolean | undefined;
-    let allocationPolicy = input.allocationPolicy;
+    let allocationPolicy: AllocationPolicy | undefined;
     if (input.isSerialized !== undefined || input.allocationPolicy !== undefined) {
       const product = await repo.findProductRow(tx, { id: existing.product_id });
       if (!product) throw new Error(`variante ${existing.id} sin producto ${existing.product_id}`);
@@ -984,7 +988,9 @@ export async function updateVariant(
           uom: existing.uom,
         });
       }
-      allocationPolicy = resolveAllocationPolicy(inherited, input.allocationPolicy);
+      if (input.allocationPolicy !== undefined) {
+        allocationPolicy = resolveAllocationPolicy(inherited, input.allocationPolicy);
+      }
     }
     // Solo al apagar: encender no tiene este problema (el CHECK de la base ya exige `unit`).
     if (isSerialized === false && existing.is_serialized) {
