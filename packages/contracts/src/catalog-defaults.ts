@@ -22,8 +22,9 @@
 // - `is_serialized` de product_variants: la variante de un reloj lo hereda de
 //   `requires_serial` del producto al crearse, en el servicio de catálogo
 //   (WP-E05c), no se precarga.
-// - `allocation_policy` de product_variants: depende de la vertical y la regla
-//   que la liga a la serie no está decidida. Ver WP-E05d en docs/backlog.md.
+// - `allocation_policy` de product_variants: la variante de un reloj con
+//   `requires_serial` la hereda como `serial` al crearse, en el servicio de
+//   catálogo (WP-E05d), igual que `is_serialized`; no se precarga.
 //
 import type { ProductionMode, VatRate } from "./catalog.js";
 
