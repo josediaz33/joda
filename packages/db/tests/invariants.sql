@@ -4122,10 +4122,17 @@ SELECT pg_temp.expect_fail_like(166, 'Escribir una reserva exige el permiso de s
 
 -- 167 ─ Liberar una reserva (UPDATE) exige el mismo permiso que escribirla, y el
 -- job libera con la audiencia `system`, que no tiene sesión de staff ni
--- permisos: la política le abre UNA cosa, pasar una reserva sin liberar a
--- liberada. No inserta, no cambia otra columna (la fila nueva tiene que quedar
--- liberada) y no toca una ya liberada. Un UPDATE sin permiso afecta cero filas,
--- sin error (la política lo oculta).
+-- permisos: la política le abre UNA cosa, un UPDATE sobre una reserva sin
+-- liberar cuya fila nueva queda liberada. No inserta, no deja una reserva sin
+-- liberar (un UPDATE que no fija `released_at`, como `SET qty = 5`, se rechaza
+-- por ESO y no por tocar `qty`) y no toca una ya liberada. Un UPDATE sin
+-- permiso afecta cero filas, sin error (la política lo oculta).
+--
+-- Lo que esta prueba NO verifica, porque la política no lo impide: que el
+-- UPDATE que libera deje intactas las demás columnas (`SET qty = 5,
+-- released_at = now()` pasa), ni que quien tiene el permiso del `reason` no
+-- reescriba `qty` o `expires_at` ni ponga `released_at` en `NULL`. Cerrarlo es
+-- un trigger de invariante: WP-B21(2).
 SELECT pg_temp.expect_fail_like(167, 'Liberar exige el permiso del reason; el job (system) solo libera lo sin liberar, como joda_api',
   $$DO $x$
     DECLARE
@@ -4187,10 +4194,11 @@ SELECT pg_temp.expect_fail_like(167, 'Liberar exige el permiso del reason; el jo
        WHERE id = 'c4100000-0000-0000-0000-000000001675';
       GET DIAGNOSTICS v_filas = ROW_COUNT;
       IF v_filas <> 0 THEN v_malos := v_malos || 'system-reactiva=' || v_filas || ' '; END IF;
-      -- ... no cambia otra columna de una sin liberar ...
+      -- ... no edita una sin liberar sin liberarla (se rechaza porque `released_at`
+      -- sigue nulo, no porque toque `qty`: la política no mira esa columna) ...
       BEGIN
         UPDATE app.stock_reservations SET qty = 5 WHERE id = 'c4100000-0000-0000-0000-000000001676';
-        v_malos := v_malos || 'system-cambia-qty ';
+        v_malos := v_malos || 'system-edita-sin-liberar ';
       EXCEPTION WHEN insufficient_privilege THEN NULL;
       END;
       -- ... y no inserta.

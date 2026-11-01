@@ -123,18 +123,24 @@
 --
 -- El job es la excepción: libera con audiencia `system`, que no tiene sesión
 -- de staff y por lo tanto ningún permiso (`has_permission` exige staff, 0019).
--- La política de UPDATE le abre solo una cosa: pasar una reserva sin liberar a
--- liberada (USING exige `released_at IS NULL`, WITH CHECK exige
--- `released_at IS NOT NULL`). No inserta, no borra, no libera una ya liberada
--- ni la «reactiva». La audiencia `system` la fija solo `withTenantTx`, desde
--- una sesión resuelta y nunca desde la entrada del cliente
--- (`sessionContextAudit.test.ts`). Qué reserva se libera, y cuándo, lo decide
--- el job (`expires_at <= p_as_of`), no la política: ya está en el SQL de la
--- API, y repetir `expires_at <= now()` acá haría fallar al job cuando el reloj
--- de la API y el de la base difieren. Lo que no hace la política, y tampoco un
--- trigger: impedir que una sesión con permiso reescriba `qty` o `expires_at`
--- de una reserva propia; "una reserva se libera, no se edita" es del servicio
--- (WP-B21).
+-- La política de UPDATE le abre una sola cosa: un UPDATE sobre una reserva sin
+-- liberar cuya fila nueva queda liberada (USING exige `released_at IS NULL`,
+-- WITH CHECK exige `released_at IS NOT NULL`). No inserta, no borra y no toca
+-- una ya liberada: esta rama no la «reactiva». La audiencia `system` la fija
+-- solo `withTenantTx`, desde una sesión resuelta y nunca desde la entrada del
+-- cliente (`sessionContextAudit.test.ts`). Qué reserva se libera, y cuándo, lo
+-- decide el job (`expires_at <= p_as_of`), no la política: ya está en el SQL de
+-- la API, y repetir `expires_at <= now()` acá haría fallar al job cuando el
+-- reloj de la API y el de la base difieren.
+--
+-- LO QUE LA POLÍTICA NO IMPIDE, ni en esta rama ni en la del permiso: limitar
+-- QUÉ columnas cambia el UPDATE. En la rama `system`, el mismo UPDATE que
+-- libera puede cambiar también `qty` o `expires_at`. En la del permiso del
+-- `reason` se puede reescribir `qty` y `expires_at` y hasta poner
+-- `released_at` en `NULL` (reactivar una liberada, que RN-RES-04 prohíbe).
+-- «Una reserva se libera, no se edita» y «una liberada no se reactiva» son hoy
+-- reglas del servicio, no de la base; un trigger de invariante las impondría
+-- (solo `released_at` pasa de nulo a no nulo, una vez): WP-B21(2).
 --
 -- La trampa de la lectura no aplica: el SELECT es por tenant, así que ni
 -- `INSERT ... RETURNING` ni `UPDATE ... WHERE` dependen de otro permiso.
@@ -248,7 +254,9 @@ CREATE POLICY tenant_access_select ON app.stock_reservations
 CREATE POLICY reservations_insert ON app.stock_reservations
   FOR INSERT WITH CHECK (app.can_write_stock_reservation(reason));
 
--- El job libera con audiencia `system`: solo puede dejar la reserva liberada.
+-- El job libera con audiencia `system`: la fila tiene que estar sin liberar y
+-- quedar liberada. NO limita qué otras columnas cambia ese mismo UPDATE, ni la
+-- rama del permiso qué reescribe ni si reabre una reserva (WP-B21(2)).
 -- La audiencia se lee del ajuste directamente y no con `app.current_audience()`: esa
 -- función castea a `actor_audience` SIN calificar, y fuera de una SECURITY DEFINER
 -- (la política corre con el `search_path` de la sesión, que en la API no incluye

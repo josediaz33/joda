@@ -22,8 +22,9 @@ import * as reservations from "../modules/reservations/repository.js";
 //   2. por cada id abre una transacción con el contexto de ESE tenant y audiencia
 //      `system` (`withTenantTx`, con el `true` final de `set_config`: el valor es
 //      local a la transacción y no se filtra por el pool) y libera BAJO RLS.
-//      La política de UPDATE le permite a `system` una sola cosa: pasar una
-//      reserva sin liberar a liberada.
+//      La política de UPDATE le permite a `system` una sola cosa: un UPDATE de
+//      una reserva sin liberar que queda liberada (no limita qué otras columnas
+//      cambia: este job solo escribe `released_at`; WP-B21).
 //
 // Una corrida que falla en un tenant no frena a los demás: se anota y sigue. El
 // error de un tenant no es una razón para que otro conserve reservas vencidas.

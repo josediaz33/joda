@@ -163,8 +163,8 @@ export async function releaseExpiredOfVariants(
  * segundo plano, no una venta (docs/api-conventions.md §8.2)—: una reserva que
  * otra transacción está liberando o reservando en este instante se salta y la
  * recoge la corrida siguiente, en vez de esperarla. RLS acota a un tenant
- * (`tenant_isolation`), y el `UPDATE` solo puede dejar la reserva liberada
- * (`reservations_update`, 0041).
+ * (`tenant_isolation`), y la política de UPDATE (`reservations_update`, 0041)
+ * exige que la fila quede liberada; este `UPDATE` solo escribe `released_at`.
  */
 export async function releaseAllExpired(
   tx: TenantTx,
