@@ -228,6 +228,50 @@ describe(
       return rows.rows;
     }
 
+    const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    /** Espera a que `count` conexiones de `joda_api` estén detenidas en un bloqueo de fila. */
+    async function waitForBlockedBackends(count: number): Promise<void> {
+      for (let attempt = 0; attempt < 150; attempt++) {
+        await q("SELECT pg_stat_clear_snapshot()");
+        const blocked = await q<{ n: number }>(
+          "SELECT count(*)::int AS n FROM pg_stat_activity WHERE usename = 'joda_api' AND wait_event_type = 'Lock'",
+        );
+        if (blocked.rows[0]!.n >= count) return;
+        await sleep(40);
+      }
+      throw new Error(`nunca hubo ${count} conexión(es) esperando un bloqueo`);
+    }
+
+    /**
+     * Compuerta determinista: retiene la variante con el superusuario, arranca `first` y
+     * `second` esperando a que cada uno quede detenido, y recién entonces la suelta. Con el
+     * bloqueo de la variante, los dos esperan en ella y el segundo lee lo que dejó el primero.
+     * Sin él, los dos ya leyeron el mismo disponible cuando la suelta (el `INSERT` de la
+     * reserva espera igual: la FK pide `KEY SHARE` sobre la variante), y pasan los dos. Una
+     * carrera sin compuerta solo falla a veces.
+     */
+    async function bothWaitingOnVariant(
+      gateVariantId: string,
+      first: () => Promise<unknown>,
+      second: () => Promise<unknown>,
+    ): Promise<PromiseSettledResult<unknown>[]> {
+      await q("BEGIN");
+      let gateOpen = true;
+      try {
+        await q("SELECT id FROM app.product_variants WHERE id = $1 FOR UPDATE", [gateVariantId]);
+        const one = first();
+        await waitForBlockedBackends(1);
+        const two = second();
+        await waitForBlockedBackends(2);
+        await q("COMMIT");
+        gateOpen = false;
+        return await Promise.allSettled([one, two]);
+      } finally {
+        if (gateOpen) await q("ROLLBACK");
+      }
+    }
+
     async function errorOf(promise: Promise<unknown>): Promise<{
       code: string | undefined;
       details: Record<string, unknown> | undefined;
@@ -409,10 +453,11 @@ describe(
         const first = await draft(ownerCtx, CHANNEL, [{ variantId, qty: "2" }]);
         const second = await draft(ownerCtx, CHANNEL, [{ variantId, qty: "2" }]);
 
-        const outcomes = await Promise.allSettled([
-          toAwaiting(ownerCtx, first.id),
-          toAwaiting(sellerCtx, second.id),
-        ]);
+        const outcomes = await bothWaitingOnVariant(
+          variantId,
+          () => toAwaiting(ownerCtx, first.id),
+          () => toAwaiting(sellerCtx, second.id),
+        );
 
         expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(["fulfilled", "rejected"]);
         expect(await stockOf(variantId)).toEqual({ onHand: 3, reserved: 2, available: 1 });
