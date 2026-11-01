@@ -439,7 +439,12 @@ export async function countSerializedUnitsOfVariants(
   return tx.serialized_units.count({ where: { variant_id: { in: [...variantIds] } } });
 }
 
-/** Fija `is_serialized` en esas variantes con una sola sentencia (WP-C08h). */
+/**
+ * Fija `is_serialized` en esas variantes (WP-C08h) y acompaña su política de
+ * asignación (WP-E05d): al serializarlas pasan a `serial`; al desserializarlas, las que
+ * estaban en `serial` vuelven al DEFAULT `fifo` (una `fefo` o `manual` que alguien fijó
+ * a mano se respeta).
+ */
 export async function setVariantsSerialized(
   tx: TenantTx,
   variantIds: readonly string[],
@@ -448,6 +453,12 @@ export async function setVariantsSerialized(
   await tx.product_variants.updateMany({
     where: { id: { in: [...variantIds] } },
     data: { is_serialized: isSerialized },
+  });
+  await tx.product_variants.updateMany({
+    where: isSerialized
+      ? { id: { in: [...variantIds] } }
+      : { id: { in: [...variantIds] }, allocation_policy: "serial" },
+    data: { allocation_policy: isSerialized ? "serial" : "fifo" },
   });
 }
 

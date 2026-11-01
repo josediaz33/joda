@@ -96,7 +96,7 @@ Un reloj concreto, con número de serie, garantía y trazabilidad de dueño. Un 
 
 ### Política de asignación (`allocation_policy`)
 
-Cómo se elige qué lote consumir: `fifo` (el más antiguo), `fefo` (el que vence primero), `serial` (por número de serie), `manual`. Configurable por variante.
+Cómo se elige qué lote consumir: `fifo` (el más antiguo), `fefo` (el que vence primero), `serial` (por número de serie), `manual`. Configurable por variante, salvo en un reloj (provisional, ver `docs/decisiones-provisionales.md`): la variante de un reloj con número de serie nace `serial` (RN-LOT-05, RN-SER-02): las que se crean hoy lo son, y las anteriores a WP-E05d pueden tener otra política porque no hay backfill (WP-E05h).
 
 ### BOM (`bom_components`)
 
