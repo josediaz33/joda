@@ -41,6 +41,11 @@ async function toFirstPage(page: Page): Promise<void> {
  * encontrarlo, y falla con un mensaje claro si no existe.
  *
  * Quien la llama tiene que estar ya en la pantalla de productos.
+ *
+ * Mira la lista tal como está en ese momento: no espera a que se relea. Para un producto que
+ * acaba de crearse (la lista se está refrescando) hay que esperar antes a que aparezca con
+ * `expect(page.getByText(nombre)).toBeVisible()`, que reintenta; si no, esta función puede
+ * recorrer la lista vieja y concluir que no está.
  */
 export async function findProductRow(page: Page, name: string): Promise<Locator> {
   const rows = page.getByTestId("product-row");

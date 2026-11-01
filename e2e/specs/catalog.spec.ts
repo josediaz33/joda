@@ -76,6 +76,10 @@ test.describe("el dueño crea un producto desde el admin (RF-CAT-01, WP-E05)", (
     await dialog.getByRole("button", { name: "Crear producto" }).click();
 
     await expect(page.getByRole("dialog")).toHaveCount(0);
+    // Al cerrarse el formulario la lista todavía se está releyendo: primero se espera a que el
+    // producto nuevo aparezca (reintenta solo) y recién después se lo busca con el ayudante,
+    // que mira la lista tal como está y no espera a que cambie.
+    await expect(page.getByText(name, { exact: true })).toBeVisible();
     const row = await findProductRow(page, name);
     await expect(row).toContainText("Estado interno: Borrador");
   });
