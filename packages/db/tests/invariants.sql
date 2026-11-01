@@ -4069,6 +4069,14 @@ SELECT pg_temp.expect_fail_like(165, 'tenants_with_expired_reservations rechaza 
 -- decant (`decant_hold`); el depósito planifica pero no vende; `deposit_hold`
 -- y `manual_hold` no los escribe nadie todavía, ni el dueño. Antes de 0041
 -- bastaba el tenant: cualquier sesión agotaba el disponible de una variante.
+--
+-- Los cuatro roles de sistema solos NO distinguen `sales.order:write` de
+-- `sales.order:read` (ninguno lee pedidos sin escribirlos) ni la rama
+-- `inventory.decant:execute` de la de `:plan` (todos tienen `plan`), y un
+-- mapeo equivocado quedaba en verde: un rol a medida de solo lectura (WP-C24)
+-- reservaría y liberaría stock. Por eso la matriz suma tres roles a medida,
+-- creados acá adentro (y revertidos con el bloque): solo lee pedidos, solo
+-- ejecuta decants y solo lee stock.
 SELECT pg_temp.expect_fail_like(166, 'Escribir una reserva exige el permiso de su reason, como joda_api',
   $$DO $x$
     DECLARE
@@ -4079,6 +4087,20 @@ SELECT pg_temp.expect_fail_like(166, 'Escribir una reserva exige el permiso de s
       PERFORM pg_temp.b18_actor('vendedor', 1661);
       PERFORM pg_temp.b18_actor('deposito', 1662);
       PERFORM pg_temp.b18_actor('owner', 1663);
+      INSERT INTO app.roles (id, tenant_id, code, name)
+      VALUES ('b1860000-0000-0000-0000-000000001664', '11111111-1111-1111-1111-111111111111',
+              'b18-166-lee-ventas', 'Solo lee pedidos'),
+             ('b1860000-0000-0000-0000-000000001665', '11111111-1111-1111-1111-111111111111',
+              'b18-166-solo-ejecuta', 'Solo ejecuta decants'),
+             ('b1860000-0000-0000-0000-000000001666', '11111111-1111-1111-1111-111111111111',
+              'b18-166-lee-stock', 'Solo lee stock');
+      INSERT INTO app.role_permissions (tenant_id, role_id, permission_code)
+      VALUES ('11111111-1111-1111-1111-111111111111', 'b1860000-0000-0000-0000-000000001664', 'sales.order:read'),
+             ('11111111-1111-1111-1111-111111111111', 'b1860000-0000-0000-0000-000000001665', 'inventory.decant:execute'),
+             ('11111111-1111-1111-1111-111111111111', 'b1860000-0000-0000-0000-000000001666', 'inventory.stock:read');
+      PERFORM pg_temp.b18_actor('b18-166-lee-ventas', 1664);
+      PERFORM pg_temp.b18_actor('b18-166-solo-ejecuta', 1665);
+      PERFORM pg_temp.b18_actor('b18-166-lee-stock', 1666);
       SET LOCAL ROLE joda_api;
       SET LOCAL search_path = public;
       FOR v_caso IN
@@ -4091,7 +4113,13 @@ SELECT pg_temp.expect_fail_like(166, 'Escribir una reserva exige el permiso de s
           ('deposito',  1662, 'checkout',              false),
           ('deposito',  1662, 'order_pending_payment', false),
           ('owner',     1663, 'deposit_hold',          false),
-          ('owner',     1663, 'manual_hold',           false)
+          ('owner',     1663, 'manual_hold',           false),
+          ('lee-ventas',   1664, 'checkout',              false),
+          ('lee-ventas',   1664, 'order_pending_payment', false),
+          ('lee-ventas',   1664, 'decant_hold',           false),
+          ('solo-ejecuta', 1665, 'decant_hold',           true),
+          ('solo-ejecuta', 1665, 'checkout',              false),
+          ('lee-stock',    1666, 'decant_hold',           false)
         ) AS t(rol, n, motivo, debe_aceptar)
       LOOP
         PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-' || lpad(v_caso.n::text, 12, '0'), true),
@@ -4153,9 +4181,25 @@ SELECT pg_temp.expect_fail_like(167, 'Liberar exige el permiso del reason; el jo
              ('c4100000-0000-0000-0000-000000001675', '11111111-1111-1111-1111-111111111111',
               '55555555-0000-0000-0000-00000000a001', 1, 'order_pending_payment', now() - interval '2 hours', now() - interval '1 hour'),
              ('c4100000-0000-0000-0000-000000001676', '11111111-1111-1111-1111-111111111111',
-              '55555555-0000-0000-0000-00000000a001', 1, 'order_pending_payment', now() + interval '1 hour', NULL);
+              '55555555-0000-0000-0000-00000000a001', 1, 'order_pending_payment', now() + interval '1 hour', NULL),
+             ('c4100000-0000-0000-0000-000000001677', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'order_pending_payment', now() + interval '1 hour', NULL),
+             ('c4100000-0000-0000-0000-000000001678', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'decant_hold', now() + interval '1 hour', NULL);
       PERFORM pg_temp.b18_actor('vendedor', 1671);
       PERFORM pg_temp.b18_actor('deposito', 1672);
+      -- Dos roles a medida (WP-C24), para lo que los de sistema no distinguen: uno que solo
+      -- LEE pedidos y uno que solo ejecuta decants.
+      INSERT INTO app.roles (id, tenant_id, code, name)
+      VALUES ('b1860000-0000-0000-0000-000000001677', '11111111-1111-1111-1111-111111111111',
+              'b18-167-lee-ventas', 'Solo lee pedidos'),
+             ('b1860000-0000-0000-0000-000000001678', '11111111-1111-1111-1111-111111111111',
+              'b18-167-solo-ejecuta', 'Solo ejecuta decants');
+      INSERT INTO app.role_permissions (tenant_id, role_id, permission_code)
+      VALUES ('11111111-1111-1111-1111-111111111111', 'b1860000-0000-0000-0000-000000001677', 'sales.order:read'),
+             ('11111111-1111-1111-1111-111111111111', 'b1860000-0000-0000-0000-000000001678', 'inventory.decant:execute');
+      PERFORM pg_temp.b18_actor('b18-167-lee-ventas', 1677);
+      PERFORM pg_temp.b18_actor('b18-167-solo-ejecuta', 1678);
       SET LOCAL ROLE joda_api;
       SET LOCAL search_path = public;
 
@@ -4181,6 +4225,22 @@ SELECT pg_temp.expect_fail_like(167, 'Liberar exige el permiso del reason; el jo
        WHERE id = 'c4100000-0000-0000-0000-000000001673';
       GET DIAGNOSTICS v_filas = ROW_COUNT;
       IF v_filas <> 1 THEN v_malos := v_malos || 'deposito-libera-decant=' || v_filas || ' '; END IF;
+
+      -- Un rol que solo LEE pedidos no libera la reserva de una venta (sales.order:read no es
+      -- :write)...
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000001677', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000001677', true);
+      UPDATE app.stock_reservations SET released_at = now()
+       WHERE id = 'c4100000-0000-0000-0000-000000001677';
+      GET DIAGNOSTICS v_filas = ROW_COUNT;
+      IF v_filas <> 0 THEN v_malos := v_malos || 'lee-ventas-libera-venta=' || v_filas || ' '; END IF;
+      -- ... y uno que solo ejecuta decants sí libera la de su fraccionamiento (la rama :execute).
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000001678', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000001678', true);
+      UPDATE app.stock_reservations SET released_at = now()
+       WHERE id = 'c4100000-0000-0000-0000-000000001678';
+      GET DIAGNOSTICS v_filas = ROW_COUNT;
+      IF v_filas <> 1 THEN v_malos := v_malos || 'solo-ejecuta-libera-decant=' || v_filas || ' '; END IF;
 
       -- El job (system, sin sesión): libera una vencida sin liberar...
       PERFORM set_config('app.user_id', '', true), set_config('app.audience', 'system', true),
