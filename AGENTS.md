@@ -19,17 +19,18 @@ Ecosistema ERP + e-commerce para una perfumería y relojería de nicho en Encarn
 
 Antes de trabajar en un área, leé lo que corresponde. **No inventes decisiones que ya están tomadas.**
 
-| Documento                                         | Cuándo leerlo                                                  |
-| ------------------------------------------------- | -------------------------------------------------------------- |
-| `docs/architecture/JODA_Arquitectura_v5_Final.md` | Referencia maestra. Ante cualquier duda estructural.           |
-| `docs/adr/*.md`                                   | 23 decisiones cerradas, con su fundamento. **No las reabras.** |
-| `GLOSARIO.md`                                     | Siempre. Define el lenguaje ubicuo del dominio.                |
-| `docs/domain-rules.md`                            | Antes de tocar costeo, decants, merma, IVA o contabilidad.     |
-| `docs/data-model.md`                              | Antes de tocar el esquema.                                     |
-| `docs/api-conventions.md`                         | Antes de agregar endpoints.                                    |
-| `docs/frontend-spec.md`                           | Antes de tocar interfaz, estilos, SEO o `packages/ui`.         |
-| `docs/security-spec.md`                           | Antes de tocar auth, permisos o RLS.                           |
-| `packages/db/README.md`                           | Antes de escribir una migración.                               |
+| Documento                                         | Cuándo leerlo                                                         |
+| ------------------------------------------------- | --------------------------------------------------------------------- |
+| `docs/architecture/JODA_Arquitectura_v5_Final.md` | Referencia maestra. Ante cualquier duda estructural.                  |
+| `docs/adr/*.md`                                   | 23 decisiones cerradas, con su fundamento. **No las reabras.**        |
+| `GLOSARIO.md`                                     | Siempre. Define el lenguaje ubicuo del dominio.                       |
+| `docs/domain-rules.md`                            | Antes de tocar costeo, decants, merma, IVA o contabilidad.            |
+| `docs/data-model.md`                              | Antes de tocar el esquema.                                            |
+| `docs/api-conventions.md`                         | Antes de agregar endpoints.                                           |
+| `docs/frontend-spec.md`                           | Antes de tocar interfaz, estilos, SEO o `packages/ui`.                |
+| `docs/security-spec.md`                           | Antes de tocar auth, permisos o RLS.                                  |
+| `packages/db/README.md`                           | Antes de escribir una migración.                                      |
+| `docs/runbooks/entorno-local.md`                  | Para levantar el entorno local, entrar al admin y correr el humo e2e. |
 
 Además, `.claude/rules/` contiene reglas con alcance por ruta que se cargan solas cuando trabajás con archivos que coincidan. Llevan los no negociables de cada área; la profundidad sigue estando en los documentos de arriba. El nombre del directorio es un resto de cuando solo existía Claude Code — las reglas no son específicas de esa herramienta, aplican igual acá.
 
@@ -82,6 +83,9 @@ docs/           architecture · adr · runbooks
 pnpm install
 pnpm dev                 # todos los apps
 pnpm dev --filter=api    # uno solo
+pnpm dev:setup            # entorno local completo: Docker, .env.local, db:reset, usuarios y datos de muestra
+pnpm dev:totp <rol>      # código del segundo factor de un usuario de prueba
+pnpm e2e:smoke           # humo de punta a punta (Playwright)
 pnpm build
 pnpm test                # vitest en todos los paquetes
 pnpm test:domain         # solo packages/domain (rápido, corré esto seguido)

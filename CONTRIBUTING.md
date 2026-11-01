@@ -7,19 +7,19 @@ Flujo de trabajo, convenciones y criterios de aceptación. Aplica igual a person
 ## 1. Entorno local
 
 ```bash
-# requisitos: Node 22+, pnpm 9+, Docker
+# requisitos: Node 22.9+, pnpm 9+, Docker (Docker Desktop en Windows)
 git clone <repo> && cd joda
 git config core.hooksPath .githooks   # activa los hooks de .githooks/, ver abajo
-cp .env.example .env          # completar valores
 pnpm install
-docker compose -f infra/docker/docker-compose.yml up -d   # postgres + redis
-pnpm db:reset                 # migraciones + seed
-pnpm dev
+pnpm dev:setup                # .env.local con secretos al azar + Docker (Postgres, Redis, Auth) + db:reset + usuarios por rol + datos de muestra
+pnpm dev                      # API, servidor de medios y admin
 ```
+
+`pnpm dev:setup` reemplaza el `cp .env.example .env` de antes: genera `.env.local` (no versionado) y deja todo andando, con un usuario de prueba por rol para entrar al admin. Paso a paso para Windows, usuarios, segundo factor, humo de Playwright (`pnpm e2e:smoke`) y problemas frecuentes: [`docs/runbooks/entorno-local.md`](docs/runbooks/entorno-local.md). `.env.example` queda como referencia de qué variables existen.
 
 **Objetivo: menos de 15 minutos desde cero.** Si tardaste más, algo del arranque está mal documentado y arreglarlo es parte del trabajo.
 
-**El Postgres de `docker-compose.yml` publica en el puerto 55432 del host, no 5432.** Si ya tenés una instalación nativa de Postgres corriendo como servicio (frecuente en Windows), `localhost:5432` resuelve a esa instancia y no al contenedor — la autenticación falla con un mensaje que no menciona Docker para nada. `DATABASE_URL` de `.env.example` ya apunta a `55432`; adentro del contenedor sigue siendo 5432. Detalle en `packages/db/README.md`, hallazgo 7.
+**El Postgres de `docker-compose.yml` publica en el puerto 55432 del host, no 5432.** Si ya tenés una instalación nativa de Postgres corriendo como servicio (frecuente en Windows), `localhost:5432` resuelve a esa instancia y no al contenedor — la autenticación falla con un mensaje que no menciona Docker para nada. `DATABASE_URL` de `.env.example` y de `.env.local` ya apuntan a `55432`; adentro del contenedor sigue siendo 5432. Detalle en `packages/db/README.md`, hallazgo 7.
 
 Verificación de que quedó bien:
 
@@ -47,7 +47,7 @@ push origin main` por costumbre.
 ### Decisiones de versión (WP-A01)
 
 - **ESLint 9.39.5, no 10.x:** ESLint 10 exige Node ≥22.13 dentro de la línea
-  22.x; este repo solo pide "Node 22+" a secas. Reevaluar cuando se suba el
+  22.x; este repo solo pide "Node 22.9+" (por `--env-file-if-exists`, WP-M18). Reevaluar cuando se suba el
   piso de Node del proyecto.
 - **pnpm 9.15.4, no la última 12.x:** cumple el "pnpm 9+" de arriba sin forzar
   una migración de major que ningún paquete de trabajo pidió todavía.

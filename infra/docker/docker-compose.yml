@@ -1,12 +1,20 @@
-# Entorno local de desarrollo: Postgres + Redis.
-# Uso: docker compose -f infra/docker/docker-compose.yml up -d (ver CONTRIBUTING.md §1)
+# Entorno local de desarrollo: Postgres + Redis + Auth (GoTrue) tras un proxy.
+# Uso: `pnpm dev:setup` (docs/runbooks/entorno-local.md, WP-M18). A mano:
+#   docker compose --env-file .env.local -f infra/docker/docker-compose.yml up -d postgres redis
 #
 # `name: joda` fija el nombre de proyecto de Compose (si no, Compose lo toma
 # del directorio que contiene este archivo — "docker" — y los volúmenes
 # reales terminan como docker_postgres_data en vez de joda_postgres_data,
-# sin relación con el nombre del proyecto).
+# sin relación con el nombre del proyecto). Se sobrescribe con
+# `-p <nombre>` o con JODA_COMPOSE_PROJECT en `pnpm dev:setup`.
 name: joda
 
+# Todos los puertos de host se publican SOLO en 127.0.0.1 y se pueden mover
+# con variables (JODA_PG_PORT, JODA_REDIS_PORT, JODA_SUPABASE_PORT): este
+# entorno trae una base con una contraseña de desarrollo conocida y no tiene
+# por qué ser alcanzable desde la red de la oficina. Los valores por defecto
+# son los del entorno de siempre (55432, 6379).
+#
 # Postgres fijado a 16, la misma versión contra la que se validó el esquema
 # (packages/db/README.md "Verificación") y la que usa el job `db` de CI
 # (.github/workflows/ci.yml) — nunca `latest`. Mismo usuario/contraseña/base
@@ -30,7 +38,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: joda
     ports:
-      - "55432:5432"
+      - "127.0.0.1:${JODA_PG_PORT:-55432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -42,11 +50,77 @@ services:
   redis:
     image: redis:7
     ports:
-      - "6379:6379"
+      - "127.0.0.1:${JODA_REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # --- Auth local (WP-M18) -------------------------------------------------
+  # GoTrue es el servicio que hay detrás de Supabase Auth (ADR-004): el
+  # adaptador real (apps/api/src/adapters/staffAuth/supabasePasswordProvider.ts)
+  # corre contra él SIN cambios. Perfil `auth`: `docker compose up` a secas
+  # sigue levantando solo Postgres y Redis. Versión fija, nunca `latest`.
+  #
+  # Su base (`gotrue`) y su rol (`supabase_auth_admin`) los crea
+  # `pnpm dev:setup` en el mismo Postgres de arriba, antes de levantar esto —
+  # así también funciona sobre un volumen que ya existía, donde los scripts
+  # de /docker-entrypoint-initdb.d no se vuelven a correr. Sus secretos
+  # (GOTRUE_JWT_SECRET, GOTRUE_DB_PASSWORD) salen de `.env.local`, generados al
+  # azar por máquina; sin ellos (valor vacío) GoTrue no arranca: falla cerrado.
+  auth:
+    profiles: ["auth"]
+    image: supabase/gotrue:v2.197.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      GOTRUE_API_HOST: 0.0.0.0
+      GOTRUE_API_PORT: "9999"
+      API_EXTERNAL_URL: ${SUPABASE_URL:-http://127.0.0.1:54321}
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://supabase_auth_admin:${GOTRUE_DB_PASSWORD:-}@postgres:5432/gotrue
+      GOTRUE_SITE_URL: ${ADMIN_URL:-http://localhost:5173}
+      GOTRUE_JWT_SECRET: ${GOTRUE_JWT_SECRET:-}
+      GOTRUE_JWT_EXP: "3600"
+      GOTRUE_JWT_AUD: authenticated
+      # Nadie se registra solo: las cuentas del personal las da de alta un
+      # administrador (la Admin API que usa `pnpm dev:setup`).
+      GOTRUE_DISABLE_SIGNUP: "true"
+      GOTRUE_EXTERNAL_EMAIL_ENABLED: "true"
+      GOTRUE_MAILER_AUTOCONFIRM: "true"
+      GOTRUE_EXTERNAL_PHONE_ENABLED: "false"
+      GOTRUE_LOG_LEVEL: warn
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:9999/health || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # GoTrue pelado sirve en la raíz (`/token`); Supabase lo expone bajo
+  # `/auth/v1` detrás de un gateway que además exige la cabecera `apikey`.
+  # Este nginx hace las dos cosas y nada más (infra/docker/auth-proxy/), así
+  # SUPABASE_URL y SUPABASE_ANON_KEY locales tienen la misma forma que en un
+  # proyecto real.
+  auth-proxy:
+    profiles: ["auth"]
+    image: nginx:1.27-alpine
+    depends_on:
+      auth:
+        condition: service_healthy
+    environment:
+      NGINX_ENVSUBST_FILTER: ^SUPABASE_
+      SUPABASE_ANON_KEY: ${SUPABASE_ANON_KEY:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+    ports:
+      - "127.0.0.1:${JODA_SUPABASE_PORT:-54321}:80"
+    volumes:
+      - ./auth-proxy/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/healthz || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 10

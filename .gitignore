@@ -2,6 +2,10 @@ node_modules/
 dist/
 .next/
 .env
+# Entorno local (WP-M18): `pnpm dev:setup` genera .env.local con secretos al azar
+# por máquina. Nunca se versiona (.env.example es solo la referencia).
+.env.local
+.env*.local
 .turbo/
 coverage/
 *.log
@@ -29,3 +33,7 @@ packages/domain/src/__boundary-check.generated.test.ts
 # ObjectStorage) — imágenes subidas en desarrollo, nunca contenido a
 # versionar.
 .data/
+
+# Playwright (WP-M18, e2e/): resultados, trazas e informes de cada corrida.
+e2e/test-results/
+e2e/playwright-report/
