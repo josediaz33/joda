@@ -41,7 +41,7 @@ pnpm dev
 
 1. Escribe **`.env.local`** (no versionado) con **secretos al azar por máquina**: `SESSION_SECRET`, `MFA_ENCRYPTION_KEY`, el secreto de firma de GoTrue, la contraseña de `joda_api` y las dos claves de Supabase (JWT con rol `anon` y `service_role`, firmados con ese secreto). Si el archivo ya existe, **conserva los secretos**.
 2. Levanta con `docker compose` Postgres 16, Redis 7, **GoTrue** (`supabase/gotrue`, versión fija) y un **nginx** mínimo que lo expone en `/auth/v1` y exige la cabecera `apikey`, como el gateway de Supabase. Espera a que los cuatro estén sanos.
-3. **Comprueba que no borra lo que no creó él** (ver el aviso de abajo) y corre **`pnpm db:reset`**: borra y recrea toda la base `joda` (migraciones + seed base). Fija la contraseña de `joda_api` (la del `.env.local`) con un `ALTER ROLE` del setup. **Vacía también el Redis del proyecto** (sesiones y permisos en caché de una base anterior no valen).
+3. **Comprueba que no borra lo que no creó él** (ver el aviso de abajo) y corre **`pnpm db:reset`**: borra y recrea toda la base `joda` (migraciones + seed base). Fija la contraseña de `joda_api` (la del `.env.local`) con un `ALTER ROLE` del setup. **Vacía también la base 0 del Redis del proyecto** (`FLUSHDB`: la que usa la API; sesiones y permisos en caché de una base anterior no valen. Las bases 1–15 de ese Redis no se tocan).
 4. Da de alta los cuatro usuarios **en GoTrue** (Admin API, correo confirmado) y **en `staff_users`**, con su rol, en el tenant `joda`.
 5. Levanta la API un rato y **siembra por la API** (HTTP + tRPC, con la sesión del dueño) el segundo factor de los cuatro usuarios y los datos de muestra. La apaga al terminar.
 
@@ -49,7 +49,7 @@ pnpm dev
 
 > **Ojo:** `pnpm dev:setup` **borra todo el contenido** de la base `joda` y del Redis de su proyecto de compose. Con los valores por defecto (proyecto `joda`, puertos `55432` y `6379`) esos son el Postgres y el Redis de desarrollo de siempre: si tenés datos que querés conservar ahí, hacé un `pg_dump` antes.
 >
-> Para que no se lleve por delante lo que no creó él, el setup deja una **marca** (un comentario en la base `joda` y la clave `joda:dev-setup` en Redis). Un reinicio sobre una base o un Redis **con la marca** sigue sin preguntar; sobre una base con tablas o un Redis con claves **sin marca** (la primera vez sobre un entorno que armaste a mano) pide confirmación: en una terminal, escribí `si`; en un script o sin terminal, repetí con `pnpm dev:setup --yes` o con `JODA_DEV_SETUP_YES=1`. Sin eso se niega y no borra nada. Una base vacía o que no existe todavía no pregunta.
+> Para que no se lleve por delante lo que no creó él, el setup deja una **marca** (un comentario en la base `joda` y la clave `joda:dev-setup` en Redis). Un reinicio sobre una base o un Redis **con la marca** sigue sin preguntar; sobre una base con tablas o un Redis con claves en su base 0 **sin marca** (la primera vez sobre un entorno que armaste a mano) pide confirmación: en una terminal, escribí `si`; en un script o sin terminal, repetí con `pnpm dev:setup --yes` o con `JODA_DEV_SETUP_YES=1`. Sin eso se niega y no borra nada. Una base vacía o que no existe todavía no pregunta.
 
 ## 3. Qué quedó corriendo
 
