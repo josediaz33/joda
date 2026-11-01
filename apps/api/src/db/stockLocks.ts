@@ -16,6 +16,14 @@ import type { TenantTx } from "./withTenantTx.js";
 // bloquee lotes sin tomar antes la variante se interbloquea contra uno que sí
 // lo hizo; por eso no se migra uno solo ni se agrega uno con otro orden.
 //
+// TODAS LAS VARIANTES EN LA PRIMERA LLAMADA. Una variante pedida en una segunda
+// llamada, con otras ya tomadas, rompe el orden ascendente: puede tener un `id`
+// menor que una que ya se tiene. Si el camino después suelta reservas
+// (`releaseReservationsOf`, que vuelve a pedir las suyas: inocuo si ya las
+// tiene), las variantes de esas reservas entran en la primera llamada, no en la
+// de la liberación: la ejecución de un decant suma a las del BOM de hoy las de
+// lo que la orden reservó al planificar.
+//
 // POR QUÉ LA VARIANTE. El disponible (RN-RES-03) se lee por variante. Sin
 // bloquearla, dos operaciones sobre lotes distintos de la misma variante leen
 // el mismo disponible y comprometen el último frasco las dos.
