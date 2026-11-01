@@ -191,6 +191,14 @@ export async function reserveOrderLines(
  * Toma antes el bloqueo de las variantes involucradas (RN-RES-07). Devuelve
  * cuántas liberó; sin reservas sin liberar, 0 y no toca nada.
  *
+ * **Quien ya bloqueó stock en su transacción tiene que haber incluido en ese
+ * bloqueo las variantes de estas reservas** (`listOpenReservationVariantIds`,
+ * leídas antes): esta función las pide de nuevo, y una que no tenía se tomaría
+ * acá, tarde, con variantes y lotes de id mayor ya en la mano. Es lo que hace
+ * la ejecución de un fraccionamiento; el gancho de cancelar una orden
+ * (WP-C13c) tiene que hacer lo mismo. Cancelar un pedido no lo necesita: antes
+ * de soltar solo tomó la fila del pedido.
+ *
  * **Quien no puede liberarlas recibe 403, no un 0 en silencio.** La política de
  * UPDATE de la tabla (0041) exige el permiso del `reason` y, cuando falta, oculta
  * la fila: el `UPDATE` afecta cero filas y no da error. Si después de soltar

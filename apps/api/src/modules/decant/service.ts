@@ -293,6 +293,13 @@ async function loadSupplyLots(
  * cambió mientras se bloqueaba (un componente nuevo no quedó bloqueado) se
  * rechaza, y quien reintenta lo bloquea completo; tomar ahora la variante que
  * falta rompería el orden ascendente.
+ *
+ * `reservedVariantIds` son las variantes de lo que la orden ya tiene reservado
+ * (la ejecución lo libera entero, también lo de un componente que salió del
+ * BOM): entran en el MISMO bloqueo, ascendente y en una sola sentencia. Si se
+ * dejaran para `releaseReservationsOf`, esa variante se tomaría al final, con
+ * lotes y variantes de id mayor ya en la mano, y se cruzaría con quien la tiene
+ * y pide una de esas (40P01).
  */
 async function lockDecantVariants(
   tx: TenantTx,
@@ -300,9 +307,15 @@ async function lockDecantVariants(
   targetVariantId: string,
   sourceVariantId: string,
   lines: readonly BomLine[],
+  reservedVariantIds: readonly string[] = [],
 ): Promise<void> {
   await lockVariantsThenLots(tx, tenantId, {
-    variantIds: [targetVariantId, sourceVariantId, ...lines.map((line) => line.componentVariantId)],
+    variantIds: [
+      targetVariantId,
+      sourceVariantId,
+      ...lines.map((line) => line.componentVariantId),
+      ...reservedVariantIds,
+    ],
     allLotsOfVariants: true,
   });
   const relocked = await loadBomLines(tx, targetVariantId);
@@ -738,7 +751,26 @@ export async function executeWorkOrder(
     // un permiso insuficiente: 404, no un 500.
     const sourceVariantId = await peekLotVariantId(tx, order.source_lot_id);
     if (sourceVariantId === null) throw toTRPCError(NOT_FOUND_ERROR);
-    await lockDecantVariants(tx, session.tenantId, variant.id, sourceVariantId, lines);
+    // Las variantes de lo que la orden reservó al planificar se leen ANTES de bloquear y
+    // entran en el mismo bloqueo: si el BOM cambió, una puede no estar en `lines`, y
+    // `releaseReservationsOf` (más abajo) la tomaría tarde, rompiendo el orden ascendente.
+    // La lectura es estable sin bloquear nada: la fila de la orden ya está tomada (nadie
+    // más la ejecuta ni la cancela) y las reservas de una orden solo nacen al planificarla;
+    // después solo se liberan, así que el conjunto puede achicarse, nunca crecer.
+    const reservedVariantIds = await reservationsRepo.listOpenReservationVariantIds(
+      tx,
+      session.tenantId,
+      DECANT_WORK_ORDER_REFERENCE,
+      order.id,
+    );
+    await lockDecantVariants(
+      tx,
+      session.tenantId,
+      variant.id,
+      sourceVariantId,
+      lines,
+      reservedVariantIds,
+    );
 
     // Se bloquean TODOS los lotes de cada insumo, no solo el que se va a consumir,
     // a propósito: cuál se consume se decide con el saldo ya bloqueado, y bloquear

@@ -4,6 +4,7 @@ import type { Clock } from "@joda/domain";
 import { RedisContainer, type StartedRedisContainer } from "@testcontainers/redis";
 import type { FastifyInstance } from "fastify";
 import { Redis } from "ioredis";
+import { Client } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createFakeStaffAuthProvider } from "../../adapters/staffAuth/fakeStaffAuthProvider.js";
 import { jodaApiConnectionUrl, startTestDb, type TestDb } from "../../db/testDb.js";
@@ -1982,6 +1983,95 @@ describe(
           available: 100,
         });
         expect(await onHandOfVariant(scenario.vialVariantId)).toBe("99.000");
+      });
+
+      /** Dice si OTRA conexión tiene la fila tomada: `FOR UPDATE NOWAIT` desde una sonda propia. */
+      async function isHeldByAnother(
+        table: "product_variants" | "inventory_lots",
+        id: string,
+      ): Promise<boolean> {
+        const probe = new Client({ connectionString: testDb.connectionUri });
+        await probe.connect();
+        try {
+          await probe.query("BEGIN");
+          try {
+            await probe.query(`SELECT id FROM app.${table} WHERE id = $1 FOR UPDATE NOWAIT`, [id]);
+            return false;
+          } catch (error) {
+            if ((error as { code?: string }).code === "55P03") return true;
+            throw error;
+          } finally {
+            await probe.query("ROLLBACK");
+          }
+        } finally {
+          await probe.end();
+        }
+      }
+
+      it("RN-RES-07 · si el BOM cambió, el componente que salió del BOM entra en el mismo bloqueo y en orden: esperándolo, la ejecución no tiene tomado nada más", async () => {
+        const scenario = await createScenario();
+        const bulkLotId = await seedBulkLot(scenario.bulkVariantId, {
+          qty: 114.65,
+          unitCostPyg: 11_972,
+        });
+        await seedSupplies(scenario);
+        // Un componente con el id MÁS BAJO de todos: es el primero del orden ascendente.
+        const retiredVariantId = "00000000-0000-4000-8000-00000000c18b";
+        await testDb.superuserClient.query(
+          `INSERT INTO app.product_variants (id, tenant_id, product_id, sku, variant_type, uom, price_pyg)
+           VALUES ($1, $2, $3, $4, 'supply', 'unit', 0)`,
+          [retiredVariantId, TENANT_ID, scenario.productId, `RETIRADO-${scenarioCounter}`],
+        );
+        await seedSupplyLot(retiredVariantId, { qty: 100, unitCostPyg: 100 });
+        await mutateOk("catalog.bom.create", {
+          parentVariantId: scenario.decantVariantId,
+          componentVariantId: retiredVariantId,
+          qtyPerUnit: 1,
+          uom: "unit",
+        });
+        const orderId = await plannedAndStarted(scenario);
+        // El BOM de hoy ya no lo tiene, pero la orden lo tiene reservado: lo suelta
+        // `releaseReservationsOf`, que lo pediría tarde si no entrara en el bloqueo de antes.
+        await testDb.superuserClient.query(
+          `DELETE FROM app.bom_components WHERE parent_variant_id = $1 AND component_variant_id = $2`,
+          [scenario.decantVariantId, retiredVariantId],
+        );
+        let status = 0;
+
+        await testDb.superuserClient.query("BEGIN");
+        let released = false;
+        let pending: Promise<{ statusCode: number }> | undefined;
+        try {
+          // Otra transacción retiene el componente retirado...
+          await testDb.superuserClient.query(
+            "SELECT id FROM app.product_variants WHERE id = $1 FOR UPDATE",
+            [retiredVariantId],
+          );
+          pending = execute(orderId, 0.35);
+          await waitUntilABackendIsBlockedOnALock();
+          // ...y la ejecución, que lo espera, todavía no tiene el granel ni los insumos del
+          // BOM de hoy. Con el componente retirado tomado AL FINAL ya los tendría (y quien
+          // lo retiene y pida uno de ellos se interbloquearía con ella).
+          expect(await isHeldByAnother("product_variants", scenario.bulkVariantId)).toBe(false);
+          expect(await isHeldByAnother("product_variants", scenario.vialVariantId)).toBe(false);
+          expect(await isHeldByAnother("inventory_lots", bulkLotId)).toBe(false);
+          await testDb.superuserClient.query("COMMIT");
+          released = true;
+          status = (await pending).statusCode;
+        } finally {
+          if (!released) {
+            await testDb.superuserClient.query("ROLLBACK");
+            await pending?.catch(() => undefined);
+          }
+        }
+
+        expect(status).toBe(200);
+        expect((await reservationsOf(orderId)).every((row) => row.released_at !== null)).toBe(true);
+        expect(await stockOf(retiredVariantId)).toEqual({
+          on_hand: 100,
+          reserved: 0,
+          available: 100,
+        });
       });
 
       it("una ejecución que se rechaza no libera nada: la reserva sigue ahí hasta que la orden se resuelva", async () => {
