@@ -88,7 +88,11 @@ Bloqueo temporal de stock, **separado del ledger**. El carrito no reserva; la re
 
 **Disponible = saldo proyectado − reservas vivas.**
 
-La reserva es **por variante por defecto**; atarla a un lote (un plan de decant reserva su granel) o a una unidad serializada (un reloj reserva su unidad) es opcional, y lo atado es siempre de la variante de la reserva. Una reserva viva es la que no se liberó (`released_at` nulo) y no venció (`expires_at`). RN-RES-06.
+La reserva es **por variante por defecto**; atarla a un lote (un plan de decant reserva su granel) o a una unidad serializada (un reloj reserva su unidad) es opcional, y lo atado es siempre de la variante de la reserva. Una reserva viva es la que no se liberó (`released_at` nulo) y no venció (`expires_at`). Nace al pasar un pedido a `awaiting_payment` (con la duración de RN-RES-02: 24 h configurables por tenant si no hay medio de pago registrado) o al planificar un fraccionamiento; se suelta al cancelar, al ejecutar la orden o por el job de liberación, que marca `released_at` y nunca borra la fila. RN-RES-04, RN-RES-06.
+
+### Orden de bloqueo
+
+El orden único en que toda operación que decide sobre stock toma sus bloqueos: la fila de la variante primero, los lotes después, ambos por `id` ascendente. Existe para que dos operaciones no se interbloqueen. RN-RES-07, `apps/api/src/db/stockLocks.ts`.
 
 ### Unidad serializada (`serialized_units`)
 

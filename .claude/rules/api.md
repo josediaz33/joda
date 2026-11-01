@@ -61,10 +61,15 @@ en el código: es el tipo de detalle que alguien "limpia" en un refactor.
 **La fila de `product_variants` (`FOR UPDATE`, por `id`) va antes que los
 lotes**, en todo camino que decide sobre stock: es el orden único del sistema
 (`docs/domain-rules.md` RN-RES-07). Lotes sin variante primero = interbloqueo.
-**Hoy ningún camino existente cumple este orden** (todos bloquean solo lotes);
-WP-C18b migra todos los caminos existentes en un solo PR; WP-C19 agrega su
-camino nuevo ya en el orden. No migres un camino aislado ni agregues uno nuevo
-con orden distinto antes de eso: el estado mixto se interbloquea.
+**Desde WP-C18b todos los caminos existentes lo cumplen, y todos pasan por
+`lockVariantsThenLots`** (`apps/api/src/db/stockLocks.ts`, el modo de bloqueo en
+una constante): no escribas un `FOR UPDATE` sobre variantes o lotes fuera de ese
+helper, y WP-C19 agrega su camino ya en el orden. La fila de la entidad que
+decide el caso de uso (el pedido, la orden de fraccionamiento) se toma antes que
+las de stock. Quien solo conoce el lote lee su variante sin bloquear, bloquea
+variante y lote (`lockLotWithItsVariant`) y lee el saldo después. Quien inserta
+filas de varias variantes en una sentencia toma antes los `KEY SHARE`, ascendentes
+(`shareLockVariantsAscending`). Un camino con otro orden se interbloquea.
 
 ## Otras
 

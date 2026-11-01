@@ -67,7 +67,10 @@ export type OrderReservationError =
       readonly status: string;
     }
   | { readonly code: "SERIAL_UNIT_ALREADY_RESERVED"; readonly serialUnitId: string }
-  | { readonly code: "INSUFFICIENT_STOCK"; readonly shortages: readonly OrderReservationShortage[] };
+  | {
+      readonly code: "INSUFFICIENT_STOCK";
+      readonly shortages: readonly OrderReservationShortage[];
+    };
 
 /** Una fila de `stock_reservations` lista para insertar, atada a la línea que la origina. */
 export interface OrderReservationDraft {
@@ -132,7 +135,7 @@ export function planOrderReservations(
   }
 
   const shortages: OrderReservationShortage[] = [];
-  const variantIds = [...requestedByVariant.keys()].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  const variantIds = [...requestedByVariant.keys()].sort((a, b) => (a < b ? -1 : 1));
   for (const variantId of variantIds) {
     const requested = requestedByVariant.get(variantId)!;
     const availability = availabilityByVariant.get(variantId);
@@ -148,15 +151,13 @@ export function planOrderReservations(
   if (shortages.length > 0) return err({ code: "INSUFFICIENT_STOCK", shortages });
 
   return ok(
-    input.lines.map(
-      (line): OrderReservationDraft => ({
-        lineId: line.lineId,
-        variantId: line.variantId,
-        serialUnitId: line.serialUnitId,
-        qty: line.qty,
-        reason: "order_pending_payment",
-        expiresAtMs,
-      }),
-    ),
+    input.lines.map((line): OrderReservationDraft => ({
+      lineId: line.lineId,
+      variantId: line.variantId,
+      serialUnitId: line.serialUnitId,
+      qty: line.qty,
+      reason: "order_pending_payment",
+      expiresAtMs,
+    })),
   );
 }
