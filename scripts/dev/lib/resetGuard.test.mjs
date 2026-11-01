@@ -89,6 +89,14 @@ describe("isPreConfirmed reconoce --yes y JODA_DEV_SETUP_YES (docs/runbooks/ento
     assert.equal(isPreConfirmed({ argv: [], env: { JODA_DEV_SETUP_YES: "0" } }), false);
   });
 
+  test("JODA_DEV_SETUP_YES vacío no confirma", () => {
+    assert.equal(isPreConfirmed({ argv: [], env: { JODA_DEV_SETUP_YES: "" } }), false);
+  });
+
+  test("JODA_DEV_SETUP_YES=false no confirma", () => {
+    assert.equal(isPreConfirmed({ argv: [], env: { JODA_DEV_SETUP_YES: "false" } }), false);
+  });
+
   test("un argumento parecido no confirma", () => {
     assert.equal(isPreConfirmed({ argv: ["--yes-please", "yes"], env: {} }), false);
   });

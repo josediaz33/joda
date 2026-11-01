@@ -2,6 +2,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -12,9 +14,20 @@ import { fileURLToPath } from "node:url";
 // tocar la red (por eso estos tests no necesitan nada de eso).
 const REPO_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
+// Contención: estos tests invocan los scripts de verdad. Si la baranda de alguno se rompiera,
+// el script seguiría de largo; con esto no llega a tocar nada del entorno de quien corre la
+// suite. Docker apunta a un puerto cerrado (setup.mjs muere en «Docker no responde» antes de
+// escribir nada), el proyecto de compose es otro y .env.local es un archivo que no existe
+// (seed, e2e-smoke y test-auth-local mueren en «No existe .env.local»).
+const CONTAINMENT = {
+  DOCKER_HOST: "tcp://127.0.0.1:9",
+  JODA_COMPOSE_PROJECT: "joda-guard-test",
+  JODA_ENV_LOCAL_PATH: join(tmpdir(), "joda-guard-test-no-existe", ".env.local"),
+};
+
 function runEntrypoint(script, env) {
   return spawnSync(process.execPath, [fileURLToPath(new URL(script, import.meta.url))], {
-    env: { ...process.env, ...env },
+    env: { ...process.env, ...CONTAINMENT, ...env },
     encoding: "utf8",
     timeout: 20_000,
   });
@@ -58,6 +71,23 @@ describe("los scripts de scripts/dev/ se niegan a correr con NODE_ENV=production
     });
   }
 
+  // Controles de la contención: sin producción, cada script llega a SU primer paso real y
+  // ahí muere, sin haber tocado nada. Si la baranda de uno se rompiera, sería esto lo que
+  // pasaría con las grafías de producción de arriba.
+  for (const [name, script, firstStep] of [
+    ["dev:setup", "./setup.mjs", /Docker no responde/],
+    ["dev:seed", "./seed.mjs", /No existe .env.local/],
+    ["e2e:smoke", "./e2e-smoke.mjs", /No existe .env.local/],
+    ["test:auth-local", "./test-auth-local.mjs", /No existe .env.local/],
+  ]) {
+    test(`${name} sin producción muere en su primer paso, sin tocar el entorno`, () => {
+      const result = runEntrypoint(script, { NODE_ENV: "development", JODA_ENV: "" });
+
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, firstStep);
+    });
+  }
+
   test("la baranda no corta de más: con NODE_ENV=development dev:totp no la nombra", () => {
     // Sin esto, los tests de arriba pasarían igual si el script fallara siempre.
     const result = runEntrypoint("./totp.mjs", { NODE_ENV: "development", JODA_ENV: "" });
@@ -80,7 +110,7 @@ describe("el humo de Playwright se niega a correr con NODE_ENV=production aunque
     test(`con ${label}, playwright test --list termina con error y lo explica`, () => {
       const result = spawnSync(process.execPath, [playwrightCli, "test", "--list"], {
         cwd: `${REPO_ROOT}e2e`,
-        env: { ...process.env, ...env },
+        env: { ...process.env, ...CONTAINMENT, ...env },
         encoding: "utf8",
         timeout: 60_000,
       });

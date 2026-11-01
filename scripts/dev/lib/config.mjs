@@ -9,7 +9,10 @@ import { isValidLocalJwt, signLocalJwt } from "./jwt.mjs";
 // poder probarla; lo que lee y escribe archivos está en setup.mjs.
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
-export const ENV_LOCAL_PATH = join(REPO_ROOT, ".env.local");
+// JODA_ENV_LOCAL_PATH existe solo para las pruebas de las barandas (entrypoints.test.mjs):
+// apunta los scripts a un archivo que no existe, así que uno cuya baranda se rompiera muere
+// en «No existe .env.local» en vez de tocar el entorno de quien corre la suite.
+export const ENV_LOCAL_PATH = process.env.JODA_ENV_LOCAL_PATH || join(REPO_ROOT, ".env.local");
 export const COMPOSE_FILE = join(REPO_ROOT, "infra", "docker", "docker-compose.yml");
 /** Ignorado por git (`.data/`): el secreto TOTP de cada usuario de prueba. */
 export const DEV_DATA_DIR = join(REPO_ROOT, ".data", "dev");
