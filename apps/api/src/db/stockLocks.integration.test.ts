@@ -3,6 +3,7 @@ import { Client } from "pg";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { uuidGenerator } from "../adapters/uuidGenerator.js";
+import * as catalog from "../modules/catalog/service.js";
 import * as inventory from "../modules/inventory/service.js";
 import * as sales from "../modules/sales/service.js";
 import type { RequestContext } from "../trpc/context.js";
@@ -33,6 +34,13 @@ const W_LOW = "00000000-0000-4000-8000-000000000012";
 // El sellado tiene el id ALTO y su granel el BAJO: abrir un frasco los toma en ese orden.
 const SEALED = "ffffffff-0000-4000-8000-000000000021";
 const BULK = "00000000-0000-4000-8000-000000000022";
+// Los caminos que bloquean lotes y no son una pareja de dos reservas: cada uno con sus variantes
+// serializadas. En el reloj, la de id BAJO es la que retiene la compuerta y la de id ALTO la que
+// delataría un lote tomado antes de tiempo.
+const SERIAL_UNIT_VARIANT = "00000000-0000-4000-8000-000000000031";
+const SERIAL_OFF_VARIANT = "00000000-0000-4000-8000-000000000032";
+const WATCH_LOW = "00000000-0000-4000-8000-000000000033";
+const WATCH_HIGH = "ffffffff-0000-4000-8000-000000000034";
 
 const NOW = new Date("2026-10-30T12:00:00.000Z");
 const clock = { now: () => NOW };
@@ -86,7 +94,7 @@ describe(
 
     let productCounter = 0;
 
-    async function seedProduct(kind: "accessory" | "perfume"): Promise<string> {
+    async function seedProduct(kind: "accessory" | "perfume" | "watch"): Promise<string> {
       const product = await q<{ id: string }>(
         "INSERT INTO app.products (tenant_id, kind, slug, name) VALUES ($1, $2::app.product_kind, $3, $4) RETURNING id",
         [TENANT, kind, `locks-${kind}-${++productCounter}`, `Producto ${kind} ${productCounter}`],
@@ -94,6 +102,12 @@ describe(
       if (kind === "perfume") {
         await q(
           "INSERT INTO app.perfume_details (product_id, tenant_id, concentration, nominal_volume_ml, olfactory_family) VALUES ($1, $2, 'edp', 100, 'amaderado')",
+          [product.rows[0]!.id, TENANT],
+        );
+      }
+      if (kind === "watch") {
+        await q(
+          "INSERT INTO app.watch_details (product_id, tenant_id, movement, case_material, requires_serial) VALUES ($1, $2, 'quartz', 'acero', true)",
           [product.rows[0]!.id, TENANT],
         );
       }
@@ -105,10 +119,11 @@ describe(
       productId: string,
       sku: string,
       type: "unit" | "sealed" | "bulk",
+      serialized = false,
     ) {
       await q(
-        `INSERT INTO app.product_variants (id, tenant_id, product_id, sku, variant_type, uom, size_ml, price_pyg)
-       VALUES ($1, $2, $3, $4, $5::app.variant_type, $6::app.uom, $7, 100000)`,
+        `INSERT INTO app.product_variants (id, tenant_id, product_id, sku, variant_type, uom, size_ml, price_pyg, is_serialized)
+       VALUES ($1, $2, $3, $4, $5::app.variant_type, $6::app.uom, $7, 100000, $8)`,
         [
           id,
           TENANT,
@@ -117,6 +132,7 @@ describe(
           type,
           type === "bulk" ? "ml" : "unit",
           type === "sealed" ? 100 : null,
+          serialized,
         ],
       );
     }
@@ -249,6 +265,34 @@ describe(
       }
     }
 
+    /**
+     * Retiene `gateVariantId` con el superusuario, arranca `path` y, cuando ya quedó esperando
+     * (solo hay una forma de esperar: la variante retenida), corre `whileWaiting` y recién entonces
+     * suelta la compuerta. Devuelve cómo terminó el camino. Es la prueba de que el camino toma la
+     * VARIANTE antes que cualquier lote: con el orden viejo (lotes solos) ya tendría el lote tomado
+     * cuando se queda esperando la variante, y `whileWaiting` lo ve.
+     */
+    async function pathWaitingOnVariant(
+      gateVariantId: string,
+      path: () => Promise<unknown>,
+      whileWaiting: () => Promise<void>,
+    ): Promise<PromiseSettledResult<unknown>> {
+      await q("BEGIN");
+      let gateOpen = true;
+      try {
+        await q("SELECT id FROM app.product_variants WHERE id = $1 FOR UPDATE", [gateVariantId]);
+        // Se observa desde el principio: si `whileWaiting` falla, el camino igual termina al soltar.
+        const running = Promise.allSettled([path()]);
+        await waitForBlockedBackends(1);
+        await whileWaiting();
+        await q("COMMIT");
+        gateOpen = false;
+        return (await running)[0]!;
+      } finally {
+        if (gateOpen) await q("ROLLBACK");
+      }
+    }
+
     beforeAll(async () => {
       testDb = await startTestDb();
       await q(
@@ -284,6 +328,13 @@ describe(
       const perfume = await seedProduct("perfume");
       await seedVariant(SEALED, perfume, "LOCKS-SEALED", "sealed");
       await seedVariant(BULK, perfume, "LOCKS-BULK", "bulk");
+      // Variantes serializadas, para los caminos que las miran (alta de una unidad, apagar el flag).
+      const serialAccessory = await seedProduct("accessory");
+      await seedVariant(SERIAL_UNIT_VARIANT, serialAccessory, "LOCKS-SERIAL-UNIT", "unit", true);
+      await seedVariant(SERIAL_OFF_VARIANT, serialAccessory, "LOCKS-SERIAL-OFF", "unit", true);
+      const watch = await seedProduct("watch");
+      await seedVariant(WATCH_LOW, watch, "LOCKS-WATCH-LOW", "unit", true);
+      await seedVariant(WATCH_HIGH, watch, "LOCKS-WATCH-HIGH", "unit", true);
 
       // Varias conexiones: estas pruebas ponen DOS transacciones de joda_api a esperarse entre sí,
       // y con la sola conexión que usan las demás la segunda ni siquiera llegaría a empezar.
@@ -513,6 +564,75 @@ describe(
         } finally {
           if (!released) await q("ROLLBACK");
         }
+      });
+    });
+
+    // -------------------------------------------------------------------
+    // Los caminos que no son una reserva ni una apertura y que también bloquean lotes. Cada uno
+    // tiene su prueba: sin ella, volver a bloquear SOLO los lotes (el comportamiento anterior)
+    // dejaba verde toda la suite. La variante de la compuerta la retiene el superusuario con
+    // `FOR UPDATE`; el camino tiene que quedarse esperándola sin haber tomado el lote.
+    describe("RN-RES-07 · cada camino que bloquea lotes toma antes la variante: esperándola, el lote sigue libre", () => {
+      it("el alta de una unidad serializada (inventory.serial.create)", async () => {
+        const lotId = await seedLot(SERIAL_UNIT_VARIANT, "unit", 3);
+
+        const outcome = await pathWaitingOnVariant(
+          SERIAL_UNIT_VARIANT,
+          () =>
+            inventory.createSerializedUnit(
+              db,
+              { clock, idGenerator: uuidGenerator },
+              requestContext(ownerCtx),
+              { lotId, serialNumber: "SN-LOCKS-ALTA" },
+            ),
+          async () => {
+            expect(await isHeld("inventory_lots", lotId)).toBe(false);
+          },
+        );
+
+        expect(outcome.status).toBe("fulfilled");
+      });
+
+      it("apagar is_serialized de una variante (catalog.variant.update)", async () => {
+        const lotId = await seedLot(SERIAL_OFF_VARIANT, "unit", 2);
+
+        const outcome = await pathWaitingOnVariant(
+          SERIAL_OFF_VARIANT,
+          () =>
+            catalog.updateVariant(db, ownerCtx, { id: SERIAL_OFF_VARIANT, isSerialized: false }),
+          async () => {
+            expect(await isHeld("inventory_lots", lotId)).toBe(false);
+          },
+        );
+
+        expect(outcome.status).toBe("fulfilled");
+      });
+
+      it("la propagación de requires_serial a las variantes del reloj (catalog.product.update)", async () => {
+        const lotLow = await seedLot(WATCH_LOW, "unit", 2);
+        const lotHigh = await seedLot(WATCH_HIGH, "unit", 2);
+        const product = await q<{ product_id: string }>(
+          "SELECT product_id FROM app.product_variants WHERE id = $1",
+          [WATCH_LOW],
+        );
+
+        const outcome = await pathWaitingOnVariant(
+          WATCH_LOW,
+          () =>
+            catalog.updateProduct(db, ownerCtx, {
+              id: product.rows[0]!.product_id,
+              watchDetails: { requiresSerial: false },
+            }),
+          async () => {
+            // La variante de id bajo la retiene la compuerta: todavía no tiene la de id alto ni
+            // ningún lote de las dos.
+            expect(await isHeld("product_variants", WATCH_HIGH)).toBe(false);
+            expect(await isHeld("inventory_lots", lotLow)).toBe(false);
+            expect(await isHeld("inventory_lots", lotHigh)).toBe(false);
+          },
+        );
+
+        expect(outcome.status).toBe("fulfilled");
       });
     });
 
