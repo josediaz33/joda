@@ -1809,12 +1809,15 @@ describe(
 
         const rows = await reservationsOf(planned.order.id);
         expect(rows).toHaveLength(4);
-        expect(rows.map((row) => [row.variant_id, row.lot_id, row.qty])).toEqual([
-          [scenario.bulkVariantId, bulkLotId, "10.200"],
-          [scenario.vialVariantId, null, "1.000"],
-          [scenario.atomizerVariantId, null, "1.000"],
-          [scenario.labelVariantId, null, "1.000"],
-        ]);
+        // Las cuatro nacen en la misma transacción (mismo created_at): el orden no es parte del contrato.
+        expect(rows.map((row) => [row.variant_id, row.lot_id, row.qty])).toEqual(
+          expect.arrayContaining([
+            [scenario.bulkVariantId, bulkLotId, "10.200"],
+            [scenario.vialVariantId, null, "1.000"],
+            [scenario.atomizerVariantId, null, "1.000"],
+            [scenario.labelVariantId, null, "1.000"],
+          ]),
+        );
         expect(
           rows.every(
             (row) =>
@@ -1999,11 +2002,16 @@ describe(
         await seedBulkLot(scenario.bulkVariantId, { qty: 114.65, unitCostPyg: 11_972 });
         await seedSupplies(scenario);
         const planned = await planOk(scenario);
+        // Liberar exige la sesión viva de quien lo hace (la política de la tabla, 0041).
+        const liveSession = await testDb.superuserClient.query(
+          `SELECT id FROM app.staff_sessions WHERE staff_user_id = $1 AND revoked_at IS NULL ORDER BY created_at DESC LIMIT 1`,
+          [STAFF_OWNER_ID],
+        );
         const session = {
           userId: STAFF_OWNER_ID,
           tenantId: TENANT_ID,
           audience: "staff" as const,
-          sessionId: null,
+          sessionId: liveSession.rows[0].id as string,
         };
         const release = () =>
           withTenantTx(db, session, (tx) =>

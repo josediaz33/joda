@@ -6,6 +6,7 @@ import { uuidGenerator } from "../../adapters/uuidGenerator.js";
 import { jodaApiConnectionUrl, startTestDb, type TestDb } from "../../db/testDb.js";
 import { withTenantTx } from "../../db/withTenantTx.js";
 import type { RequestContext } from "../../trpc/context.js";
+import * as decant from "../decant/service.js";
 import * as inventory from "../inventory/service.js";
 import * as sales from "../sales/service.js";
 import { SALE_ORDER_REFERENCE, releaseReservationsOf } from "./service.js";
@@ -19,9 +20,11 @@ const OTHER_TENANT = "c18b0000-0000-4000-a000-000000000002";
 const OWNER = "c18b0000-0000-4000-a000-0000000000a1";
 const SELLER = "c18b0000-0000-4000-a000-0000000000a2";
 const OTHER_OWNER = "c18b0000-0000-4000-a000-0000000000a3";
+const WAREHOUSE = "c18b0000-0000-4000-a000-0000000000a4";
 const OWNER_SESSION = "c18b0000-0000-4000-a000-0000000000b1";
 const SELLER_SESSION = "c18b0000-0000-4000-a000-0000000000b2";
 const OTHER_SESSION = "c18b0000-0000-4000-a000-0000000000b3";
+const WAREHOUSE_SESSION = "c18b0000-0000-4000-a000-0000000000b4";
 const CHANNEL = "c18b0000-0000-4000-a000-0000000000c1";
 const OTHER_CHANNEL = "c18b0000-0000-4000-a000-0000000000c2";
 
@@ -38,6 +41,14 @@ const sellerCtx: sales.SalesContext = {
   userId: SELLER,
   audience: "staff",
   sessionId: SELLER_SESSION,
+  auditMeta,
+};
+// El depósito: lee y mueve stock, pero no vende (no tiene sales.order:write).
+const warehouseCtx: sales.SalesContext = {
+  tenantId: TENANT,
+  userId: WAREHOUSE,
+  audience: "staff",
+  sessionId: WAREHOUSE_SESSION,
   auditMeta,
 };
 const otherCtx: sales.SalesContext = {
@@ -262,6 +273,18 @@ describe(
         [SELLER_SESSION, TENANT, SELLER],
       );
       // Varias conexiones: la carrera de dos aperturas necesita dos transacciones de joda_api a la vez.
+      await q(
+        "INSERT INTO app.staff_users (id, tenant_id, auth_subject, email, full_name) VALUES ($1, $2, 'c18b-warehouse', 'c18b-warehouse@test.local', 'Depósito')",
+        [WAREHOUSE, TENANT],
+      );
+      await q(
+        "INSERT INTO app.staff_user_roles (tenant_id, staff_user_id, role_id) SELECT $1, $2, id FROM app.roles WHERE tenant_id = $1 AND code = 'deposito'",
+        [TENANT, WAREHOUSE],
+      );
+      await q(
+        "INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at) VALUES ($1, $2, $3, now() + interval '1 day')",
+        [WAREHOUSE_SESSION, TENANT, WAREHOUSE],
+      );
       db = new PrismaClient({
         datasourceUrl: jodaApiConnectionUrl(testDb.container, { connection_limit: "8" }),
       });
@@ -379,6 +402,20 @@ describe(
         expect(error.details).toEqual({
           shortages: [{ variantId, sku: expect.any(String), requested: 6, available: 5 }],
         });
+      });
+
+      it("RN-RES-07 · dos pedidos que piden a la vez más de lo que hay no reservan los dos: con 3 en stock, 2 + 2 deja pasar uno solo", async () => {
+        const { variantId } = await seedVariant(TENANT, { stock: 3 });
+        const first = await draft(ownerCtx, CHANNEL, [{ variantId, qty: "2" }]);
+        const second = await draft(ownerCtx, CHANNEL, [{ variantId, qty: "2" }]);
+
+        const outcomes = await Promise.allSettled([
+          toAwaiting(ownerCtx, first.id),
+          toAwaiting(sellerCtx, second.id),
+        ]);
+
+        expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(["fulfilled", "rejected"]);
+        expect(await stockOf(variantId)).toEqual({ onHand: 3, reserved: 2, available: 1 });
       });
 
       it("todo o nada: si una línea no alcanza no se reserva ninguna de las que sí, ni cambia el estado", async () => {
@@ -515,6 +552,21 @@ describe(
         const cancelled = await cancel(ownerCtx, order.id);
 
         expect(cancelled.reservations[0]!.releasedAt).toBe(NOW.toISOString());
+      });
+
+      it("quien no puede liberarlas (el depósito no vende: sin sales.order:write) recibe 403 y no queda nada liberado, no un 0 en silencio", async () => {
+        const { variantId } = await seedVariant(TENANT, { stock: 2 });
+        const order = await draft(ownerCtx, CHANNEL, [{ variantId, qty: "1" }]);
+        await toAwaiting(ownerCtx, order.id);
+
+        const error = await errorOf(
+          withTenantTx(db, warehouseCtx, (tx) =>
+            releaseReservationsOf(tx, warehouseCtx, SALE_ORDER_REFERENCE, order.id, deps),
+          ),
+        );
+
+        expect(error.code).toBe("FORBIDDEN_INSUFFICIENT_PERMISSION");
+        expect((await reservationRows(order.id))[0]!.released_at).toBeNull();
       });
 
       it("RN-RES-04 · una liberada no se reactiva ni se libera dos veces: soltar de nuevo no toca nada", async () => {
@@ -792,6 +844,79 @@ describe(
 
         const next = await releaseExpiredReservations({ db, clock: AT(26) });
         expect(next).toEqual({ tenants: 1, released: 1, failedTenantIds: [] });
+      });
+    });
+
+    // -------------------------------------------------------------------
+    describe("RN-FRA-02, RN-RES-07 · planificar dos decants a la vez sobre el mismo granel", () => {
+      async function decantScenario(bulkMl: number) {
+        const product = await q<{ id: string }>(
+          "INSERT INTO app.products (tenant_id, kind, slug, name) VALUES ($1, 'perfume', $2, 'Layton') RETURNING id",
+          [TENANT, `c18b-decant-${next()}`],
+        );
+        const productId = product.rows[0]!.id;
+        await q(
+          "INSERT INTO app.perfume_details (product_id, tenant_id, concentration, nominal_volume_ml, olfactory_family, waste_factor) VALUES ($1, $2, 'edp', 100, 'amaderado', 0.02)",
+          [productId, TENANT],
+        );
+        const variant = async (
+          type: string,
+          uom: string,
+          sizeMl: number | null,
+          source?: string,
+        ) => {
+          const row = await q<{ id: string }>(
+            `INSERT INTO app.product_variants
+               (tenant_id, product_id, sku, variant_type, uom, size_ml, price_pyg, production_mode, source_variant_id)
+             VALUES ($1, $2, $3, $4::app.variant_type, $5::app.uom, $6, 0, $7::app.production_mode, $8) RETURNING id`,
+            [
+              TENANT,
+              productId,
+              `C18B-D${next()}`,
+              type,
+              uom,
+              sizeMl,
+              source ? "made_to_order" : "stocked",
+              source ?? null,
+            ],
+          );
+          return row.rows[0]!.id;
+        };
+        const bulk = await variant("bulk", "ml", null);
+        const target = await variant("decant", "ml", 10, bulk);
+        const vial = await variant("supply", "unit", null);
+        await q(
+          "INSERT INTO app.bom_components (tenant_id, parent_variant_id, component_variant_id, qty_per_unit, uom) VALUES ($1, $2, $3, 1, 'unit')",
+          [TENANT, target, vial],
+        );
+        const bulkLot = await seedLot(TENANT, bulk, "ml", bulkMl);
+        await q(
+          "UPDATE app.inventory_lots SET status = 'open_for_decant', opened_at = now() WHERE id = $1",
+          [bulkLot],
+        );
+        await seedLot(TENANT, vial, "unit", 50);
+        return { bulk, target, vial, bulkLot };
+      }
+
+      it("con granel para un solo plan, dos planes simultáneos: uno reserva y el otro se rechaza (sin el bloqueo de la variante pasaban los dos)", async () => {
+        const scenario = await decantScenario(15);
+        const first = await draft(ownerCtx, CHANNEL, [{ variantId: scenario.vial, qty: "1" }]);
+        const second = await draft(ownerCtx, CHANNEL, [{ variantId: scenario.vial, qty: "1" }]);
+        const plan = (saleOrderId: string) =>
+          decant.planWorkOrder(db, { clock }, requestContext(ownerCtx), {
+            saleOrderId,
+            targetVariantId: scenario.target,
+            qtyUnits: 1,
+          });
+
+        const outcomes = await Promise.allSettled([plan(first.id), plan(second.id)]);
+
+        expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(["fulfilled", "rejected"]);
+        const reserved = await q<{ ml: string }>(
+          "SELECT COALESCE(sum(qty), 0)::text AS ml FROM app.stock_reservations WHERE lot_id = $1 AND released_at IS NULL",
+          [scenario.bulkLot],
+        );
+        expect(Number(reserved.rows[0]!.ml)).toBe(10.2);
       });
     });
 

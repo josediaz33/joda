@@ -190,6 +190,12 @@ export async function reserveOrderLines(
  * `released_at`: la fila no se borra y una liberada no se reactiva (RN-RES-04).
  * Toma antes el bloqueo de las variantes involucradas (RN-RES-07). Devuelve
  * cuántas liberó; sin reservas sin liberar, 0 y no toca nada.
+ *
+ * **Quien no puede liberarlas recibe 403, no un 0 en silencio.** La política de
+ * UPDATE de la tabla (0041) exige el permiso del `reason` y, cuando falta, oculta
+ * la fila: el `UPDATE` afecta cero filas y no da error. Si después de soltar
+ * quedan reservas sin liberar del origen, es que la política las ocultó (nadie
+ * más las puede estar tomando: las variantes están bloqueadas).
  */
 export async function releaseReservationsOf(
   tx: TenantTx,
@@ -214,6 +220,21 @@ export async function releaseReservationsOf(
     referenceId,
     deps.clock.now(),
   );
+  const stillOpen = await repo.listOpenReservationVariantIds(
+    tx,
+    tenantId,
+    referenceType,
+    referenceId,
+  );
+  if (stillOpen.length > 0) {
+    throw toTRPCError(
+      appError(
+        "FORBIDDEN_INSUFFICIENT_PERMISSION",
+        403,
+        "No tenés permiso para liberar estas reservas.",
+      ),
+    );
+  }
   return released.length;
 }
 
