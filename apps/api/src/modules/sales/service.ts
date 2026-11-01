@@ -23,6 +23,13 @@ import {
   toTRPCError,
   type ApiError,
 } from "../../middleware/errorMapper.js";
+import { shareLockVariantsAscending } from "../../db/stockLocks.js";
+import {
+  listOrderReservations,
+  releaseReservationsOf,
+  reserveOrderLines,
+  SALE_ORDER_REFERENCE,
+} from "../reservations/service.js";
 import { toSaleOrder } from "./mappers.js";
 import * as repo from "./repository.js";
 
@@ -126,19 +133,22 @@ export async function listOrders(
 ) {
   const limit = input.limit ?? DEFAULT_PAGE_SIZE;
   const cursor = cursorId(input.cursor);
-  return withTenantTx(db, ctx, async (tx) =>
-    page(
-      await repo.listOrders(tx, {
-        tenantId: ctx.tenantId,
-        cursor,
-        limit,
-        status: input.status,
-        customerId: input.customerId,
-      }),
+  return withTenantTx(db, ctx, async (tx) => {
+    const rows = await repo.listOrders(tx, {
+      tenantId: ctx.tenantId,
+      cursor,
       limit,
-      toSaleOrder,
-    ),
-  );
+      status: input.status,
+      customerId: input.customerId,
+    });
+    // La página son `limit` pedidos (la fila de más solo dice si hay otra): las reservas de esos.
+    const reservations = await listOrderReservations(
+      tx,
+      ctx.tenantId,
+      rows.slice(0, limit).map((row) => row.id),
+    );
+    return page(rows, limit, (row) => toSaleOrder(row, reservations.get(row.id)));
+  });
 }
 
 export async function getOrder(
@@ -149,13 +159,14 @@ export async function getOrder(
   return withTenantTx(db, ctx, async (tx) => {
     const row = await repo.findOrder(tx, ctx.tenantId, id);
     if (!row) throw toTRPCError(NOT_FOUND);
-    return toSaleOrder(row);
+    return toSaleOrder(row, (await listOrderReservations(tx, ctx.tenantId, [id])).get(id));
   });
 }
 
 /**
  * Crea el pedido en `draft` (RN-EST-02). No toca inventario ni reservas
- * (RN-VTA-02): consumir es de WP-C19, reservar de WP-C18.
+ * (RN-VTA-02, RN-RES-01): consumir es de WP-C19, y la reserva nace al pasar el
+ * pedido a `awaiting_payment` (`transitionOrder`, WP-C18b).
  *
  * La creación NO registra una transición `null → draft`. `sale_order_transitions`
  * es append-only y su FK al pedido es `ON DELETE CASCADE`: con esa fila, borrar
@@ -186,6 +197,10 @@ export async function createOrder(
     }
 
     const variantIds = [...new Set(input.lines.map((line) => line.variantId))];
+    // Las líneas referencian varias variantes y la FK toma `KEY SHARE` sobre cada
+    // una en el orden de las filas: contra quien reserva (`FOR UPDATE` ascendente,
+    // RN-RES-07) eso puede interbloquearse. Se toman antes, en el mismo orden.
+    await shareLockVariantsAscending(tx, ctx.tenantId, variantIds);
     const variants = await repo.findVariants(tx, ctx.tenantId, variantIds);
     if (variants.length !== variantIds.length) {
       validation("VALIDATION_VARIANT_UNAVAILABLE", "Una variante no está disponible.");
@@ -301,6 +316,7 @@ export async function createOrder(
     });
     const row = await repo.findOrder(tx, ctx.tenantId, id);
     if (!row) throw new Error("pedido recién creado no se pudo releer");
+    // Un borrador no reserva nada (RN-VTA-02, RN-RES-01): la reserva nace al pasar a `awaiting_payment`.
     return toSaleOrder(row);
   });
 }
@@ -359,12 +375,17 @@ export async function removeOrder(db: PrismaClient, ctx: SalesContext, id: strin
  * awaiting_payment` y la cancelación desde `draft` o `awaiting_payment`. La
  * máquina de estados es la de `packages/domain` (RN-EST-02).
  *
+ * **Pasar a `awaiting_payment` reserva el stock del pedido en esta misma
+ * transacción** (RF-VTA-04, RN-RES-06; `reserveOrderLines`): por variante, por
+ * unidad serializada para un reloj, y nada para un decant bajo pedido (lo
+ * compromete el plan del fraccionamiento). Si algo no alcanza, 409 y no cambia
+ * nada. **Cancelar suelta las reservas del pedido** (`released_at`).
+ *
  * Cancelar no se hace con órdenes de fraccionamiento sin cancelar: quedarían
  * colgadas de un pedido que no va a ocurrir, y hoy `inventory.decant.plan`
  * acepta una venta en cualquier estado (solo verifica que exista; C19 lo
- * restringe a `awaiting_payment` o `paid`). Cancelar las órdenes es de
- * WP-C13c. Tampoco suelta ninguna reserva: no hay (WP-C18); cuando C18 las
- * cree, soltarlas al cancelar es suyo.
+ * restringe a `awaiting_payment` o `paid`). Cancelar las órdenes —y soltar
+ * sus reservas de granel e insumos— es de WP-C13c.
  */
 export async function transitionOrder(
   db: PrismaClient,
@@ -400,6 +421,27 @@ export async function transitionOrder(
       );
     }
     const now = deps.clock.now();
+    // RN-RES-07: la fila del pedido ya está bloqueada (primero la entidad); las
+    // variantes las bloquea el servicio de reservas, antes de leer el disponible.
+    let reservationsCreated = 0;
+    let reservationsReleased = 0;
+    if (result.value === "awaiting_payment") {
+      reservationsCreated = await reserveOrderLines(
+        tx,
+        ctx,
+        input.id,
+        before.sale_order_lines,
+        deps,
+      );
+    } else if (result.value === "cancelled") {
+      reservationsReleased = await releaseReservationsOf(
+        tx,
+        ctx,
+        SALE_ORDER_REFERENCE,
+        input.id,
+        deps,
+      );
+    }
     const updated = await repo.updateOrderStatus(tx, ctx.tenantId, input.id, before.status, {
       status: result.value,
       ...(result.value === "awaiting_payment" && { placedAt: now }),
@@ -422,10 +464,17 @@ export async function transitionOrder(
       "sales.order.transition",
       input.id,
       { status: before.status },
-      { status: result.value },
+      {
+        status: result.value,
+        ...(result.value === "awaiting_payment" && { reservationsCreated }),
+        ...(result.value === "cancelled" && { reservationsReleased }),
+      },
     );
     const row = await repo.findOrder(tx, ctx.tenantId, input.id);
     if (!row) throw new Error("pedido actualizado no se pudo releer");
-    return toSaleOrder(row);
+    return toSaleOrder(
+      row,
+      (await listOrderReservations(tx, ctx.tenantId, [input.id])).get(input.id),
+    );
   });
 }

@@ -82,11 +82,17 @@ export interface OpenLotInput {
   readonly nominalVolumeMl: number;
   /**
    * Disponible de la VARIANTE sellada (`v_stock_available.available`): saldo
-   * de todos sus lotes menos las reservas vivas. Una reserva no está atada a
-   * un lote concreto todavía (WP-C18), así que abrir la última unidad
-   * reservada se decide a este nivel.
+   * de todos sus lotes menos las reservas vivas. Una reserva es por variante
+   * por defecto (RN-RES-06), así que abrir la última unidad reservada se
+   * decide a este nivel.
    */
   readonly variantAvailable: Quantity;
+  /**
+   * El lote tiene una reserva viva ATADA a él (`stock_reservations.lot_id`,
+   * RN-RES-06): esa reserva es una promesa sobre ese frasco concreto, y abrirlo
+   * la rompería. Decidido por José el 2026-10-29 (RN-LOT-02, WP-C18b).
+   */
+  readonly lotHasLiveReservation: boolean;
   readonly clock: Clock;
   readonly idGenerator: IdGenerator;
 }
@@ -98,6 +104,7 @@ export interface OpenLotInput {
 export type LotOpeningError =
   | { readonly code: "SEALED_LOT_NOT_OPENABLE"; readonly status: LotStatus }
   | { readonly code: "SEALED_LOT_WITHOUT_STOCK"; readonly onHand: Quantity }
+  | { readonly code: "SEALED_LOT_RESERVED" }
   | { readonly code: "SEALED_VARIANT_NOT_AVAILABLE"; readonly available: Quantity };
 
 /** El lote sellado de UNA unidad que nace de separar un frasco de un lote de varios. */
@@ -218,8 +225,8 @@ function transferOut(
  * granel hijo. Solo un lote `available` es abrible: cualquier otro estado se
  * rechaza, incluido `open_for_decant` — es el caso borde #5, "un lote solo
  * se abre una vez", no una excepción aparte de esta regla general. Tampoco
- * se abre un lote sin frascos, ni la última unidad de la variante si está
- * reservada.
+ * se abre un lote sin frascos, ni uno con una reserva viva propia (RN-RES-06),
+ * ni la última unidad de la variante si está reservada.
  *
  * Si el lote nació con más de una unidad, separa primero la de esta apertura
  * en su propio lote (caso borde 21).
@@ -243,6 +250,9 @@ export function openLot(input: OpenLotInput): Result<LotOpening, LotOpeningError
   }
   if (sealedLot.onHand.compare(ONE_UNIT) < 0) {
     return err({ code: "SEALED_LOT_WITHOUT_STOCK", onHand: sealedLot.onHand });
+  }
+  if (input.lotHasLiveReservation) {
+    return err({ code: "SEALED_LOT_RESERVED" });
   }
   if (input.variantAvailable.compare(ONE_UNIT) < 0) {
     return err({ code: "SEALED_VARIANT_NOT_AVAILABLE", available: input.variantAvailable });

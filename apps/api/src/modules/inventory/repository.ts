@@ -65,15 +65,14 @@ interface LotForAdjustmentQueryRow {
 }
 
 /**
- * Bloquea la fila del lote (docs/api-conventions.md §8.2: "bloqueo de
- * lotes... en una sola sentencia" — acá un único lote, pero misma
- * disciplina: cualquier otra operación que toque el saldo de ESTE lote
- * queda serializada detrás de este `FOR UPDATE`, dentro de la misma
- * transacción, desde antes de decidir nada). Prisma no expone `FOR UPDATE`
- * en su query builder — `$queryRaw` es la única vía; `FOR UPDATE OF l`
- * bloquea solo `inventory_lots`, no la fila de `inventory_balances` (no
- * hace falta: cualquier otro escritor que respete esta misma disciplina
- * pasa primero por este lock antes de tocar el saldo).
+ * Lee el lote de un ajuste con su saldo. **El bloqueo ya lo tomó el servicio**
+ * con `lockLotWithItsVariant` (`db/stockLocks.ts`, RN-RES-07): primero la
+ * variante y después el lote, y cualquier otra operación que toque el saldo de
+ * ESTE lote queda serializada detrás de ellos, dentro de la misma transacción,
+ * desde antes de decidir nada. Esta lectura va DESPUÉS, con una sentencia
+ * nueva: en READ COMMITTED ve lo que dejó quien tenía el bloqueo antes. No
+ * toma ningún bloqueo propio: bloquear acá el lote sin haber tomado la variante
+ * es justo el orden que RN-RES-07 prohíbe.
  */
 export async function findLotForAdjustment(
   tx: TenantTx,
@@ -86,8 +85,7 @@ export async function findLotForAdjustment(
     SELECT l.id, l.variant_id, l.uom, l.unit_landed_cost_pyg, b.on_hand
       FROM app.inventory_lots l
       JOIN app.inventory_balances b ON b.lot_id = l.id
-     WHERE l.id = ${lotId}::uuid
-       FOR UPDATE OF l`;
+     WHERE l.id = ${lotId}::uuid`;
   const row = rows[0];
   if (!row) return null;
   return {
@@ -168,35 +166,37 @@ export type LotForOpeningRow = Prisma.inventory_lotsGetPayload<{
 }>;
 
 /**
- * Bloquea la fila de UN lote (`FOR UPDATE`) y dice si existe. Prisma no
- * expone `FOR UPDATE`, así que va por `$queryRaw`; la lectura tipada se hace
- * después, con el cliente: en READ COMMITTED cada sentencia toma un snapshot
- * nuevo, y esa lectura (o un conteo) ya ve lo que dejó quien tenía el
- * bloqueo antes.
- *
- * Es un solo lote. Con más de uno habría que tomarlos en orden ascendente de
- * `lot_id` y en una sola sentencia (.claude/rules/api.md, "Concurrencia").
- */
-async function lockLotRow(tx: TenantTx, lotId: string): Promise<boolean> {
-  const locked = await tx.$queryRaw<{ id: string }[]>`
-    SELECT l.id FROM app.inventory_lots l WHERE l.id = ${lotId}::uuid FOR UPDATE OF l`;
-  return locked.length > 0;
-}
-
-/**
- * Bloquea el lote a abrir y lo lee. Es el único lote que se bloquea: los que
- * nacen en la apertura son nuevos e invisibles para cualquier otra
- * transacción. Dos aperturas del mismo lote se serializan acá: la segunda
- * espera, lee `open_for_decant` y el dominio la rechaza (caso borde 5).
+ * El sellado a abrir, con su saldo y su variante, SIN bloquear. El servicio
+ * toma antes el bloqueo de la variante del sellado y la del granel, y después
+ * el lote (`lockVariantsThenLots`, RN-RES-07), y recién entonces llama a esta
+ * lectura: en READ COMMITTED cada sentencia toma un snapshot nuevo, así que ve
+ * lo que dejó quien tenía el bloqueo antes. Los lotes que nacen en la apertura
+ * son nuevos e invisibles para cualquier otra transacción: no se bloquean. Dos
+ * aperturas del mismo lote se serializan por la variante: la segunda espera,
+ * lee `open_for_decant` y el dominio la rechaza (caso borde 5).
  */
 export async function findLotForOpening(
   tx: TenantTx,
   lotId: string,
 ): Promise<LotForOpeningRow | null> {
-  if (!(await lockLotRow(tx, lotId))) return null;
   return tx.inventory_lots.findFirst({
     where: { id: lotId },
     include: LOT_FOR_OPENING_INCLUDE,
+  });
+}
+
+/**
+ * Lo mínimo del lote a abrir, leído SIN bloquear: de qué variante es, de qué
+ * producto y de qué tipo. Con eso el servicio sabe QUÉ variantes bloquear antes
+ * que el lote (RN-RES-07); el lote se relee y se revalida ya bloqueado.
+ */
+export async function peekLotForOpening(tx: TenantTx, lotId: string) {
+  return tx.inventory_lots.findFirst({
+    where: { id: lotId },
+    select: {
+      variant_id: true,
+      product_variants: { select: { product_id: true, variant_type: true } },
+    },
   });
 }
 
@@ -336,18 +336,18 @@ export type LotForSerialsRow = Prisma.inventory_lotsGetPayload<{
 }>;
 
 /**
- * Bloquea el lote (`FOR UPDATE`) y lo lee. RN-SER-03 (las unidades
+ * Lee el lote contra el que se registra una unidad. RN-SER-03 (las unidades
  * registradas no superan `qty_initial`) es una lectura seguida de una
  * escritura: dos altas simultáneas ven "2 de 3" y registran la cuarta. El
- * bloqueo tiene que tomarse ANTES de contar, y solo lo cierra si todas las
- * altas del lote pasan por acá. Un `CHECK` no lo puede impedir: cuenta filas
- * de otra tabla.
+ * bloqueo (la variante y después el lote, `lockLotWithItsVariant`, RN-RES-07)
+ * tiene que tomarse ANTES de contar, y solo lo cierra si todas las altas del
+ * lote pasan por ahí. Un `CHECK` no lo puede impedir: cuenta filas de otra
+ * tabla.
  */
 export async function findLotForSerialRegistration(
   tx: TenantTx,
   lotId: string,
 ): Promise<LotForSerialsRow | null> {
-  if (!(await lockLotRow(tx, lotId))) return null;
   return tx.inventory_lots.findFirst({
     where: { id: lotId },
     include: LOT_FOR_SERIALS_INCLUDE,
@@ -357,60 +357,6 @@ export async function findLotForSerialRegistration(
 /** Unidades registradas del lote, de TODOS los estados: las vendidas también cuentan (RN-SER-03). */
 export async function countSerializedUnitsOfLot(tx: TenantTx, lotId: string): Promise<number> {
   return tx.serialized_units.count({ where: { lot_id: lotId } });
-}
-
-/**
- * Bloquea TODOS los lotes de la variante, en una sola sentencia y en orden
- * ascendente de `id` (.claude/rules/api.md, "Concurrencia"): no le saques el
- * `ORDER BY`, es lo que evita el interbloqueo con otra operación que tome
- * varios lotes. Lo usa `catalog.variant.update` antes de apagar
- * `is_serialized` (WP-C08d), por el mismo motivo por el que el alta de una
- * unidad bloquea su lote antes de contar: sin esto, un alta en vuelo cuya
- * unidad todavía no se confirmó pasa inadvertida al contar, y la variante
- * queda sin serializar con una unidad colgando.
- *
- * Es `NO KEY UPDATE` y no `UPDATE` a propósito: choca con el `FOR UPDATE` del
- * alta de unidad (`lockLotRow`), que es lo que hace falta, pero no con el
- * `FOR KEY SHARE` que toma cada movimiento por la FK. Sí espera a cualquier
- * otro `FOR UPDATE` sobre esos lotes (ajustes, ejecución de decants, altas de
- * unidades); todos toman los suyos en orden ascendente de `id`.
- *
- * **Corre con la visibilidad de quien llama.** Con RLS, un `FOR UPDATE` solo
- * toma las filas que pasan la política de lectura de `inventory_lots`
- * (`inventory.stock:read`) Y la de UPDATE (`market.purchase_order:receive`,
- * `inventory.decant:execute`, `sales.order:refund` o `inventory.stock:adjust`):
- * a quien le falta cualquiera de las dos no le bloquea nada, y no hay error.
- * `catalog.variant.update` exige `catalog.product:write`, que hoy solo tienen
- * `owner` y `manager`, con todos los permisos; con roles a medida (WP-C24) sí
- * puede pasar. Tampoco ve un lote que nace después con sus unidades. El
- * cierre real es un invariante en la base: WP-B20.
- */
-export async function lockLotsOfVariant(tx: TenantTx, variantId: string): Promise<void> {
-  await tx.$queryRaw`
-    SELECT l.id FROM app.inventory_lots l
-    WHERE l.variant_id = ${variantId}::uuid
-    ORDER BY l.id
-    FOR NO KEY UPDATE OF l`;
-}
-
-/**
- * Lo mismo que `lockLotsOfVariant`, para varias variantes en UNA sola sentencia y
- * en orden ascendente de `id` de lote (.claude/rules/api.md, «Concurrencia»):
- * apagar `is_serialized` en todas las variantes de un reloj no puede consultar
- * en un bucle, ni tomar los lotes en un orden distinto al de las altas y los
- * ajustes. Mismos límites que `lockLotsOfVariant` (visibilidad de quien llama,
- * lotes que nacen después): el cierre real es WP-B20. `::uuid[]` explícito
- * porque Prisma manda el arreglo como `text[]`.
- */
-export async function lockLotsOfVariants(
-  tx: TenantTx,
-  variantIds: readonly string[],
-): Promise<void> {
-  await tx.$queryRaw`
-    SELECT l.id FROM app.inventory_lots l
-    WHERE l.variant_id = ANY(${[...variantIds]}::uuid[])
-    ORDER BY l.id
-    FOR NO KEY UPDATE OF l`;
 }
 
 /** Unidades registradas de la variante, de TODOS los estados: las vendidas también cuentan (RN-SER-03). */

@@ -179,6 +179,19 @@ describe(
       );
     }
 
+    // WP-C18b: pasar un pedido a `awaiting_payment` reserva, y reservar exige stock. Cada
+    // variante que estas pruebas transicionan recibe un lote con saldo (una recepción de compra).
+    async function seedStock(tenantId: string, variantId: string, qty: number) {
+      const lot = await q<{ id: string }>(
+        "INSERT INTO app.inventory_lots (tenant_id, variant_id, qty_initial, uom, unit_cost_minor, currency, fx_rate_to_pyg, landed_cost_pyg, unit_landed_cost_pyg) VALUES ($1, $2, $3, 'unit', 0, 'PYG', 1, 0, 0) RETURNING id",
+        [tenantId, variantId, qty],
+      );
+      await q(
+        "INSERT INTO app.inventory_movements (tenant_id, lot_id, variant_id, qty, uom, movement_type, total_cost_pyg) VALUES ($1, $2, $3, $4, 'unit', 'purchase_receipt', 0)",
+        [tenantId, lot.rows[0]!.id, variantId, qty],
+      );
+    }
+
     const oneLine = (variantId: string, qty = "1") => ({ variantId, qty });
 
     // Una orden de fraccionamiento colgada del pedido (la planificó WP-C13; acá se arma a mano).
@@ -276,6 +289,12 @@ describe(
         serialized: true,
       });
       await seedVariant(CODES_TENANT, V_CODES, "S-CODES", "accessory", { price: 100_000 });
+      for (const variantId of [V_TEN, V_FIVE, V_EXEMPT, V_THIRD, V_FREE, V_ODD]) {
+        await seedStock(TENANT, variantId, 1000);
+      }
+      for (const variantId of [V_WATCH, V_WATCH_2]) await seedStock(TENANT, variantId, 10);
+      await seedStock(OTHER_TENANT, V_OTHER, 1000);
+      await seedStock(CODES_TENANT, V_CODES, 1000);
       await seedUnit(TENANT, UNIT_1, V_WATCH, "RLX-0001");
       await seedUnit(TENANT, UNIT_2, V_WATCH, "RLX-0002");
       await seedUnit(TENANT, UNIT_SOLD, V_WATCH, "RLX-0003", "sold");
@@ -428,7 +447,12 @@ describe(
 
       // RN-VTA-02: el inventario se consume al confirmarse el pago, no al crear el pedido:
       // ni movimiento, ni reserva, ni la unidad serializada deja de estar disponible.
-      expect(await count("SELECT count(*)::int AS n FROM app.inventory_movements")).toBe(0);
+      // (Las recepciones de compra son el stock de partida que siembra `beforeAll`.)
+      expect(
+        await count(
+          "SELECT count(*)::int AS n FROM app.inventory_movements WHERE movement_type <> 'purchase_receipt'",
+        ),
+      ).toBe(0);
       expect(await count("SELECT count(*)::int AS n FROM app.stock_reservations")).toBe(0);
       expect(
         (
@@ -821,10 +845,14 @@ describe(
         {
           action: "sales.order.transition",
           before: { status: "draft" },
-          after: { status: "awaiting_payment" },
+          after: { status: "awaiting_payment", reservationsCreated: 1 },
         },
       ]);
-      expect(await count("SELECT count(*)::int AS n FROM app.inventory_movements")).toBe(0);
+      expect(
+        await count(
+          "SELECT count(*)::int AS n FROM app.inventory_movements WHERE movement_type <> 'purchase_receipt'",
+        ),
+      ).toBe(0);
     });
 
     it("RN-EST-02 · rechaza una transición inválida con su origen y su destino", async () => {

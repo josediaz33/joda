@@ -32,11 +32,13 @@ import {
 import type { PrismaClient } from "@joda/db";
 import { recordAuditEntry } from "../../db/audit.js";
 import { decodeCursor, encodeCursor } from "../../db/cursor.js";
+import { lockLotWithItsVariant, lockVariantsThenLots } from "../../db/stockLocks.js";
 import { withIdempotentTx } from "../../db/withIdempotentTx.js";
 import { withTenantTx, type TenantTx, type TenantTxContext } from "../../db/withTenantTx.js";
 import { buildIdempotencyRequest } from "../../middleware/idempotency.js";
 import { appError, toTRPCError } from "../../middleware/errorMapper.js";
 import type { RequestContext } from "../../trpc/context.js";
+import * as reservationsRepo from "../reservations/repository.js";
 import {
   toAdminLot,
   toAdminMovement,
@@ -124,6 +126,10 @@ export async function createAdjustment(
   const idempotency = buildIdempotencyRequest(ctx.req, input);
 
   const { result } = await withIdempotentTx(db, session, idempotency, async (tx) => {
+    // RN-RES-07: la variante del lote y después el lote, antes de leer el saldo.
+    if (!(await lockLotWithItsVariant(tx, session.tenantId, input.lotId))) {
+      throw toTRPCError(NOT_FOUND_ERROR);
+    }
     const lot = await repo.findLotForAdjustment(tx, input.lotId);
     if (!lot) throw toTRPCError(NOT_FOUND_ERROR);
 
@@ -243,6 +249,12 @@ function openingError(error: LotOpeningError) {
       return appError("CONFLICT_INSUFFICIENT_STOCK", 409, "El lote no tiene frascos para abrir.", {
         onHand: error.onHand.value,
       });
+    case "SEALED_LOT_RESERVED":
+      return appError(
+        "CONFLICT_LOT_RESERVED",
+        409,
+        "Este lote tiene una reserva vigente: es una promesa sobre ese frasco y abrirlo la rompería. Esperá a que se libere o abrí otro lote.",
+      );
     case "SEALED_VARIANT_NOT_AVAILABLE":
       return appError(
         "CONFLICT_INSUFFICIENT_STOCK",
@@ -264,29 +276,46 @@ export async function openLot(
   const idempotency = buildIdempotencyRequest(ctx.req, input);
 
   const { result } = await withIdempotentTx(db, session, idempotency, async (tx) => {
-    // Bloquea el lote y lo lee: dos aperturas del mismo lote se serializan
-    // acá, y la segunda ve `open_for_decant` (caso borde 5).
-    const lot = await repo.findLotForOpening(tx, input.lotId);
-    if (!lot) throw toTRPCError(NOT_FOUND_ERROR);
-    if (lot.product_variants.variant_type !== "sealed") throw toTRPCError(LOT_NOT_SEALED_ERROR);
+    // RN-RES-07 · el orden de bloqueo único. Quien solo conoce el lote lee su
+    // variante SIN bloquear, bloquea las variantes —la del sellado y la del
+    // granel que va a nacer: el `INSERT` del lote y de los movimientos del
+    // granel espera a quien tiene esa variante— y después el lote, y revalida.
+    const peek = await repo.peekLotForOpening(tx, input.lotId);
+    if (!peek) throw toTRPCError(NOT_FOUND_ERROR);
+    if (peek.product_variants.variant_type !== "sealed") throw toTRPCError(LOT_NOT_SEALED_ERROR);
 
-    const productId = lot.product_variants.product_id;
+    const productId = peek.product_variants.product_id;
     // A lo sumo una por producto: lo impone el índice único parcial de 0028.
     const [bulkVariantId] = await repo.findBulkVariantIds(tx, productId);
     if (bulkVariantId === undefined) throw toTRPCError(BULK_VARIANT_MISSING_ERROR);
+
+    await lockVariantsThenLots(tx, session.tenantId, {
+      variantIds: [peek.variant_id, bulkVariantId],
+      lotIds: [input.lotId],
+    });
+    // Con las variantes y el lote bloqueados: dos aperturas del mismo lote (o de
+    // lotes de la misma variante) se serializan, y la segunda ve `open_for_decant`
+    // (caso borde 5) y el disponible que dejó la primera.
+    const lot = await repo.findLotForOpening(tx, input.lotId);
+    if (!lot) throw toTRPCError(NOT_FOUND_ERROR);
+    if (lot.variant_id !== peek.variant_id) {
+      throw new Error(`el lote ${lot.id} cambió de variante mientras se bloqueaba`);
+    }
     const nominalVolumeMl = await repo.findNominalVolumeMl(tx, productId);
     if (nominalVolumeMl === null) throw toTRPCError(NOMINAL_VOLUME_MISSING_ERROR);
 
-    // Aceptado hasta WP-C18: esta lectura NO bloquea la variante, solo el lote.
-    // Dos aperturas de lotes distintos de la misma variante, con el último
-    // frasco reservado, podrían pasar las dos. Hoy no hay hueco real:
-    // `stock_reservations` está vacía hasta C18, que decide cómo se serializa
-    // esto (bloquear la fila de la variante, o atar la reserva a un lote).
-    // Bloquear la variante acá, sin ese diseño, podría cruzarse con el orden
-    // de bloqueo de lotes de la venta (RN-LOT-05, WP-C19).
+    // RN-RES-03, RN-LOT-02: disponible DESPUÉS de las reservas de la variante, y
+    // sin una reserva viva atada a este lote (RN-RES-06). Se lee con la variante
+    // bloqueada: nadie reserva ni abre otro frasco de ella entre esta lectura y
+    // la escritura, que era el hueco que dejó anotado WP-C11.
     const availability = toStockAvailability(
       lot.variant_id,
       await repo.findStockAvailability(tx, lot.variant_id),
+    );
+    const lotHasLiveReservation = await reservationsRepo.hasLiveReservationOnLot(
+      tx,
+      session.tenantId,
+      lot.id,
     );
 
     const plan = planLotOpening({
@@ -301,6 +330,7 @@ export async function openLot(
       },
       nominalVolumeMl,
       variantAvailable: Quantity.units(availability.available),
+      lotHasLiveReservation,
       clock: deps.clock,
       idGenerator: deps.idGenerator,
     });
@@ -514,6 +544,10 @@ export async function createSerializedUnit(
   const idempotency = buildIdempotencyRequest(ctx.req, input);
 
   const { result } = await withIdempotentTx(db, session, idempotency, async (tx) => {
+    // RN-RES-07: la variante del lote y después el lote, ANTES de contar.
+    if (!(await lockLotWithItsVariant(tx, session.tenantId, input.lotId))) {
+      throw toTRPCError(NOT_FOUND_ERROR);
+    }
     const lot = await repo.findLotForSerialRegistration(tx, input.lotId);
     if (!lot) throw toTRPCError(NOT_FOUND_ERROR);
 

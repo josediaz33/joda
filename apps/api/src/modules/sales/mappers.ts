@@ -1,7 +1,12 @@
 import type { SaleOrderDto } from "@joda/contracts";
+import { toSaleOrderReservation } from "../reservations/mappers.js";
+import type { ReservationRow } from "../reservations/repository.js";
 import type { SaleOrderRow } from "./repository.js";
 
-export function toSaleOrder(row: SaleOrderRow): SaleOrderDto {
+export function toSaleOrder(
+  row: SaleOrderRow,
+  reservations: readonly ReservationRow[] = [],
+): SaleOrderDto {
   return {
     id: row.id,
     channelId: row.channel_id,
@@ -44,5 +49,6 @@ export function toSaleOrder(row: SaleOrderRow): SaleOrderDto {
       reason: transition.reason,
       occurredAt: transition.occurred_at.toISOString(),
     })),
+    reservations: reservations.map(toSaleOrderReservation),
   };
 }

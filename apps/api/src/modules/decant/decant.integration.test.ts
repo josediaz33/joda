@@ -8,7 +8,9 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { createFakeStaffAuthProvider } from "../../adapters/staffAuth/fakeStaffAuthProvider.js";
 import { jodaApiConnectionUrl, startTestDb, type TestDb } from "../../db/testDb.js";
 import { buildServer } from "../../index.js";
+import { withTenantTx } from "../../db/withTenantTx.js";
 import type { AuthServiceDeps } from "../auth/service.js";
+import { DECANT_WORK_ORDER_REFERENCE, releaseReservationsOf } from "../reservations/service.js";
 
 // Integración real contra Postgres (.claude/rules/testing.md: "nunca
 // simulacros de Prisma"), mismo arnés que inventory.integration.test.ts
@@ -1564,14 +1566,22 @@ describe(
       it("con granel para una sola, la segunda ve el saldo real, falla y el saldo nunca queda negativo", async () => {
         const scenario = await createScenario();
         const bulkLotId = await seedBulkLot(scenario.bulkVariantId, {
-          qty: 10.5,
+          qty: 25,
           unitCostPyg: 11_972,
         });
         await seedSupplies(scenario);
-        // Sin reservas (WP-C18), las dos órdenes se planifican contra el mismo
-        // granel y las dos pasan: es exactamente el hueco que C18 cierra.
+        // Planificar reserva (WP-C18b): con 10,5 ml la segunda orden ya no se
+        // planifica. Las dos nacen con granel de sobra, y recién después un faltante
+        // real (una baja de ajuste) deja 10,5 ml, justo para una: la carrera de
+        // las dos ejecuciones sobre el mismo lote es la misma de siempre.
         const first = await plannedAndStarted(scenario);
         const second = await plannedAndStarted(scenario);
+        await testDb.superuserClient.query(
+          `INSERT INTO app.inventory_movements
+             (tenant_id, lot_id, variant_id, qty, uom, movement_type, created_by)
+           VALUES ($1, $2, $3, -14.5, 'ml', 'adjustment', $4)`,
+          [TENANT_ID, bulkLotId, scenario.bulkVariantId, STAFF_OWNER_ID],
+        );
 
         const responses = await Promise.all([execute(first, 0.35), execute(second, 0.35)]);
 
@@ -1751,6 +1761,267 @@ describe(
         const queue = await call<{ groups: unknown[] }>("inventory.decant.list", {});
 
         expect(queue.groups).toEqual([]);
+      });
+    });
+
+    // -------------------------------------------------------------------
+    describe("RN-FRA-01 / RN-FRA-02 / RN-RES-06 · planificar reserva el granel (atado al lote) y los insumos (por variante); ejecutar los libera (WP-C18b)", () => {
+      interface ReservationRow {
+        variant_id: string;
+        lot_id: string | null;
+        qty: string;
+        reason: string;
+        reference_type: string;
+        reference_id: string;
+        expires_at: Date;
+        released_at: Date | null;
+        created_by: string;
+      }
+
+      async function reservationsOf(orderId: string): Promise<ReservationRow[]> {
+        const result = await testDb.superuserClient.query(
+          `SELECT variant_id, lot_id, qty::text, reason::text, reference_type, reference_id,
+                  expires_at, released_at, created_by
+             FROM app.stock_reservations WHERE reference_id = $1 ORDER BY created_at, id`,
+          [orderId],
+        );
+        return result.rows;
+      }
+
+      async function stockOf(variantId: string) {
+        const result = await testDb.superuserClient.query(
+          `SELECT on_hand::float AS on_hand, reserved::float AS reserved, available::float AS available
+             FROM app.v_stock_available WHERE variant_id = $1`,
+          [variantId],
+        );
+        return result.rows[0];
+      }
+
+      it("el granel va atado al lote elegido y cada insumo del BOM a su variante, con el vencimiento de un plan (30 días)", async () => {
+        const scenario = await createScenario();
+        const bulkLotId = await seedBulkLot(scenario.bulkVariantId, {
+          qty: 114.65,
+          unitCostPyg: 11_972,
+        });
+        await seedSupplies(scenario);
+
+        const planned = await planOk(scenario);
+
+        const rows = await reservationsOf(planned.order.id);
+        expect(rows).toHaveLength(4);
+        expect(rows.map((row) => [row.variant_id, row.lot_id, row.qty])).toEqual([
+          [scenario.bulkVariantId, bulkLotId, "10.200"],
+          [scenario.vialVariantId, null, "1.000"],
+          [scenario.atomizerVariantId, null, "1.000"],
+          [scenario.labelVariantId, null, "1.000"],
+        ]);
+        expect(
+          rows.every(
+            (row) =>
+              row.reason === "decant_hold" &&
+              row.reference_type === "decant_work_order" &&
+              row.released_at === null &&
+              row.created_by === STAFF_OWNER_ID &&
+              row.expires_at.toISOString() === "2099-01-31T12:00:00.000Z",
+          ),
+        ).toBe(true);
+        // Reservar no consume (RN-FRA-01): el saldo no se movió, el disponible sí.
+        expect(await stockOf(scenario.bulkVariantId)).toEqual({
+          on_hand: 114.65,
+          reserved: 10.2,
+          available: 104.45,
+        });
+        expect(await stockOf(scenario.vialVariantId)).toEqual({
+          on_hand: 100,
+          reserved: 1,
+          available: 99,
+        });
+      });
+
+      it("dos planes no comprometen el mismo granel: con 15 ml, el primero reserva 10,2 y el segundo ve 4,8 y se rechaza", async () => {
+        const scenario = await createScenario();
+        await seedBulkLot(scenario.bulkVariantId, { qty: 15, unitCostPyg: 11_972 });
+        await seedSupplies(scenario);
+        await planOk(scenario);
+        const ordersBefore = await countWorkOrders();
+
+        const second = await plan(scenario);
+
+        expect(second.statusCode).toBe(409);
+        expect(errorCode(second)).toBe("CONFLICT_NO_BULK_AVAILABLE");
+        expect(second.json().error.data.details).toEqual({
+          requiredMl: 10.2,
+          largestAvailableMl: 4.8,
+        });
+        expect(await countWorkOrders()).toBe(ordersBefore);
+      });
+
+      it("con el lote pedido a mano (sourceLotId) también cuenta lo reservado: CONFLICT_INSUFFICIENT_BULK con el disponible neto", async () => {
+        const scenario = await createScenario();
+        const bulkLotId = await seedBulkLot(scenario.bulkVariantId, {
+          qty: 15,
+          unitCostPyg: 11_972,
+        });
+        await seedSupplies(scenario);
+        await planOk(scenario, { sourceLotId: bulkLotId });
+
+        const second = await plan(scenario, { sourceLotId: bulkLotId });
+
+        expect(second.statusCode).toBe(409);
+        expect(errorCode(second)).toBe("CONFLICT_INSUFFICIENT_BULK");
+        expect(second.json().error.data.details).toEqual({ required: 10.2, available: 4.8 });
+      });
+
+      it("lo que no alcanza en un frasco se busca en el siguiente: el segundo plan va al otro lote abierto", async () => {
+        const scenario = await createScenario();
+        const older = await seedBulkLot(scenario.bulkVariantId, {
+          qty: 12,
+          unitCostPyg: 11_972,
+          openedAt: "2026-02-15T10:00:00Z",
+        });
+        const newer = await seedBulkLot(scenario.bulkVariantId, {
+          qty: 50,
+          unitCostPyg: 11_972,
+          openedAt: "2026-03-01T10:00:00Z",
+        });
+        await seedSupplies(scenario);
+
+        const first = await planOk(scenario);
+        const second = await planOk(scenario);
+
+        expect(first.order.sourceLotId).toBe(older);
+        expect(second.order.sourceLotId).toBe(newer);
+      });
+
+      it("un insumo reservado tampoco se ofrece dos veces: con un solo vial, el primer plan lo reserva y el segundo se rechaza", async () => {
+        const scenario = await createScenario();
+        await seedBulkLot(scenario.bulkVariantId, { qty: 114.65, unitCostPyg: 11_972 });
+        await seedSupplyLot(scenario.vialVariantId, { qty: 1, unitCostPyg: 4_500 });
+        await seedSupplyLot(scenario.atomizerVariantId, { qty: 100, unitCostPyg: 2_500 });
+        await seedSupplyLot(scenario.labelVariantId, { qty: 100, unitCostPyg: 300 });
+        await planOk(scenario);
+
+        const second = await plan(scenario);
+
+        expect(second.statusCode).toBe(409);
+        expect(errorCode(second)).toBe("CONFLICT_INSUFFICIENT_BOM_COMPONENT");
+        expect(second.json().error.data.details).toMatchObject({
+          componentVariantId: scenario.vialVariantId,
+          required: 1,
+          available: 0,
+        });
+      });
+
+      it("un plan rechazado no deja ninguna reserva a medias", async () => {
+        const scenario = await createScenario();
+        await seedBulkLot(scenario.bulkVariantId, { qty: 114.65, unitCostPyg: 11_972 });
+        await seedSupplyLot(scenario.vialVariantId, { qty: 100, unitCostPyg: 4_500 });
+        await seedSupplyLot(scenario.atomizerVariantId, { qty: 100, unitCostPyg: 2_500 });
+        // Sin etiquetas: el plan falla después de haber leído el granel.
+
+        const response = await plan(scenario);
+
+        expect(response.statusCode).toBe(409);
+        const reserved = await testDb.superuserClient.query(
+          `SELECT count(*)::int AS n FROM app.stock_reservations WHERE variant_id = ANY($1::uuid[])`,
+          [[scenario.bulkVariantId, scenario.vialVariantId, scenario.atomizerVariantId]],
+        );
+        expect(reserved.rows[0].n).toBe(0);
+      });
+
+      it("ejecutar libera todo lo que la orden reservó (released_at del reloj) y el consumo sale del saldo", async () => {
+        const scenario = await createScenario();
+        const bulkLotId = await seedBulkLot(scenario.bulkVariantId, {
+          qty: 114.65,
+          unitCostPyg: 11_972,
+        });
+        await seedSupplies(scenario);
+        const orderId = await plannedAndStarted(scenario);
+
+        const response = await execute(orderId, 0.35);
+
+        expect(response.statusCode).toBe(200);
+        const rows = await reservationsOf(orderId);
+        expect(rows).toHaveLength(4);
+        expect(rows.every((row) => row.released_at?.toISOString() === EXECUTED_AT)).toBe(true);
+        expect(await onHand(bulkLotId)).toBe("104.300");
+        expect(await stockOf(scenario.bulkVariantId)).toEqual({
+          on_hand: 104.3,
+          reserved: 0,
+          available: 104.3,
+        });
+        const audit = await testDb.superuserClient.query(
+          `SELECT after FROM app.audit_log WHERE entity_id = $1 AND action = 'inventory.decant.execute'`,
+          [orderId],
+        );
+        expect(audit.rows[0].after.reservationsReleased).toBe(4);
+        expect(await driftRows()).toBe(0);
+      });
+
+      it("si el BOM cambió entre planificar y ejecutar, se consume el de hoy y la diferencia se libera: el insumo que salió del BOM no queda reservado", async () => {
+        const scenario = await createScenario();
+        await seedBulkLot(scenario.bulkVariantId, { qty: 114.65, unitCostPyg: 11_972 });
+        await seedSupplies(scenario);
+        const orderId = await plannedAndStarted(scenario);
+        await testDb.superuserClient.query(
+          `DELETE FROM app.bom_components WHERE parent_variant_id = $1 AND component_variant_id = $2`,
+          [scenario.decantVariantId, scenario.labelVariantId],
+        );
+
+        const response = await execute(orderId, 0.35);
+
+        expect(response.statusCode).toBe(200);
+        expect((await reservationsOf(orderId)).every((row) => row.released_at !== null)).toBe(true);
+        // Las etiquetas no se consumieron (ya no están en el BOM) y tampoco quedan reservadas.
+        expect(await stockOf(scenario.labelVariantId)).toEqual({
+          on_hand: 100,
+          reserved: 0,
+          available: 100,
+        });
+        expect(await onHandOfVariant(scenario.vialVariantId)).toBe("99.000");
+      });
+
+      it("una ejecución que se rechaza no libera nada: la reserva sigue ahí hasta que la orden se resuelva", async () => {
+        const scenario = await createScenario();
+        await seedBulkLot(scenario.bulkVariantId, { qty: 10.5, unitCostPyg: 11_972 });
+        await seedSupplies(scenario);
+        const orderId = await plannedAndStarted(scenario);
+
+        const response = await execute(orderId, 5);
+
+        expect(response.statusCode).toBe(409);
+        expect(errorCode(response)).toBe("CONFLICT_INSUFFICIENT_BULK_FOR_ACTUAL");
+        expect((await reservationsOf(orderId)).every((row) => row.released_at === null)).toBe(true);
+      });
+
+      it("el gancho de cancelar (WP-C13c) libera las reservas de la orden, una sola vez, y devuelve el disponible", async () => {
+        const scenario = await createScenario();
+        await seedBulkLot(scenario.bulkVariantId, { qty: 114.65, unitCostPyg: 11_972 });
+        await seedSupplies(scenario);
+        const planned = await planOk(scenario);
+        const session = {
+          userId: STAFF_OWNER_ID,
+          tenantId: TENANT_ID,
+          audience: "staff" as const,
+          sessionId: null,
+        };
+        const release = () =>
+          withTenantTx(db, session, (tx) =>
+            releaseReservationsOf(tx, session, DECANT_WORK_ORDER_REFERENCE, planned.order.id, {
+              clock: createManualClock(new Date(EXECUTED_AT)),
+            }),
+          );
+
+        const first = await release();
+        const second = await release();
+
+        expect(first).toBe(4);
+        expect(second).toBe(0);
+        expect(await stockOf(scenario.bulkVariantId)).toEqual({
+          on_hand: 114.65,
+          reserved: 0,
+          available: 114.65,
+        });
       });
     });
 

@@ -31,6 +31,7 @@ function openLotInput(overrides: Partial<OpenLotInput> = {}): OpenLotInput {
     sealedLot: sealedLot(),
     nominalVolumeMl: 125,
     variantAvailable: Quantity.units(1),
+    lotHasLiveReservation: false,
     clock: fixedClock,
     idGenerator: sequentialIds("LOT-LAY-001-BULK"),
     ...overrides,
@@ -319,6 +320,32 @@ describe("RN-LOT-02 · no se abre lo que no hay", () => {
       ok: false,
       error: { code: "SEALED_VARIANT_NOT_AVAILABLE", available: Quantity.units(0) },
     });
+  });
+
+  it("RN-RES-06 · un lote con una reserva viva propia no se abre: SEALED_LOT_RESERVED, aunque la variante tenga otros frascos disponibles", () => {
+    const result = openLot(
+      openLotInput({ lotHasLiveReservation: true, variantAvailable: Quantity.units(5) }),
+    );
+
+    expect(result).toEqual({ ok: false, error: { code: "SEALED_LOT_RESERVED" } });
+  });
+
+  it("RN-RES-06 · la reserva propia se mira después del saldo del lote y antes del disponible de la variante", () => {
+    const sinSaldo = openLot(
+      openLotInput({
+        sealedLot: sealedLot({ onHand: Quantity.units(0) }),
+        lotHasLiveReservation: true,
+      }),
+    );
+    const sinDisponible = openLot(
+      openLotInput({ lotHasLiveReservation: true, variantAvailable: Quantity.units(0) }),
+    );
+
+    expect(sinSaldo).toEqual({
+      ok: false,
+      error: { code: "SEALED_LOT_WITHOUT_STOCK", onHand: Quantity.units(0) },
+    });
+    expect(sinDisponible).toEqual({ ok: false, error: { code: "SEALED_LOT_RESERVED" } });
   });
 
   it("el estado se mira antes que el saldo: un sellado abierto sin saldo se rechaza como NOT_OPENABLE", () => {
