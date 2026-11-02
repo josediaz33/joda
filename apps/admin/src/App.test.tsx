@@ -178,7 +178,7 @@ describe("docs/security-spec.md §4.1 · «Salir» cierra la sesión y el admin 
   });
 });
 
-describe("docs/security-spec.md §4.1 · al salir no queda en memoria nada del usuario que sale (WP-M24, MEDIA-1 de la revisión de #117)", () => {
+describe("docs/security-spec.md §4.1 · al salir no queda en el caché nada del usuario que sale (WP-M24, MEDIA-1 de la revisión de #117)", () => {
   // `useMutation` guarda las `variables` de cada mutación (aquí, el código TOTP tipeado) hasta 5 min
   // después de desmontarse el componente. `queryClient.clear()` las borraba junto con las consultas.
   it("tras «Salir» desde «Verificar segundo factor» el caché de mutaciones queda vacío", async () => {
@@ -199,6 +199,7 @@ describe("docs/security-spec.md §4.1 · al salir no queda en memoria nada del u
     await user.click(screen.getByRole("button", { name: "Verificar" }));
     expect(await screen.findByText("El código ingresado no es válido.")).toBeTruthy();
     expect(queryClient.getMutationCache().getAll()).toHaveLength(1);
+    expect(queryClient.getMutationCache().getAll()[0]?.state.variables).toBe("123456");
     await user.click(screen.getByRole("button", { name: "Salir" }));
 
     expect(await screen.findByRole("heading", { name: "Ingresar" })).toBeTruthy();
