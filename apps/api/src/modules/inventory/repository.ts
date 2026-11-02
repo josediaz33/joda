@@ -156,6 +156,99 @@ export async function insertCostAllocation(
 }
 
 // ---------------------------------------------------------------------
+// Venta — WP-C19 (RF-VTA-05, RF-VTA-06, RN-VTA-02, RN-COS-04, ADR-008).
+// ---------------------------------------------------------------------
+
+/** Un lote que la venta puede consumir, tal como lo entrega `app.list_sale_allocation_lots`. */
+export interface SaleAllocationLotRow {
+  readonly lot_id: string;
+  readonly variant_id: string;
+  readonly received_at: Date;
+  readonly expiry_at: Date | null;
+  readonly on_hand: Prisma.Decimal;
+  readonly unit_landed_cost_pyg: bigint;
+}
+
+/**
+ * Los lotes `available` con saldo de unas variantes, con su costo unitario, Y
+ * LOS BLOQUEA (`FOR UPDATE`, una sentencia, `id` ascendente: la función los toma
+ * adentro, 0042). Es el único camino por el que quien vende lee un lote: el
+ * vendedor no tiene `inventory.stock:read` (`lots_read`), así que sin esta función
+ * no vería ningún lote, ni podría bloquearlos. La llama el servicio DESPUÉS de
+ * `lockVariantsThenLots` (RN-RES-07: las variantes primero).
+ *
+ * **El costo que devuelve es de la API, no de la respuesta:** lo usa el dominio
+ * para armar las capas y no se copia a ningún DTO, mensaje de error ni auditoría.
+ */
+export async function listSaleAllocationLots(
+  tx: TenantTx,
+  variantIds: readonly string[],
+): Promise<SaleAllocationLotRow[]> {
+  return tx.$queryRaw<SaleAllocationLotRow[]>`
+    SELECT f.lot_id, f.variant_id, f.received_at, f.expiry_at, f.on_hand, f.unit_landed_cost_pyg
+      FROM app.list_sale_allocation_lots(${[...variantIds]}::uuid[]) f
+     ORDER BY f.lot_id`;
+}
+
+export interface InsertSaleMovementInput {
+  readonly tenantId: string;
+  readonly lotId: string;
+  readonly variantId: string;
+  readonly serialUnitId: string | null;
+  /** Lo que sale, positivo: el movimiento se registra con signo negativo. */
+  readonly qty: number;
+  readonly uom: "unit" | "ml";
+  readonly unitCostPyg: bigint;
+  readonly totalCostPyg: bigint;
+  readonly saleOrderId: string;
+  readonly occurredAt: Date;
+  readonly createdBy: string;
+  readonly note: string;
+}
+
+/**
+ * Registra UNA salida por venta de un lote y su capa de costo (RN-COS-04: una
+ * capa por lote tocado). Dos sentencias de SQL crudo, **sin `RETURNING`**:
+ *
+ *   · El vendedor registra el movimiento `sale` (`sales.order:write`, 0034) pero
+ *     no lo lee: desde 0037 el SELECT de `inventory_movements` exige
+ *     `inventory.stock:read`, y `INSERT … RETURNING` evalúa esa política sobre la
+ *     fila nueva (42501). El `create` de Prisma emite `RETURNING`.
+ *   · La capa necesita el id del movimiento: sale de `currval` de la secuencia
+ *     de `inventory_movements.id`, NO de `lastval()` (dentro del INSERT de la capa
+ *     devolvería la identidad de la capa; verificado en 0037).
+ *   · El movimiento va en la transacción del llamador, **fuera de todo
+ *     SAVEPOINT** (0039): su `xmin` tiene que ser el de la transacción para que
+ *     `app.can_allocate_cost_to_movement` deje insertar la capa. Prisma no abre
+ *     savepoints dentro de una transacción interactiva.
+ *
+ * `total_cost_pyg` del movimiento y de la capa son el mismo importe: la
+ * restricción diferida de 0009 verifica `Σ capas = |total_cost_pyg|` al commit.
+ */
+export async function insertSaleMovementWithLayer(
+  tx: TenantTx,
+  input: InsertSaleMovementInput,
+): Promise<void> {
+  await tx.$executeRaw`
+    INSERT INTO app.inventory_movements
+      (tenant_id, lot_id, variant_id, serial_unit_id, qty, uom, movement_type,
+       total_cost_pyg, reference_type, reference_id, occurred_at, created_by, note)
+    VALUES
+      (${input.tenantId}::uuid, ${input.lotId}::uuid, ${input.variantId}::uuid,
+       ${input.serialUnitId}::uuid, ${-input.qty}::numeric, ${input.uom}::app.uom, 'sale',
+       ${input.totalCostPyg}::bigint, 'sale_order', ${input.saleOrderId}::uuid,
+       ${input.occurredAt.toISOString()}::timestamptz, ${input.createdBy}::uuid, ${input.note})`;
+  await tx.$executeRaw`
+    INSERT INTO app.movement_cost_allocations
+      (tenant_id, movement_id, lot_id, qty, unit_cost_pyg, total_cost_pyg)
+    VALUES
+      (${input.tenantId}::uuid,
+       currval(pg_get_serial_sequence('app.inventory_movements', 'id')),
+       ${input.lotId}::uuid, ${input.qty}::numeric, ${input.unitCostPyg}::bigint,
+       ${input.totalCostPyg}::bigint)`;
+}
+
+// ---------------------------------------------------------------------
 // Apertura de frasco — WP-C11 (RN-LOT-02, ADR-009).
 // ---------------------------------------------------------------------
 const LOT_FOR_OPENING_INCLUDE = { inventory_balances: true, product_variants: true } as const;

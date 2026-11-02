@@ -523,7 +523,7 @@ model inventory_movements {
   note                      String?
   staff_users               staff_users?                @relation(fields: [created_by, tenant_id], references: [id, tenant_id], onDelete: NoAction, onUpdate: NoAction, map: "inventory_movements_created_by_fkey")
   inventory_lots            inventory_lots              @relation(fields: [lot_id, variant_id, tenant_id], references: [id, variant_id, tenant_id], onUpdate: NoAction, map: "inventory_movements_lot_id_fkey")
-  serialized_units          serialized_units?           @relation(fields: [serial_unit_id, tenant_id], references: [id, tenant_id], onUpdate: NoAction, map: "inventory_movements_serial_unit_id_fkey")
+  serialized_units          serialized_units?           @relation(fields: [serial_unit_id, variant_id, tenant_id], references: [id, variant_id, tenant_id], onUpdate: NoAction, map: "inventory_movements_serial_unit_id_fkey")
   tenants                   tenants                     @relation(fields: [tenant_id], references: [id], onUpdate: NoAction)
   product_variants          product_variants            @relation(fields: [variant_id, tenant_id], references: [id, tenant_id], onUpdate: NoAction, map: "inventory_movements_variant_id_fkey")
   movement_cost_allocations movement_cost_allocations[]

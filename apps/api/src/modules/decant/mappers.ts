@@ -9,6 +9,7 @@ export function toAdminDecantWorkOrder(row: DecantWorkOrderRow): AdminDecantWork
   return {
     id: row.id,
     saleOrderId: row.sale_order_id,
+    saleOrderLineId: row.sale_order_line_id,
     sourceLotId: row.source_lot_id,
     targetVariantId: row.target_variant_id,
     qtyUnits: row.qty_units,

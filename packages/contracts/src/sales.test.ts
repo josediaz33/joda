@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  confirmSaleOrderInput,
   createSaleOrderInput,
   saleOrderLineSchema,
   saleOrderReservationSchema,
@@ -114,6 +115,34 @@ describe("RN-EST-02 · solo se piden por la API las transiciones que no tocan in
     expect(transitionSaleOrderInput.safeParse({ id, toStatus: "paid" }).success).toBe(false);
     expect(transitionSaleOrderInput.safeParse({ id, toStatus: "refunded" }).success).toBe(false);
     expect(transitionSaleOrderInput.safeParse({ id, toStatus: "draft" }).success).toBe(false);
+  });
+});
+
+describe("RF-VTA-05 · confirmSaleOrderInput — confirmar el pago es un procedimiento propio (WP-C19)", () => {
+  const id = "33333333-3333-4333-a333-333333333382";
+
+  it("acepta el id del pedido, con un motivo opcional", () => {
+    expect(confirmSaleOrderInput.safeParse({ id }).success).toBe(true);
+    expect(confirmSaleOrderInput.safeParse({ id, reason: "Transferencia SIPAP" }).success).toBe(
+      true,
+    );
+  });
+
+  it("rechaza lo que el cliente no decide: el estado, el costo de lo vendido y las unidades a consumir", () => {
+    for (const extra of [
+      { toStatus: "paid" },
+      { cogsPyg: "1" },
+      { lines: [] },
+      { serialUnitId: id },
+    ]) {
+      expect(confirmSaleOrderInput.safeParse({ id, ...extra }).success).toBe(false);
+    }
+  });
+
+  it("exige un uuid y limita el largo del motivo", () => {
+    expect(confirmSaleOrderInput.safeParse({ id: "no-es-uuid" }).success).toBe(false);
+    expect(confirmSaleOrderInput.safeParse({ id, reason: "x".repeat(501) }).success).toBe(false);
+    expect(confirmSaleOrderInput.safeParse({ id, reason: "   " }).success).toBe(false);
   });
 });
 

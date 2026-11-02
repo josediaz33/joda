@@ -1,4 +1,5 @@
 import {
+  confirmSaleOrderInput,
   createSaleOrderInput,
   listSaleOrdersInput,
   listSaleOrdersOutput,
@@ -9,6 +10,7 @@ import {
 } from "@joda/contracts";
 import type { PrismaClient } from "@joda/db";
 import { appError, toTRPCError } from "../../middleware/errorMapper.js";
+import { buildIdempotencyRequest } from "../../middleware/idempotency.js";
 import { router, staffProcedure } from "../../trpc/trpc.js";
 import type { RequestContext } from "../../trpc/context.js";
 import * as service from "./service.js";
@@ -87,6 +89,24 @@ export function createSalesRouter(db: PrismaClient | null, deps: service.SalesSe
         .output(saleOrderSchema)
         .mutation(({ ctx, input }) =>
           service.transitionOrder(requireDb(db), staff(ctx), input, requireDeps(deps)),
+        ),
+      // Confirmar el pago consume el inventario: irreversible, así que acepta
+      // `Idempotency-Key` (docs/api-conventions.md §5). El permiso es el de
+      // escribir ventas: es el que la política de INSERT de `inventory_movements`
+      // pide para el movimiento `sale` (0034) y `app.list_sale_allocation_lots`
+      // chequea adentro (0042).
+      confirm: staffProcedure
+        .meta(WRITE)
+        .input(confirmSaleOrderInput)
+        .output(saleOrderSchema)
+        .mutation(({ ctx, input }) =>
+          service.confirmOrder(
+            requireDb(db),
+            staff(ctx),
+            input,
+            requireDeps(deps),
+            buildIdempotencyRequest(ctx.req, input),
+          ),
         ),
     }),
   });

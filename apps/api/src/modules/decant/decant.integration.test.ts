@@ -400,13 +400,34 @@ describe(
       };
     }
 
-    async function seedSaleOrder(tenantId: string, saleChannelId: string): Promise<string> {
+    // La venta en espera de pago: `plan` solo acepta `awaiting_payment` y `paid` (WP-C19).
+    async function seedSaleOrder(
+      tenantId: string,
+      saleChannelId: string,
+      status = "awaiting_payment",
+    ): Promise<string> {
       const sale = await testDb.superuserClient.query(
-        `INSERT INTO app.sale_orders (tenant_id, channel_id, code)
-       VALUES ($1, $2, $3) RETURNING id`,
-        [tenantId, saleChannelId, `VTA-C13-${++scenarioCounter}`],
+        `INSERT INTO app.sale_orders (tenant_id, channel_id, code, status)
+       VALUES ($1, $2, $3, $4::app.sale_order_status) RETURNING id`,
+        [tenantId, saleChannelId, `VTA-C13-${++scenarioCounter}`, status],
       );
       return sale.rows[0].id;
+    }
+
+    /** Una línea de decant de la venta: `plan` recibe la línea y su variante y cantidad tienen que ser las de la orden. */
+    async function seedSaleLine(
+      tenantId: string,
+      saleOrderId: string,
+      variantId: string,
+      qty: number,
+    ): Promise<string> {
+      const line = await testDb.superuserClient.query(
+        `INSERT INTO app.sale_order_lines
+           (tenant_id, sale_order_id, variant_id, qty, uom, unit_price_pyg, line_total_pyg)
+         VALUES ($1, $2, $3, $4, 'ml', 245000, $5) RETURNING id`,
+        [tenantId, saleOrderId, variantId, qty, 245_000 * qty],
+      );
+      return line.rows[0].id;
     }
 
     /** Un lote con su recepción inicial; el saldo lo proyecta el trigger a partir del movimiento. */
@@ -522,12 +543,23 @@ describe(
       return result.rows[0].n;
     }
 
-    function plan(scenario: Scenario, extra: Record<string, unknown> = {}) {
+    /**
+     * Planifica una línea NUEVA de la venta del escenario por cada llamada (una orden
+     * activa por línea, 0039), con la cantidad que pida la prueba. `saleOrderLineId`
+     * en `extra` planifica esa línea en vez de crear otra.
+     */
+    async function plan(scenario: Scenario, extra: Record<string, unknown> = {}) {
+      const qtyUnits = (extra.qtyUnits as number | undefined) ?? 1;
+      const targetVariantId =
+        (extra.targetVariantId as string | undefined) ?? scenario.decantVariantId;
+      const saleOrderLineId =
+        (extra.saleOrderLineId as string | undefined) ??
+        (await seedSaleLine(TENANT_ID, scenario.saleOrderId, targetVariantId, qtyUnits));
       return mutate("inventory.decant.plan", {
-        saleOrderId: scenario.saleOrderId,
-        targetVariantId: scenario.decantVariantId,
-        qtyUnits: 1,
+        targetVariantId,
+        qtyUnits,
         ...extra,
+        saleOrderLineId,
       });
     }
 
@@ -697,7 +729,7 @@ describe(
         expect(await movementsOfOrder(planned.order.id)).toEqual([]);
       });
 
-      it("una venta que no existe en el tenant se rechaza con 404 y no crea ninguna orden (§8.4)", async () => {
+      it("una línea de venta que no existe en el tenant se rechaza con 404 y no crea ninguna orden (§8.4)", async () => {
         const scenario = await createScenario();
         await seedBulkLot(scenario.bulkVariantId, { qty: 114.65, unitCostPyg: 11_972 });
         await seedSupplies(scenario);
@@ -710,9 +742,25 @@ describe(
           OTHER_TENANT_ID,
           "88888888-8888-4888-a888-8888888888c1",
         );
+        const foreignProduct = await testDb.superuserClient.query(
+          `INSERT INTO app.products (tenant_id, kind, slug, name)
+         VALUES ($1, 'accessory', 'ajeno-c19', 'Ajeno') RETURNING id`,
+          [OTHER_TENANT_ID],
+        );
+        const foreignVariant = await testDb.superuserClient.query(
+          `INSERT INTO app.product_variants (tenant_id, product_id, sku, variant_type, uom, price_pyg)
+         VALUES ($1, $2, 'AJENO-C19', 'unit', 'unit', 1000) RETURNING id`,
+          [OTHER_TENANT_ID, foreignProduct.rows[0].id],
+        );
+        const foreignLine = await seedSaleLine(
+          OTHER_TENANT_ID,
+          foreignSale,
+          foreignVariant.rows[0].id,
+          1,
+        );
         const before = await countWorkOrders();
 
-        const response = await plan({ ...scenario, saleOrderId: foreignSale });
+        const response = await plan(scenario, { saleOrderLineId: foreignLine });
 
         expect(response.statusCode).toBe(404);
         expect(await countWorkOrders()).toBe(before);
@@ -767,7 +815,12 @@ describe(
         await seedBulkLot(scenario.bulkVariantId, { qty: 114.65, unitCostPyg: 11_972 });
         await seedSupplies(scenario);
         const payload = {
-          saleOrderId: scenario.saleOrderId,
+          saleOrderLineId: await seedSaleLine(
+            TENANT_ID,
+            scenario.saleOrderId,
+            scenario.decantVariantId,
+            1,
+          ),
           targetVariantId: scenario.decantVariantId,
           qtyUnits: 1,
         };
@@ -2128,21 +2181,17 @@ describe(
       // Desde WP-B18 el vendedor tiene `inventory.decant:plan`, un permiso del
       // MISMO módulo (`inventory.decant`) que `execute`: con sesión y acceso al
       // módulo, la regla de api-conventions §4.3 manda 403 y no 404 (ya sabe que
-      // el módulo existe). La cola exige `inventory.stock:read`, un módulo del que
-      // no tiene nada, y sigue siendo 404. El 403 de `plan` es transitorio: WP-C19
-      // la pasa a exigir `inventory.decant:plan`, y el vendedor la planifica.
-      it("un vendedor, sin inventory.decant:execute ni inventory.stock:read, no puede planificar, iniciar, ejecutar (403, tiene un permiso del módulo) ni ver la cola (404)", async () => {
+      // el módulo existe) en `start` y `execute`. La cola exige `inventory.stock:read`,
+      // un módulo del que no tiene nada, y sigue siendo 404. Desde WP-C19 `plan`
+      // exige `inventory.decant:plan`: el vendedor planifica (bloque «planificar sin
+      // leer lotes»).
+      it("un vendedor, sin inventory.decant:execute ni inventory.stock:read, no puede iniciar ni ejecutar (403, tiene un permiso del módulo) ni ver la cola (404)", async () => {
         const scenario = await createScenario();
         await seedBulkLot(scenario.bulkVariantId, { qty: 114.65, unitCostPyg: 11_972 });
         await seedSupplies(scenario);
         const orderId = await plannedAndStarted(scenario);
         const vendedor = await loginAs(STAFF_VENDEDOR_EMAIL);
 
-        const planned = await mutateAs(vendedor, "inventory.decant.plan", {
-          saleOrderId: scenario.saleOrderId,
-          targetVariantId: scenario.decantVariantId,
-          qtyUnits: 1,
-        });
         const started = await mutateAs(vendedor, "inventory.decant.start", {
           workOrderId: orderId,
         });
@@ -2152,12 +2201,9 @@ describe(
         });
         const queue = await callAs(vendedor, "inventory.decant.list", {});
 
-        expect([
-          planned.statusCode,
-          started.statusCode,
-          executed.statusCode,
-          queue.statusCode,
-        ]).toEqual([403, 403, 403, 404]);
+        expect([started.statusCode, executed.statusCode, queue.statusCode]).toEqual([
+          403, 403, 404,
+        ]);
         expect(await movementsOfOrder(orderId)).toEqual([]);
       });
 
@@ -2177,7 +2223,12 @@ describe(
           wasteActual: 0.35,
         });
         const planned = await mutateAs(foreignOwner, "inventory.decant.plan", {
-          saleOrderId: scenario.saleOrderId,
+          saleOrderLineId: await seedSaleLine(
+            TENANT_ID,
+            scenario.saleOrderId,
+            scenario.decantVariantId,
+            1,
+          ),
           targetVariantId: scenario.decantVariantId,
           qtyUnits: 1,
         });
@@ -2214,6 +2265,239 @@ describe(
           [orderId],
         );
         expect(order.rows[0].status).toBe("in_progress");
+      });
+    });
+
+    // -------------------------------------------------------------------
+    describe("WP-C19 · planificar por línea de venta y sin leer lotes (decisión de José, 2026-10-07)", () => {
+      function keysDeep(value: unknown): string[] {
+        if (Array.isArray(value)) return value.flatMap(keysDeep);
+        if (value !== null && typeof value === "object") {
+          return Object.entries(value).flatMap(([key, inner]) => [key, ...keysDeep(inner)]);
+        }
+        return [];
+      }
+
+      async function liveReservedMl(lotId: string): Promise<number> {
+        const result = await testDb.superuserClient.query(
+          `SELECT COALESCE(sum(qty), 0)::float8 AS ml FROM app.stock_reservations
+            WHERE lot_id = $1 AND released_at IS NULL`,
+          [lotId],
+        );
+        return result.rows[0].ml;
+      }
+
+      it("el vendedor planifica sin inventory.stock:read: la orden nace, el granel y los insumos quedan reservados y la respuesta no trae ningún costo", async () => {
+        const scenario = await createScenario();
+        const bulkLotId = await seedBulkLot(scenario.bulkVariantId, {
+          qty: 114.65,
+          unitCostPyg: 11_972,
+        });
+        await seedSupplies(scenario);
+        const vendedor = await loginAs(STAFF_VENDEDOR_EMAIL);
+        const lineId = await seedSaleLine(
+          TENANT_ID,
+          scenario.saleOrderId,
+          scenario.decantVariantId,
+          1,
+        );
+
+        const response = await mutateAs(vendedor, "inventory.decant.plan", {
+          saleOrderLineId: lineId,
+          targetVariantId: scenario.decantVariantId,
+          qtyUnits: 1,
+        });
+
+        expect(response.statusCode).toBe(200);
+        const planned = response.json().result.data as PlanDecantOutput;
+        expect(planned.order).toMatchObject({
+          saleOrderId: scenario.saleOrderId,
+          saleOrderLineId: lineId,
+          sourceLotId: bulkLotId,
+          status: "pending",
+          createdBy: STAFF_VENDEDOR_ID,
+        });
+        expect(planned.mlToReserve).toBe(10.2);
+        expect(await liveReservedMl(bulkLotId)).toBe(10.2);
+        // Sin costos: ni una clave de costo ni el costo del lote en el cuerpo.
+        const forbidden = ["cost", "cogs", "landed", "supplier", "margin"];
+        expect(
+          keysDeep(planned).filter((key) =>
+            forbidden.some((word) => key.toLowerCase().includes(word)),
+          ),
+        ).toEqual([]);
+        expect(response.body).not.toContain("11972");
+      });
+
+      it("el vendedor no elige el frasco: con sourceLotId responde 404, porque elegirlo exige leerlo y no lee lotes", async () => {
+        const scenario = await createScenario();
+        const bulkLotId = await seedBulkLot(scenario.bulkVariantId, {
+          qty: 114.65,
+          unitCostPyg: 11_972,
+        });
+        await seedSupplies(scenario);
+        const vendedor = await loginAs(STAFF_VENDEDOR_EMAIL);
+        const lineId = await seedSaleLine(
+          TENANT_ID,
+          scenario.saleOrderId,
+          scenario.decantVariantId,
+          1,
+        );
+        const before = await countWorkOrders();
+
+        const response = await mutateAs(vendedor, "inventory.decant.plan", {
+          saleOrderLineId: lineId,
+          targetVariantId: scenario.decantVariantId,
+          qtyUnits: 1,
+          sourceLotId: bulkLotId,
+        });
+
+        expect(response.statusCode).toBe(404);
+        expect(await countWorkOrders()).toBe(before);
+      });
+
+      it("sin granel que alcance, el vendedor recibe el 409 de siempre y ve lo que hay: lo que listó la función no es un vacío engañoso", async () => {
+        const scenario = await createScenario();
+        await seedBulkLot(scenario.bulkVariantId, { qty: 5, unitCostPyg: 11_972 });
+        await seedSupplies(scenario);
+        const vendedor = await loginAs(STAFF_VENDEDOR_EMAIL);
+        const lineId = await seedSaleLine(
+          TENANT_ID,
+          scenario.saleOrderId,
+          scenario.decantVariantId,
+          1,
+        );
+
+        const response = await mutateAs(vendedor, "inventory.decant.plan", {
+          saleOrderLineId: lineId,
+          targetVariantId: scenario.decantVariantId,
+          qtyUnits: 1,
+        });
+
+        expect(response.statusCode).toBe(409);
+        expect(errorCode(response)).toBe("CONFLICT_NO_BULK_AVAILABLE");
+        expect(response.json().error.data.details).toEqual({
+          requiredMl: 10.2,
+          largestAvailableMl: 5,
+        });
+      });
+
+      it("solo se planifica una venta en espera de pago o cobrada: un borrador, una cancelada y una entregada se rechazan con 409 y no crean orden", async () => {
+        const scenario = await createScenario();
+        await seedBulkLot(scenario.bulkVariantId, { qty: 114.65, unitCostPyg: 11_972 });
+        await seedSupplies(scenario);
+        const before = await countWorkOrders();
+        const outcomes: string[] = [];
+        for (const status of ["draft", "cancelled", "delivered"]) {
+          const saleId = await seedSaleOrder(TENANT_ID, channelId, status);
+          const lineId = await seedSaleLine(TENANT_ID, saleId, scenario.decantVariantId, 1);
+          const response = await plan(scenario, { saleOrderLineId: lineId });
+          outcomes.push(`${status}:${response.statusCode}:${errorCode(response)}`);
+        }
+
+        expect(outcomes).toEqual([
+          "draft:409:CONFLICT_SALE_ORDER_NOT_PLANNABLE",
+          "cancelled:409:CONFLICT_SALE_ORDER_NOT_PLANNABLE",
+          "delivered:409:CONFLICT_SALE_ORDER_NOT_PLANNABLE",
+        ]);
+        expect(await countWorkOrders()).toBe(before);
+
+        const paidSale = await seedSaleOrder(TENANT_ID, channelId, "paid");
+        const paidLine = await seedSaleLine(TENANT_ID, paidSale, scenario.decantVariantId, 1);
+        expect((await plan(scenario, { saleOrderLineId: paidLine })).statusCode).toBe(200);
+      });
+
+      it("una línea tiene una sola orden activa: planificarla otra vez, con otra clave o sin clave, responde 409 y no reserva dos veces; cancelada la primera, se puede replanificar", async () => {
+        const scenario = await createScenario();
+        const bulkLotId = await seedBulkLot(scenario.bulkVariantId, {
+          qty: 114.65,
+          unitCostPyg: 11_972,
+        });
+        await seedSupplies(scenario);
+        const lineId = await seedSaleLine(
+          TENANT_ID,
+          scenario.saleOrderId,
+          scenario.decantVariantId,
+          1,
+        );
+        const payload = {
+          saleOrderLineId: lineId,
+          targetVariantId: scenario.decantVariantId,
+          qtyUnits: 1,
+        };
+
+        const first = await mutate("inventory.decant.plan", payload, { "idempotency-key": "uno" });
+        const second = await mutate("inventory.decant.plan", payload, { "idempotency-key": "dos" });
+        const third = await mutate("inventory.decant.plan", payload);
+
+        expect(first.statusCode).toBe(200);
+        expect([second.statusCode, third.statusCode]).toEqual([409, 409]);
+        expect(errorCode(second)).toBe("CONFLICT_DECANT_ORDER_ALREADY_PLANNED");
+        expect(errorCode(third)).toBe("CONFLICT_DECANT_ORDER_ALREADY_PLANNED");
+        const orders = await testDb.superuserClient.query(
+          `SELECT count(*)::int AS n FROM app.decant_work_orders WHERE sale_order_line_id = $1`,
+          [lineId],
+        );
+        expect(orders.rows[0].n).toBe(1);
+        expect(await liveReservedMl(bulkLotId)).toBe(10.2);
+
+        await testDb.superuserClient.query(
+          `UPDATE app.decant_work_orders SET status = 'cancelled' WHERE sale_order_line_id = $1`,
+          [lineId],
+        );
+        await testDb.superuserClient.query(
+          `UPDATE app.stock_reservations SET released_at = now() WHERE lot_id = $1 AND released_at IS NULL`,
+          [bulkLotId],
+        );
+        expect((await mutate("inventory.decant.plan", payload)).statusCode).toBe(200);
+      });
+
+      it("la variante y la cantidad de la orden son las de la línea: otra variante o otra cantidad se rechaza con 400", async () => {
+        const scenario = await createScenario();
+        await seedBulkLot(scenario.bulkVariantId, { qty: 114.65, unitCostPyg: 11_972 });
+        await seedSupplies(scenario);
+        const lineId = await seedSaleLine(
+          TENANT_ID,
+          scenario.saleOrderId,
+          scenario.decantVariantId,
+          2,
+        );
+        const before = await countWorkOrders();
+
+        const otherQty = await plan(scenario, { saleOrderLineId: lineId, qtyUnits: 1 });
+        const otherVariant = await plan(scenario, {
+          saleOrderLineId: lineId,
+          qtyUnits: 2,
+          targetVariantId: scenario.bulkVariantId,
+        });
+
+        expect([otherQty.statusCode, otherVariant.statusCode]).toEqual([400, 400]);
+        expect(errorCode(otherQty)).toBe("VALIDATION_DECANT_LINE_MISMATCH");
+        expect(errorCode(otherVariant)).toBe("VALIDATION_DECANT_LINE_MISMATCH");
+        expect(await countWorkOrders()).toBe(before);
+      });
+
+      it("planificar exige exactamente inventory.decant:plan: un rol con solo decant:execute recibe 403 (tiene un permiso del módulo) y no crea nada", async () => {
+        const scenario = await createScenario();
+        await seedBulkLot(scenario.bulkVariantId, { qty: 114.65, unitCostPyg: 11_972 });
+        await seedSupplies(scenario);
+        const lineId = await seedSaleLine(
+          TENANT_ID,
+          scenario.saleOrderId,
+          scenario.decantVariantId,
+          1,
+        );
+        const onlyDecant = await loginAs(STAFF_SOLO_DECANT_EMAIL);
+        const before = await countWorkOrders();
+
+        const response = await mutateAs(onlyDecant, "inventory.decant.plan", {
+          saleOrderLineId: lineId,
+          targetVariantId: scenario.decantVariantId,
+          qtyUnits: 1,
+        });
+
+        expect(response.statusCode).toBe(403);
+        expect(await countWorkOrders()).toBe(before);
       });
     });
   },

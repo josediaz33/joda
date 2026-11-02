@@ -55,6 +55,15 @@ export interface BomAvailability {
   readonly perUnit: Quantity;
 }
 
+/**
+ * Lo que planificar necesita saber del lote de granel: su estado, de qué tipo y
+ * unidad es su variante y cuánto hay libre. Ni el costo ni la fecha de
+ * recepción entran en el cálculo (WP-B18, WP-C19): quien planifica sin
+ * `inventory.stock:read` (el vendedor) arma este snapshot con las tres columnas
+ * que le da `app.list_decant_plan_lots`, que no devuelve costos.
+ */
+export type PlanBulkLot = Pick<LotSnapshot, "available" | "status" | "variantType" | "uom">;
+
 export interface PlanDecantInput {
   readonly unitsRequested: number;
   readonly mlPerUnit: number;
@@ -68,7 +77,7 @@ export interface PlanDecantInput {
    * código" (docs/domain-contracts.md §6, primer párrafo) — esto es una
    * decisión de forma, no una regla de negocio nueva.
    */
-  readonly bulkLot: LotSnapshot;
+  readonly bulkLot: PlanBulkLot;
   readonly bomAvailability: readonly BomAvailability[];
 }
 

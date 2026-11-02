@@ -1,21 +1,25 @@
 import {
   DEFAULT_PAGE_SIZE,
+  type ConfirmSaleOrderInput,
   type CreateSaleOrderInput,
   type SaleOrderDto,
   type TransitionSaleOrderInput,
 } from "@joda/contracts";
 import {
   Money,
+  planSaleConsumption,
   priceSaleOrder,
   Quantity,
   transitionSaleOrder,
   type Clock,
+  type SaleConsumptionError,
   type SaleOrderPricingError,
   type SaleOrderStatus,
 } from "@joda/domain";
 import type { PrismaClient } from "@joda/db";
 import { recordAuditEntry } from "../../db/audit.js";
 import { decodeCursor, encodeCursor } from "../../db/cursor.js";
+import { withIdempotentTx, type IdempotencyRequest } from "../../db/withIdempotentTx.js";
 import { withTenantTx, type TenantTx, type TenantTxContext } from "../../db/withTenantTx.js";
 import {
   appError,
@@ -23,7 +27,10 @@ import {
   toTRPCError,
   type ApiError,
 } from "../../middleware/errorMapper.js";
-import { shareLockVariantsAscending } from "../../db/stockLocks.js";
+import { lockVariantsThenLots, shareLockVariantsAscending } from "../../db/stockLocks.js";
+import { createPlannedWorkOrder, listDecantVariantIds } from "../decant/service.js";
+import * as inventoryRepo from "../inventory/repository.js";
+import * as reservationsRepo from "../reservations/repository.js";
 import {
   listOrderReservations,
   releaseReservationsOf,
@@ -477,4 +484,418 @@ export async function transitionOrder(
       (await listOrderReservations(tx, ctx.tenantId, [input.id])).get(input.id),
     );
   });
+}
+
+// ---------------------------------------------------------------------
+// Confirmación del pago — WP-C19 (RF-VTA-05, RF-VTA-06, RN-VTA-02, RN-VTA-04).
+// ---------------------------------------------------------------------
+
+function toLineQuantity(value: number, uom: "unit" | "ml"): Quantity {
+  return uom === "unit" ? Quantity.units(value) : Quantity.ml(value);
+}
+
+/** Lo que queda libre de un lote: el saldo menos lo que otros prometieron sobre él, nunca negativo. */
+function freeOfLot(onHand: number, reserved: number, uom: "unit" | "ml"): Quantity {
+  const free = toLineQuantity(onHand, uom).minus(toLineQuantity(reserved, uom));
+  return free.isNegative() ? Quantity.zero(uom) : free;
+}
+
+/**
+ * El rechazo del dominio como respuesta de la API. **Ninguno trae un costo**: ni
+ * el de un lote, ni el de una capa, ni el COGS. El vendedor confirma ventas sin
+ * `inventory.stock:read` y un mensaje que nombrara un costo se lo daría igual.
+ * Lo que sí dice es qué variante falta y cuánto: cantidades de stock, que el
+ * personal de ventas ya ve al reservar.
+ */
+function consumptionFailure(
+  error: SaleConsumptionError,
+  skuByVariant: ReadonlyMap<string, string>,
+  skuByLine: ReadonlyMap<string, string>,
+): ApiError {
+  switch (error.code) {
+    case "INSUFFICIENT_STOCK":
+      return appError(
+        "CONFLICT_INSUFFICIENT_STOCK",
+        409,
+        "No hay stock suficiente para entregar todo el pedido. Revisá las cantidades de las líneas que se indican.",
+        {
+          shortages: error.shortages.map((shortage) => ({
+            variantId: shortage.variantId,
+            sku: skuByVariant.get(shortage.variantId) ?? null,
+            requested: shortage.requested.value,
+            available: shortage.available.value,
+          })),
+        },
+      );
+    case "SERIAL_UNIT_LOT_UNAVAILABLE":
+      return appError(
+        "CONFLICT_SERIAL_UNIT_UNAVAILABLE",
+        409,
+        "Una de las unidades elegidas ya no está disponible para la venta. Elegí otra o sacala del pedido.",
+        { serialUnitId: error.serialUnitId, sku: skuByLine.get(error.lineId) ?? null },
+      );
+    case "ALLOCATION_NEEDS_LOT_CHOICE":
+      return appError(
+        "CONFLICT_ALLOCATION_NEEDS_LOT_CHOICE",
+        409,
+        "Una variante del pedido se vende eligiendo el lote y el pedido todavía no lleva esa elección: no se puede confirmar desde acá.",
+        { sku: skuByLine.get(error.lineId) ?? null, policy: error.policy },
+      );
+  }
+}
+
+/**
+ * Confirma el pago del pedido (`awaiting_payment → paid`) y consume el
+ * inventario, todo en UNA transacción (RN-VTA-02, RN-VTA-05). Si cualquier paso
+ * falla —un faltante, una unidad que se vendió en otro lado, un decant sin
+ * granel— no cambia nada: ni el estado, ni el ledger, ni las reservas.
+ *
+ * ORDEN (RN-RES-07, ADR-019): (1) la fila del pedido; (2) las variantes de TODAS
+ * las líneas, y las de los decants bajo pedido que hay que planificar, y las de las
+ * reservas del pedido, por `id` ascendente y en UNA llamada a `lockVariantsThenLots`
+ * (una variante pedida después rompería el orden); (3) los lotes consumibles, que
+ * toma `app.list_sale_allocation_lots` en una sentencia por `id` ascendente
+ * (quien no lee lotes —el vendedor— no podría bloquearlos desde acá: 0042).
+ * Recién entonces se lee el saldo y se decide.
+ *
+ * QUÉ HACE, por línea:
+ *   · común: consume por la política de la variante (FIFO/FEFO) en una capa por
+ *     lote tocado; un movimiento `sale` y una capa de costo por capa (RN-COS-04);
+ *   · serializada: exige la unidad (`VALIDATION_SERIAL_UNIT_REQUIRED` si falta),
+ *     mueve exactamente una y la pasa a `sold` ligada a la línea (RN-VTA-04);
+ *   · decant bajo pedido: crea su orden de fraccionamiento (`createPlannedWorkOrder`)
+ *     en esta transacción y NO asienta su costo: se asienta al ejecutar el
+ *     fraccionamiento (RN-FRA-03/04), y la línea queda con `cogs_pyg` en cero,
+ *     costo pendiente. Una línea con una orden activa (la planificó `plan` antes) no
+ *     se duplica.
+ *   · `cogs_pyg` de la línea y del pedido son la suma de las capas (RN-COS-05).
+ *
+ * Después suelta las reservas del pedido: el consumo de verdad las reemplaza.
+ *
+ * **El costo no sale de la API.** Se calcula con el costo unitario que da
+ * `list_sale_allocation_lots`, se persiste en `cogs_pyg` y en las capas, y no viaja
+ * en la respuesta, en la auditoría ni en ningún error (el vendedor no lo lee:
+ * WP-B11f/B11g). El movimiento y sus capas se escriben sin `RETURNING` y fuera de
+ * todo savepoint (`insertSaleMovementWithLayer`).
+ *
+ * Reintentar: con la misma `Idempotency-Key` devuelve la respuesta guardada sin
+ * reprocesar; sin clave, el pedido ya está en `paid` y la transición se rechaza
+ * (409): no se consume dos veces.
+ */
+export async function confirmOrder(
+  db: PrismaClient,
+  ctx: SalesContext,
+  input: ConfirmSaleOrderInput,
+  deps: SalesServiceDeps,
+  idempotency: IdempotencyRequest | null,
+): Promise<SaleOrderDto> {
+  const { result } = await withIdempotentTx(db, ctx, idempotency, async (tx) => ({
+    result: await confirmInTransaction(tx, ctx, input, deps),
+    statusCode: 200,
+  }));
+  return result;
+}
+
+async function confirmInTransaction(
+  tx: TenantTx,
+  ctx: SalesContext,
+  input: ConfirmSaleOrderInput,
+  deps: SalesServiceDeps,
+): Promise<SaleOrderDto> {
+  const { tenantId } = ctx;
+  // 1. La fila de la entidad que decide el caso de uso, antes que las de stock.
+  await repo.lockOrder(tx, tenantId, input.id);
+  const before = await repo.findOrder(tx, tenantId, input.id);
+  if (!before) throw toTRPCError(NOT_FOUND);
+  const next = transitionSaleOrder(before.status, "paid");
+  if (!next.ok) {
+    throw toTRPCError(
+      appError(
+        "CONFLICT_INVALID_TRANSITION",
+        409,
+        `El pedido no puede pasar de ${next.error.from} a ${next.error.to}.`,
+        { from: next.error.from, to: next.error.to },
+      ),
+    );
+  }
+  const now = deps.clock.now();
+  const lines = before.sale_order_lines;
+
+  const variants = await repo.findVariantsForConfirmation(tx, tenantId, [
+    ...new Set(lines.map((line) => line.variant_id)),
+  ]);
+  const variantById = new Map(variants.map((variant) => [variant.id, variant]));
+  const variantOf = (line: (typeof lines)[number]) => {
+    const variant = variantById.get(line.variant_id);
+    if (!variant)
+      throw new Error(`la variante ${line.variant_id} del pedido ${input.id} no existe`);
+    return variant;
+  };
+  const isDecantOnDemand = (line: (typeof lines)[number]) =>
+    variantOf(line).production_mode === "made_to_order";
+  const decantLines = lines.filter(isDecantOnDemand);
+  const consumeLines = lines.filter((line) => !isDecantOnDemand(line));
+
+  for (const line of consumeLines) {
+    const variant = variantOf(line);
+    if (variant.variant_type === "decant") {
+      // Un decant para stock mezclaría ml y unidades (WP-C13b): no se vende hasta que exista.
+      throw toTRPCError(
+        appError(
+          "CONFLICT_STOCKED_DECANT_NOT_SUPPORTED",
+          409,
+          "Un decant producido para stock todavía no se puede vender desde un pedido.",
+          { sku: variant.sku },
+        ),
+      );
+    }
+    if (variant.is_serialized && line.serial_unit_id === null) {
+      validation(
+        "VALIDATION_SERIAL_UNIT_REQUIRED",
+        "Una variante serializada se vende de a una unidad, eligiendo cuál.",
+      );
+    }
+    if (!variant.is_serialized && line.serial_unit_id !== null) {
+      validation(
+        "VALIDATION_SERIAL_UNIT_NOT_APPLICABLE",
+        "Solo una variante serializada lleva una unidad elegida.",
+      );
+    }
+  }
+
+  // 2. Las variantes, TODAS en la misma llamada y ascendentes (RN-RES-07): las que se
+  // consumen, las que un decant bajo pedido toca (la suya, su granel y su BOM) y las
+  // de las reservas del pedido (que se sueltan al final). Los lotes de todas.
+  const consumeVariantIds = [...new Set(consumeLines.map((line) => line.variant_id))];
+  const decantVariantIds: string[] = [];
+  for (const variantId of new Set(decantLines.map((line) => line.variant_id))) {
+    decantVariantIds.push(...(await listDecantVariantIds(tx, variantId)));
+  }
+  const reservedVariantIds = await reservationsRepo.listOpenReservationVariantIds(
+    tx,
+    tenantId,
+    SALE_ORDER_REFERENCE,
+    input.id,
+  );
+  await lockVariantsThenLots(tx, tenantId, {
+    variantIds: [...consumeVariantIds, ...decantVariantIds, ...reservedVariantIds],
+    allLotsOfVariants: true,
+  });
+
+  // 3. Consumo. Todo lo que se lee de acá en adelante se lee con los bloqueos tomados.
+  let movementCount = 0;
+  let layerCount = 0;
+  let serialUnitsSold = 0;
+  let orderCogs = 0n;
+  if (consumeLines.length > 0) {
+    const [lotRows, stock, ownReserved] = await Promise.all([
+      inventoryRepo.listSaleAllocationLots(tx, consumeVariantIds),
+      reservationsRepo.findVariantsStock(tx, consumeVariantIds),
+      repo.sumLiveReservedByVariantOfOrder(tx, tenantId, input.id),
+    ]);
+    // Una reserva atada a un lote (una retención manual, RN-RES-06) es una promesa sobre ese
+    // frasco: no se consume. Las de este pedido son por variante y no entran acá.
+    const reservedOnLot = await reservationsRepo.sumLiveReservedByLot(
+      tx,
+      tenantId,
+      lotRows.map((lot) => lot.lot_id),
+    );
+
+    const serialLines = consumeLines.filter((line) => line.serial_unit_id !== null);
+    const serialUnitIds = serialLines.map((line) => line.serial_unit_id!);
+    const [units, reservedByOthers] = await Promise.all([
+      repo.findSerialUnitsForConfirmation(tx, tenantId, serialUnitIds),
+      repo.listSerialUnitsReservedByOthers(tx, tenantId, serialUnitIds, input.id),
+    ]);
+    const unitById = new Map(units.map((unit) => [unit.id, unit]));
+    const reservedElsewhere = new Set(reservedByOthers);
+    for (const line of serialLines) {
+      const unit = unitById.get(line.serial_unit_id!);
+      if (!unit || unit.variant_id !== line.variant_id || unit.status !== "available") {
+        throw toTRPCError(
+          appError(
+            "CONFLICT_SERIAL_UNIT_UNAVAILABLE",
+            409,
+            "Una de las unidades elegidas ya no está disponible para la venta. Elegí otra o sacala del pedido.",
+            { serialUnitId: line.serial_unit_id, sku: variantOf(line).sku },
+          ),
+        );
+      }
+      if (reservedElsewhere.has(unit.id)) {
+        throw toTRPCError(
+          appError(
+            "CONFLICT_SERIAL_UNIT_RESERVED",
+            409,
+            "Una de las unidades elegidas está reservada por otro pedido. Elegí otra o esperá a que se libere.",
+            { serialUnitId: unit.id, sku: variantOf(line).sku },
+          ),
+        );
+      }
+    }
+
+    const plan = planSaleConsumption({
+      lines: consumeLines.map((line) => {
+        const variant = variantOf(line);
+        const unit = line.serial_unit_id === null ? undefined : unitById.get(line.serial_unit_id);
+        return {
+          lineId: line.id,
+          variantId: line.variant_id,
+          qty: toLineQuantity(line.qty.toNumber(), variant.uom),
+          policy: variant.allocation_policy,
+          // La unidad sin lote no se vende: no hay de dónde sacar ni a qué costo (vacío → rechazo del dominio).
+          serialUnit: unit ? { id: unit.id, lotId: unit.lot_id ?? "" } : null,
+        };
+      }),
+      lots: lotRows.map((lot) => {
+        const variant = variantById.get(lot.variant_id)!;
+        return {
+          id: lot.lot_id,
+          variantId: lot.variant_id,
+          receivedAt: lot.received_at,
+          expiryAt: lot.expiry_at,
+          available: freeOfLot(
+            lot.on_hand.toNumber(),
+            reservedOnLot.get(lot.lot_id) ?? 0,
+            variant.uom,
+          ),
+          unitCost: Money.pyg(lot.unit_landed_cost_pyg),
+          status: "available" as const,
+          variantType: variant.variant_type,
+          uom: variant.uom,
+        };
+      }),
+      // Lo que ESTE pedido puede tomar: el disponible de la variante más lo que él mismo
+      // tiene reservado. La reserva de otro pedido no se consume aunque el lote tenga saldo.
+      availability: consumeVariantIds.map((variantId) => ({
+        variantId,
+        available: toLineQuantity(
+          (stock.get(variantId)?.available ?? 0) + (ownReserved.get(variantId) ?? 0),
+          variantById.get(variantId)!.uom,
+        ),
+      })),
+    });
+    if (!plan.ok) {
+      throw toTRPCError(
+        consumptionFailure(
+          plan.error,
+          new Map(variants.map((variant) => [variant.id, variant.sku])),
+          new Map(consumeLines.map((line) => [line.id, variantOf(line).sku])),
+        ),
+      );
+    }
+
+    // Escritura: leer, decidir, escribir. Una salida y una capa por capa de costo.
+    for (const [index, consumed] of plan.value.lines.entries()) {
+      const line = consumeLines[index]!;
+      const variant = variantOf(line);
+      for (const layer of consumed.layers) {
+        await inventoryRepo.insertSaleMovementWithLayer(tx, {
+          tenantId,
+          lotId: layer.lotId,
+          variantId: line.variant_id,
+          serialUnitId: line.serial_unit_id,
+          qty: layer.qty.value,
+          uom: variant.uom,
+          unitCostPyg: layer.unitCost.minor,
+          totalCostPyg: layer.totalCost.minor,
+          saleOrderId: input.id,
+          occurredAt: now,
+          createdBy: ctx.userId,
+          note: `Venta ${before.code}, línea ${line.position + 1}`,
+        });
+        movementCount += 1;
+        layerCount += 1;
+      }
+      if (line.serial_unit_id !== null) {
+        if (!(await repo.markSerialUnitSold(tx, tenantId, line.serial_unit_id, line.id))) {
+          throw toTRPCError(
+            appError(
+              "CONFLICT_SERIAL_UNIT_UNAVAILABLE",
+              409,
+              "Una de las unidades elegidas ya no está disponible para la venta. Elegí otra o sacala del pedido.",
+              { serialUnitId: line.serial_unit_id, sku: variant.sku },
+            ),
+          );
+        }
+        serialUnitsSold += 1;
+      }
+    }
+    await repo.setLinesCogs(
+      tx,
+      tenantId,
+      plan.value.lines.map((consumed) => ({ id: consumed.lineId, cogsPyg: consumed.cogs.minor })),
+    );
+    orderCogs = plan.value.cogs.minor;
+  }
+
+  // 4. El consumo de verdad reemplaza a la promesa: se sueltan las reservas del pedido.
+  // Sus variantes ya están en el bloqueo de arriba.
+  const reservationsReleased = await releaseReservationsOf(
+    tx,
+    ctx,
+    SALE_ORDER_REFERENCE,
+    input.id,
+    deps,
+  );
+
+  const updated = await repo.updateOrderStatus(tx, tenantId, input.id, before.status, {
+    status: "paid",
+    confirmedAt: now,
+    cogsPyg: orderCogs,
+  });
+  if (!updated) throw toTRPCError(FORBIDDEN_ACTION);
+  await repo.insertTransition(tx, {
+    tenant_id: tenantId,
+    sale_order_id: input.id,
+    from_status: before.status,
+    to_status: "paid",
+    actor_id: ctx.userId,
+    audience: ctx.audience,
+    reason: input.reason ?? null,
+    occurred_at: now,
+  });
+
+  // 5. Los decants bajo pedido: la orden nace con la venta cobrada (RN-FRA-01). No se
+  // asienta su costo: se asienta al ejecutarla.
+  const alreadyPlanned = await repo.listLinesWithActiveDecantOrder(
+    tx,
+    tenantId,
+    decantLines.map((line) => line.id),
+  );
+  let decantOrdersCreated = 0;
+  for (const line of decantLines) {
+    if (alreadyPlanned.has(line.id)) continue;
+    await createPlannedWorkOrder(
+      tx,
+      ctx,
+      {
+        saleOrderLineId: line.id,
+        targetVariantId: line.variant_id,
+        qtyUnits: line.qty.toNumber(),
+      },
+      deps,
+    );
+    decantOrdersCreated += 1;
+  }
+
+  // Sin costos: la auditoría la lee quien no puede ver el COGS (WP-B11g).
+  await audit(
+    tx,
+    ctx,
+    "sales.order.confirm",
+    input.id,
+    { status: before.status },
+    {
+      status: "paid",
+      movements: movementCount,
+      costLayers: layerCount,
+      serialUnitsSold,
+      reservationsReleased,
+      decantOrdersCreated,
+    },
+  );
+
+  const row = await repo.findOrder(tx, tenantId, input.id);
+  if (!row) throw new Error("pedido confirmado no se pudo releer");
+  return toSaleOrder(row, (await listOrderReservations(tx, tenantId, [input.id])).get(input.id));
 }

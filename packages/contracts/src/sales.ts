@@ -159,7 +159,7 @@ export const listSaleOrdersOutput = paginatedOutputSchema(saleOrderSchema);
 /**
  * Solo las transiciones que no tocan inventario ni cobro (RN-VTA-02): pasar a
  * `awaiting_payment` y cancelar (un pedido con órdenes de fraccionamiento sin
- * cancelar no se cancela). Cobrar es de WP-C19; devolver, de WP-C21.
+ * cancelar no se cancela). Confirmar el pago es `confirmSaleOrderInput` (WP-C19); devolver, de WP-C21.
  */
 export const transitionSaleOrderInput = z
   .object({
@@ -169,3 +169,20 @@ export const transitionSaleOrderInput = z
   })
   .strict();
 export type TransitionSaleOrderInput = z.infer<typeof transitionSaleOrderInput>;
+
+/**
+ * Confirmar el pago (WP-C19, RF-VTA-05, RN-VTA-02): `awaiting_payment → paid`.
+ * Es lo que consume el inventario, así que no es una transición más de
+ * `transitionSaleOrderInput`: tiene su procedimiento, su `Idempotency-Key` y
+ * su respuesta es el pedido administrativo de siempre, sin costos (el COGS que
+ * esta operación calcula y persiste NO viaja: lo lee quien tenga permiso de
+ * costos, WP-B11g). Sin monto ni medio de pago: el cobro lo registra el módulo
+ * de pagos; acá el personal confirma que el pago ocurrió.
+ */
+export const confirmSaleOrderInput = z
+  .object({
+    id: uuid,
+    reason: z.string().trim().min(1).max(MAX_TRANSITION_REASON_LENGTH).nullable().optional(),
+  })
+  .strict();
+export type ConfirmSaleOrderInput = z.infer<typeof confirmSaleOrderInput>;

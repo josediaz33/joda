@@ -1,12 +1,14 @@
 // Barrel de packages/domain/src/sales/ — máquina de estados y totales
 // (order.ts, WP-A08/WP-A09), TTL de reserva (reservation.ts, WP-A09) y
 // señas (deposit.ts, WP-A09) y armado del pedido con totales e IVA
-// (orderPricing.ts, WP-C17), más la reserva de un pedido que pasa a
+// (orderPricing.ts, WP-C17), el consumo de inventario al confirmar la venta
+// (orderConsumption.ts, WP-C19), más la reserva de un pedido que pasa a
 // `awaiting_payment` (orderReservation.ts, WP-C18b). "Precio por canal"
 // (pricing.ts) queda fuera, sin WP asignado todavía: ver la nota al tope de
 // order.ts sobre por qué WP-A09 no lo incluyó.
 export * from "./deposit.js";
 export * from "./order.js";
+export * from "./orderConsumption.js";
 export * from "./orderPricing.js";
 export * from "./orderReservation.js";
 export * from "./reservation.js";
