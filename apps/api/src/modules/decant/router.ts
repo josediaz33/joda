@@ -34,11 +34,18 @@ function requireDeps(deps: DecantServiceDeps | null): DecantServiceDeps {
 
 // `execute` exige `inventory.decant:execute` porque es el permiso que la
 // política de escritura de `inventory_movements` (WP-B11d) pide para los
-// movimientos de la ejecución (docs/security-spec.md §3.1). `plan` y `start`
-// no escriben movimientos: llevan el mismo permiso para que planificar, tomar y
-// ejecutar una orden sea trabajo de un mismo rol (el operador de fraccionamiento).
+// movimientos de la ejecución (docs/security-spec.md §3.1). `start` no escribe
+// movimientos: lleva el mismo permiso para que tomar y ejecutar una orden sea
+// trabajo de un mismo rol (el operador de fraccionamiento).
+//
+// `plan` exige `inventory.decant:plan` y SOLO ese (WP-C19, decisión de José del
+// 2026-10-07): lo reciben el vendedor y el depósito por seed, y el vendedor
+// planifica sin `inventory.stock:read` porque lee los lotes por
+// `app.list_decant_plan_lots`, que no devuelve costos. Es el permiso con el
+// que la política de `stock_reservations` (0041) deja reservar `decant_hold`.
 // La cola solo lee: el mismo permiso que ver saldos y lotes.
 const EXECUTE = { permission: "inventory.decant:execute" } as const;
+const PLAN = { permission: "inventory.decant:plan" } as const;
 const READ = { permission: "inventory.stock:read" } as const;
 
 /**
@@ -51,7 +58,7 @@ const READ = { permission: "inventory.stock:read" } as const;
 export function createDecantRouter(db: PrismaClient | null, deps: DecantServiceDeps | null) {
   return router({
     plan: staffProcedure
-      .meta(EXECUTE)
+      .meta(PLAN)
       .input(planDecantInput)
       .output(planDecantOutput)
       .mutation(({ ctx, input }) =>

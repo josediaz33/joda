@@ -119,6 +119,7 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
       "market.supplier.list",
       "market.supplier.update",
       "sales.order.byId",
+      "sales.order.confirm",
       "sales.order.create",
       "sales.order.list",
       "sales.order.remove",
@@ -139,17 +140,18 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
     );
   });
 
-  // WP-C13: planificar, iniciar y ejecutar una orden de fraccionamiento exigen
-  // el permiso que la política de escritura de `inventory_movements` (WP-B11d,
-  // docs/security-spec.md §3.1) pide para los movimientos `decant_consumption`,
-  // `waste` y `bom_consumption`; la cola solo lee. Si alguien cambia un
-  // permiso acá sin cambiar la política, la ejecución deja de coincidir con la
-  // base y falla a mitad de la transacción.
-  it("inventory.decant.* exige inventory.decant:execute para planificar, iniciar y ejecutar, e inventory.stock:read para la cola (RF-FRA-01…06)", () => {
+  // WP-C13: iniciar y ejecutar una orden de fraccionamiento exigen el permiso que la
+  // política de escritura de `inventory_movements` (WP-B11d, docs/security-spec.md
+  // §3.1) pide para los movimientos `decant_consumption`, `waste` y
+  // `bom_consumption`; la cola solo lee. Si alguien cambia un permiso acá sin cambiar
+  // la política, la ejecución deja de coincidir con la base y falla a mitad de la
+  // transacción. `plan` exige `inventory.decant:plan` y solo ese (WP-C19, decisión de
+  // José del 2026-10-07): el vendedor planifica sin `inventory.stock:read`.
+  it("inventory.decant.* exige inventory.decant:plan para planificar, inventory.decant:execute para iniciar y ejecutar, e inventory.stock:read para la cola (RF-FRA-01…06)", () => {
     const procedures = flattenProcedures(createAppRouter(null));
 
     expect(procedures["inventory.decant.plan"]?._def.meta?.permission).toBe(
-      "inventory.decant:execute",
+      "inventory.decant:plan",
     );
     expect(procedures["inventory.decant.start"]?._def.meta?.permission).toBe(
       "inventory.decant:execute",
@@ -184,6 +186,7 @@ describe("docs/api-conventions.md §9 · todo procedimiento declara permission o
     expect(procedures["sales.order.create"]?._def.meta?.permission).toBe("sales.order:write");
     expect(procedures["sales.order.remove"]?._def.meta?.permission).toBe("sales.order:write");
     expect(procedures["sales.order.transition"]?._def.meta?.permission).toBe("sales.order:write");
+    expect(procedures["sales.order.confirm"]?._def.meta?.permission).toBe("sales.order:write");
     expect(procedures["sales.order.list"]?._def.meta?.permission).toBe("sales.order:read");
     expect(procedures["sales.order.byId"]?._def.meta?.permission).toBe("sales.order:read");
   });

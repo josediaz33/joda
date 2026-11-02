@@ -945,16 +945,23 @@ describe(
 
       it("con granel para un solo plan, dos planes simultáneos: uno reserva y el otro se rechaza (sin el bloqueo de la variante pasaban los dos)", async () => {
         const scenario = await decantScenario(15);
-        const first = await draft(ownerCtx, CHANNEL, [{ variantId: scenario.vial, qty: "1" }]);
-        const second = await draft(ownerCtx, CHANNEL, [{ variantId: scenario.vial, qty: "1" }]);
-        const plan = (saleOrderId: string) =>
+        // Dos ventas en espera de pago, cada una con una línea del decant: `plan` (WP-C19)
+        // exige la línea y el estado de su venta.
+        const awaitingLine = async () => {
+          const order = await draft(ownerCtx, CHANNEL, [{ variantId: scenario.target, qty: "1" }]);
+          await toAwaiting(ownerCtx, order.id);
+          return order.lines[0]!.id;
+        };
+        const first = await awaitingLine();
+        const second = await awaitingLine();
+        const plan = (saleOrderLineId: string) =>
           decant.planWorkOrder(db, { clock }, requestContext(ownerCtx), {
-            saleOrderId,
+            saleOrderLineId,
             targetVariantId: scenario.target,
             qtyUnits: 1,
           });
 
-        const outcomes = await Promise.allSettled([plan(first.id), plan(second.id)]);
+        const outcomes = await Promise.allSettled([plan(first), plan(second)]);
 
         expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(["fulfilled", "rejected"]);
         const reserved = await q<{ ml: string }>(

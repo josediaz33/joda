@@ -131,7 +131,14 @@ export async function updateOrderStatus(
   tenantId: string,
   id: string,
   from: SaleOrderStatus,
-  data: { status: SaleOrderStatus; placedAt?: Date; cancelledAt?: Date },
+  data: {
+    status: SaleOrderStatus;
+    placedAt?: Date;
+    cancelledAt?: Date;
+    confirmedAt?: Date;
+    /** El COGS del pedido: la suma del de sus líneas (WP-C19). */
+    cogsPyg?: bigint;
+  },
 ): Promise<boolean> {
   const result = await tx.sale_orders.updateMany({
     where: { id, tenant_id: tenantId, status: from },
@@ -139,6 +146,8 @@ export async function updateOrderStatus(
       status: data.status,
       ...(data.placedAt && { placed_at: data.placedAt }),
       ...(data.cancelledAt && { cancelled_at: data.cancelledAt }),
+      ...(data.confirmedAt && { confirmed_at: data.confirmedAt }),
+      ...(data.cogsPyg !== undefined && { cogs_pyg: data.cogsPyg }),
     },
   });
   return result.count === 1;
@@ -157,3 +166,128 @@ export const insertTransition = (
   tx: TenantTx,
   data: Prisma.sale_order_transitionsUncheckedCreateInput,
 ) => tx.sale_order_transitions.create({ data });
+
+// ---------------------------------------------------------------------
+// Confirmación de la venta — WP-C19 (RF-VTA-05, RF-VTA-06).
+// ---------------------------------------------------------------------
+
+/** Lo que la confirmación necesita de la variante de cada línea para decidir cómo se consume. */
+export const findVariantsForConfirmation = (tx: TenantTx, tenantId: string, ids: string[]) =>
+  tx.product_variants.findMany({
+    where: { id: { in: ids }, tenant_id: tenantId },
+    select: {
+      id: true,
+      sku: true,
+      uom: true,
+      variant_type: true,
+      production_mode: true,
+      is_serialized: true,
+      allocation_policy: true,
+    },
+  });
+
+/** Las unidades serializadas elegidas por las líneas, con el lote del que salen. */
+export const findSerialUnitsForConfirmation = (tx: TenantTx, tenantId: string, ids: string[]) =>
+  tx.serialized_units.findMany({
+    where: { id: { in: ids }, tenant_id: tenantId },
+    select: { id: true, variant_id: true, lot_id: true, status: true },
+  });
+
+/**
+ * Cuánto tiene reservado y vivo ESTE pedido por variante. «Viva» es la definición
+ * de `v_stock_available` (`released_at IS NULL AND expires_at > now()` con el
+ * `now()` de la base, RN-RES-03): el disponible de la variante ya descuenta esto,
+ * y el pedido que consume tiene derecho a ello.
+ */
+export async function sumLiveReservedByVariantOfOrder(
+  tx: TenantTx,
+  tenantId: string,
+  orderId: string,
+): Promise<Map<string, number>> {
+  const rows = await tx.$queryRaw<{ variant_id: string; reserved: Prisma.Decimal }[]>`
+    SELECT r.variant_id, sum(r.qty) AS reserved
+      FROM app.stock_reservations r
+     WHERE r.tenant_id = ${tenantId}::uuid
+       AND r.reference_type = 'sale_order'
+       AND r.reference_id = ${orderId}::uuid
+       AND r.released_at IS NULL
+       AND r.expires_at > now()
+     GROUP BY r.variant_id`;
+  return new Map(rows.map((row) => [row.variant_id, row.reserved.toNumber()]));
+}
+
+/** Las unidades serializadas con una reserva viva de OTRO origen: prometidas a otro cliente. */
+export async function listSerialUnitsReservedByOthers(
+  tx: TenantTx,
+  tenantId: string,
+  serialUnitIds: readonly string[],
+  orderId: string,
+): Promise<string[]> {
+  if (serialUnitIds.length === 0) return [];
+  const rows = await tx.$queryRaw<{ serial_unit_id: string }[]>`
+    SELECT DISTINCT r.serial_unit_id
+      FROM app.stock_reservations r
+     WHERE r.tenant_id = ${tenantId}::uuid
+       AND r.serial_unit_id = ANY(${[...serialUnitIds]}::uuid[])
+       AND r.released_at IS NULL
+       AND r.expires_at > now()
+       AND NOT (r.reference_type = 'sale_order' AND r.reference_id = ${orderId}::uuid)`;
+  return rows.map((row) => row.serial_unit_id);
+}
+
+/**
+ * Pasa la unidad a `sold` y la liga a la línea (RN-VTA-04), solo si sigue
+ * `available`: la guarda va en el `WHERE`, no en una lectura previa. Devuelve
+ * `false` si no la tomó (otro la vendió o la sacó de circulación).
+ */
+export async function markSerialUnitSold(
+  tx: TenantTx,
+  tenantId: string,
+  unitId: string,
+  lineId: string,
+): Promise<boolean> {
+  const result = await tx.serialized_units.updateMany({
+    where: { id: unitId, tenant_id: tenantId, status: "available" },
+    data: { status: "sold", sold_order_line_id: lineId },
+  });
+  return result.count === 1;
+}
+
+/** Guarda el COGS de cada línea (la suma de sus capas): una sentencia, no una por línea. */
+export async function setLinesCogs(
+  tx: TenantTx,
+  tenantId: string,
+  lines: readonly { readonly id: string; readonly cogsPyg: bigint }[],
+): Promise<void> {
+  if (lines.length === 0) return;
+  await tx.$executeRaw`
+    UPDATE app.sale_order_lines l
+       SET cogs_pyg = v.cogs
+      FROM unnest(${lines.map((line) => line.id)}::uuid[], ${lines.map((line) => line.cogsPyg)}::bigint[])
+           AS v(id, cogs)
+     WHERE l.id = v.id AND l.tenant_id = ${tenantId}::uuid`;
+}
+
+/**
+ * Las líneas del pedido que ya tienen una orden de fraccionamiento sin cancelar
+ * (el índice único de 0039 admite una por línea): `plan` pudo haberlas
+ * planificado antes de la confirmación y no se duplican.
+ */
+export async function listLinesWithActiveDecantOrder(
+  tx: TenantTx,
+  tenantId: string,
+  lineIds: readonly string[],
+): Promise<Set<string>> {
+  if (lineIds.length === 0) return new Set();
+  const rows = await tx.decant_work_orders.findMany({
+    where: {
+      tenant_id: tenantId,
+      sale_order_line_id: { in: [...lineIds] },
+      status: { not: "cancelled" },
+    },
+    select: { sale_order_line_id: true },
+  });
+  return new Set(
+    rows.flatMap((row) => (row.sale_order_line_id === null ? [] : [row.sale_order_line_id])),
+  );
+}

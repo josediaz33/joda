@@ -21,8 +21,33 @@ export type QueueOrderRow = Prisma.decant_work_ordersGetPayload<{ include: typeo
 // Lecturas de pertenencia (docs/api-conventions.md §8.4): bajo RLS, dentro de
 // la misma transacción, antes de escribir con un id que viene del cliente.
 // ---------------------------------------------------------------------
-export async function saleOrderExists(tx: TenantTx, saleOrderId: string): Promise<boolean> {
-  return (await tx.sale_orders.count({ where: { id: saleOrderId } })) > 0;
+export interface SaleLineForPlan {
+  readonly line_id: string;
+  readonly sale_order_id: string;
+  readonly variant_id: string;
+  readonly qty: Prisma.Decimal;
+  readonly order_status: string;
+}
+
+/**
+ * La línea de venta a planificar con el estado de su pedido, y BLOQUEA la fila
+ * del pedido (`FOR UPDATE`). La fila de la entidad que decide el caso de uso se
+ * toma antes que las de stock (RN-RES-07): serializa `plan` contra cancelar el
+ * pedido o confirmarlo, así el estado que se lee es el que sigue valiendo al
+ * escribir. Bajo RLS: una línea de otro tenant, o inexistente, da `null`.
+ */
+export async function lockSaleOrderOfLine(
+  tx: TenantTx,
+  tenantId: string,
+  lineId: string,
+): Promise<SaleLineForPlan | null> {
+  const rows = await tx.$queryRaw<SaleLineForPlan[]>`
+    SELECT l.id AS line_id, l.sale_order_id, l.variant_id, l.qty, o.status::text AS order_status
+      FROM app.sale_order_lines l
+      JOIN app.sale_orders o ON o.id = l.sale_order_id AND o.tenant_id = l.tenant_id
+     WHERE l.id = ${lineId}::uuid AND l.tenant_id = ${tenantId}::uuid
+       FOR UPDATE OF o`;
+  return rows[0] ?? null;
 }
 
 export interface TargetVariantRow {
@@ -80,19 +105,25 @@ export async function listBomComponents(
 export interface VariantLabelRow {
   readonly id: string;
   readonly sku: string;
+  readonly uom: Prisma.product_variantsGetPayload<Record<string, never>>["uom"];
+  readonly variant_type: Prisma.product_variantsGetPayload<Record<string, never>>["variant_type"];
   readonly allocation_policy: Prisma.product_variantsGetPayload<
     Record<string, never>
   >["allocation_policy"];
 }
 
-/** SKU y política de asignación de las variantes de los insumos: la política decide de qué lote sale cada uno (RN-LOT-05). */
+/**
+ * SKU, política de asignación, tipo y unidad de las variantes de los insumos (y
+ * del granel): la política decide de qué lote sale cada uno (RN-LOT-05); el tipo
+ * y la unidad arman el snapshot del lote al planificar sin leer lotes.
+ */
 export async function listVariantLabels(
   tx: TenantTx,
   variantIds: string[],
 ): Promise<VariantLabelRow[]> {
   return tx.product_variants.findMany({
     where: { id: { in: variantIds } },
-    select: { id: true, sku: true, allocation_policy: true },
+    select: { id: true, sku: true, uom: true, variant_type: true, allocation_policy: true },
   });
 }
 
@@ -142,6 +173,28 @@ export async function listOpenBulkLots(
   });
 }
 
+/** Un lote candidato para planificar, tal como lo entrega `app.list_decant_plan_lots` (WP-B18): sin costos. */
+export interface PlanLotRow {
+  readonly lot_id: string;
+  readonly available: Prisma.Decimal;
+  readonly opened_at: Date | null;
+}
+
+/**
+ * Los lotes candidatos de una variante para planificar un decant, SIN leer la
+ * tabla de lotes: el vendedor planifica con `inventory.decant:plan` y no tiene
+ * `inventory.stock:read` (H1 de WP-C13, decisión de José del 2026-10-07). La
+ * función falla cerrado sin el permiso y devuelve solo `lot_id`, el saldo y la
+ * apertura. El estado lo decide el tipo de la variante (granel → abierto para
+ * fraccionar; el resto → disponible). El saldo es el físico: lo reservado por
+ * otras órdenes lo descuenta quien llama.
+ */
+export async function listPlanLots(tx: TenantTx, variantId: string): Promise<PlanLotRow[]> {
+  return tx.$queryRaw<PlanLotRow[]>`
+    SELECT f.lot_id, f.available, f.opened_at
+      FROM app.list_decant_plan_lots(${variantId}::uuid) f`;
+}
+
 export async function findLotsWithVariant(
   tx: TenantTx,
   lotIds: string[],
@@ -170,6 +223,7 @@ export async function findWorkOrderForUpdate(
 export interface InsertWorkOrderInput {
   readonly tenantId: string;
   readonly saleOrderId: string;
+  readonly saleOrderLineId: string;
   readonly sourceLotId: string;
   readonly targetVariantId: string;
   readonly qtyUnits: number;
@@ -187,6 +241,7 @@ export async function insertWorkOrder(
     data: {
       tenant_id: input.tenantId,
       sale_order_id: input.saleOrderId,
+      sale_order_line_id: input.saleOrderLineId,
       source_lot_id: input.sourceLotId,
       target_variant_id: input.targetVariantId,
       qty_units: input.qtyUnits,

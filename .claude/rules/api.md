@@ -64,7 +64,7 @@ lotes**, en todo camino que decide sobre stock: es el orden único del sistema
 **Desde WP-C18b todos los caminos existentes lo cumplen, y todos pasan por
 `lockVariantsThenLots`** (`apps/api/src/db/stockLocks.ts`, el modo de bloqueo en
 una constante): no escribas un `FOR UPDATE` sobre variantes o lotes fuera de ese
-helper, y WP-C19 agrega su camino ya en el orden. La fila de la entidad que
+helper, y WP-C19 agregó el suyo ya en el orden (`confirmOrder`, `modules/sales/service.ts`). La fila de la entidad que
 decide el caso de uso (el pedido, la orden de fraccionamiento) se toma antes que
 las de stock. Quien solo conoce el lote lee su variante sin bloquear, bloquea
 variante y lote (`lockLotWithItsVariant`) y lee el saldo después. Quien inserta

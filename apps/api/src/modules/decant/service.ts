@@ -26,13 +26,19 @@ import {
   type DecantPlan,
   type DecantWoStatus,
   type LotSnapshot,
+  type PlanBulkLot,
 } from "@joda/domain";
 import type { PrismaClient } from "@joda/db";
 import { recordAuditEntry } from "../../db/audit.js";
 import { lockVariantsThenLots, peekLotVariantId } from "../../db/stockLocks.js";
 import { withIdempotentTx } from "../../db/withIdempotentTx.js";
 import { withTenantTx, type TenantTx, type TenantTxContext } from "../../db/withTenantTx.js";
-import { appError, toTRPCError, type ApiError } from "../../middleware/errorMapper.js";
+import {
+  appError,
+  isPrismaKnownError,
+  toTRPCError,
+  type ApiError,
+} from "../../middleware/errorMapper.js";
 import { buildIdempotencyRequest } from "../../middleware/idempotency.js";
 import type { RequestContext } from "../../trpc/context.js";
 import * as inventoryRepo from "../inventory/repository.js";
@@ -178,6 +184,24 @@ const SOURCE_LOT_VARIANT_MISMATCH_ERROR = appError(
   "El lote de origen no es del granel del que se sirve esta variante.",
 );
 
+const SALE_ORDER_NOT_PLANNABLE_ERROR = appError(
+  "CONFLICT_SALE_ORDER_NOT_PLANNABLE",
+  409,
+  "Solo se planifica el fraccionamiento de una venta en espera de pago o ya cobrada.",
+);
+
+const DECANT_ORDER_ALREADY_PLANNED_ERROR = appError(
+  "CONFLICT_DECANT_ORDER_ALREADY_PLANNED",
+  409,
+  "Esa línea de la venta ya tiene una orden de fraccionamiento activa. Cancelala para planificar otra.",
+);
+
+const DECANT_LINE_MISMATCH_ERROR = appError(
+  "VALIDATION_DECANT_LINE_MISMATCH",
+  400,
+  "La variante y la cantidad de la orden tienen que ser las de la línea de la venta.",
+);
+
 function noBulkAvailableError(requiredMl: number, largestAvailableMl: number): ApiError {
   return appError(
     "CONFLICT_NO_BULK_AVAILABLE",
@@ -222,6 +246,8 @@ interface BomLine {
   readonly perUnit: Quantity;
   readonly isOptional: boolean;
   readonly allocationPolicy: repo.VariantLabelRow["allocation_policy"];
+  /** `product_variants.uom` del insumo: sus lotes solo cuentan si se miden en la unidad que pide el BOM. */
+  readonly variantUom: repo.VariantLabelRow["uom"];
 }
 
 interface BomContext {
@@ -269,6 +295,7 @@ async function loadBomLines(tx: TenantTx, variantId: string): Promise<readonly B
       perUnit: toQuantity(perUnit, component.uom),
       isOptional: component.is_optional,
       allocationPolicy: label.allocation_policy,
+      variantUom: label.uom,
     };
   });
 }
@@ -355,15 +382,70 @@ export interface PlannedWorkOrder {
 }
 
 /**
- * La orden NACE al confirmar una venta (WP-C19, RN-FRA-01): C19 llama a esta
- * función DENTRO de su transacción de confirmación, así que la orden y la
- * venta se confirman o se revierten juntas. Por eso recibe el `tx` en vez de
- * abrir uno, y lanza `TRPCError` ante lo que rechaza (rollback del llamador).
+ * Un lote candidato para planificar, SIN costo: lo que `planDecant` lee (estado,
+ * tipo y unidad de la variante, cuánto hay) y su identidad. Lo arma quien
+ * planifica con las tres columnas de `app.list_decant_plan_lots` (el vendedor no
+ * lee lotes) o, si un administrador eligió el frasco, desde la fila del lote.
+ */
+interface PlanLotCandidate {
+  readonly id: string;
+  readonly variantId: string;
+  /**
+   * Lo que queda libre del lote: el saldo menos lo que otras órdenes reservaron atado
+   * a él. `app.list_decant_plan_lots` ya lo entrega descontado (0041); un lote que se
+   * lee de la tabla (`sourceLotId`) se descuenta al armar el candidato.
+   */
+  readonly free: Quantity;
+  readonly status: PlanBulkLot["status"];
+  readonly variantType: PlanBulkLot["variantType"];
+  readonly uom: PlanBulkLot["uom"];
+}
+
+/** El estado que `app.list_decant_plan_lots` da por tipo de variante (0039): el granel abierto, el resto disponible. */
+function planLotStatus(variantType: repo.VariantLabelRow["variant_type"]): PlanBulkLot["status"] {
+  return variantType === "bulk" ? "open_for_decant" : "available";
+}
+
+/**
+ * Las variantes que planificar (y ejecutar) el fraccionamiento de una variante
+ * decant toca: la propia, la del granel de la que se sirve y las de los insumos
+ * del BOM. Quien necesita bloquearlas junto con otras variantes (la confirmación
+ * de una venta con líneas de decant) las toma TODAS en una sola llamada a
+ * `lockVariantsThenLots`, ascendentes (RN-RES-07): tomarlas después, ya con
+ * variantes de id mayor en la mano, rompe el orden y se interbloquea.
+ */
+export async function listDecantVariantIds(
+  tx: TenantTx,
+  targetVariantId: string,
+): Promise<string[]> {
+  const variant = await repo.findTargetVariant(tx, targetVariantId);
+  if (!variant) return [targetVariantId];
+  const components = await repo.listBomComponents(tx, targetVariantId);
+  return [
+    targetVariantId,
+    ...(variant.source_variant_id === null ? [] : [variant.source_variant_id]),
+    ...components.map((component) => component.component_variant_id),
+  ];
+}
+
+/**
+ * La orden NACE de una línea de la venta (WP-C19, RN-FRA-01): la confirmación
+ * la llama DENTRO de su transacción, o `inventory.decant.plan` por separado, así
+ * que la orden y su venta se confirman o se revierten juntas. Por eso recibe el
+ * `tx` en vez de abrir uno, y lanza `TRPCError` ante lo que rechaza (rollback del
+ * llamador).
  *
- * Verifica bajo RLS que la venta, la variante y el lote son del tenant antes
- * de escribir (docs/api-conventions.md §8.4): las FK de Postgres no evalúan
- * RLS. NO valida el estado de la venta ni que tenga una línea de esa variante:
- * es coherencia del flujo de confirmación, que es de C19.
+ * **Valida la venta** (decisión de José, 2026-10-07): la línea existe en el tenant
+ * (bajo RLS: las FK no evalúan RLS, docs/api-conventions.md §8.4), su pedido está
+ * en `awaiting_payment` o `paid` (la «confirmación de la venta» de RN-FRA-01), y la
+ * variante y la cantidad de la orden son las de la línea. Toma el bloqueo del
+ * pedido antes que el de stock. **Una orden activa por línea** lo impone la base
+ * (`decant_wo_one_active_per_line`, 0039): un segundo intento responde 409.
+ *
+ * **Lee los lotes sin `inventory.stock:read`** (H1 de WP-C13): el granel y cada
+ * insumo vienen de `app.list_decant_plan_lots`, que no devuelve costos. Un
+ * `sourceLotId` explícito sí se lee del lote, bajo RLS: quien no lee lotes recibe
+ * 404, como siempre.
  *
  * **Reserva** (WP-C18b, RN-FRA-01/02, RN-RES-06): en la misma transacción que
  * crea la orden, el granel (`mlToReserve`) atado al lote elegido y cada insumo
@@ -379,7 +461,15 @@ export async function createPlannedWorkOrder(
   input: PlanDecantInput,
   deps: DecantServiceDeps,
 ): Promise<PlannedWorkOrder> {
-  if (!(await repo.saleOrderExists(tx, input.saleOrderId))) throw toTRPCError(NOT_FOUND_ERROR);
+  // Primero la fila de la entidad que decide el caso de uso: el pedido (RN-RES-07).
+  const saleLine = await repo.lockSaleOrderOfLine(tx, session.tenantId, input.saleOrderLineId);
+  if (!saleLine) throw toTRPCError(NOT_FOUND_ERROR);
+  if (saleLine.order_status !== "awaiting_payment" && saleLine.order_status !== "paid") {
+    throw toTRPCError(SALE_ORDER_NOT_PLANNABLE_ERROR);
+  }
+  if (saleLine.variant_id !== input.targetVariantId || saleLine.qty.toNumber() !== input.qtyUnits) {
+    throw toTRPCError(DECANT_LINE_MISMATCH_ERROR);
+  }
 
   const variant = await repo.findTargetVariant(tx, input.targetVariantId);
   if (!variant) throw toTRPCError(NOT_FOUND_ERROR);
@@ -398,63 +488,86 @@ export async function createPlannedWorkOrder(
   if (wasteFactor === null) throw toTRPCError(PRODUCT_NOT_PERFUME_ERROR);
 
   const lines = await loadBomLines(tx, variant.id);
-  // RN-RES-07: las variantes (decant, granel e insumos) y sus lotes, ANTES de leer
-  // el saldo y las reservas. Desde acá nadie reserva, abre ni consume sobre ellas.
+  // RN-RES-07: las variantes (decant, granel e insumos) y sus lotes, ANTES de leer el
+  // saldo y las reservas. Desde acá nadie reserva, abre ni consume sobre ellas. Quien
+  // no lee lotes (el vendedor) no bloquea ninguno: lo que lo protege es la variante,
+  // que todo camino que decide sobre stock toma primero.
   await lockDecantVariants(tx, session.tenantId, variant.id, sourceVariantId, lines);
-  const bom: BomContext = { lines, supplyLots: await loadSupplyLots(tx, lines) };
 
   // El disponible por variante (saldo − reservas vivas, RN-RES-03): las reservas
   // sin lote (las de un insumo) no se descuentan lote por lote, se descuentan
   // del total de la variante.
   const stock = await reservationsRepo.findVariantsStock(tx, [
     sourceVariantId,
-    ...bom.lines.map((line) => line.componentVariantId),
+    ...lines.map((line) => line.componentVariantId),
   ]);
   const variantAvailable = (variantId: string, uom: "unit" | "ml"): Quantity =>
     toQuantity(stock.get(variantId)?.available ?? 0, uom);
   const smaller = (a: Quantity, b: Quantity): Quantity => (a.compare(b) <= 0 ? a : b);
 
-  const bomAvailability: BomAvailability[] = bom.lines.map((line) => ({
-    componentId: line.componentVariantId,
-    available: smaller(
-      supplySnapshotsOf(line, bom.supplyLots).reduce(
-        (sum, lot) => sum.plus(lot.available),
-        Quantity.zero(line.perUnit.uom),
+  // Los insumos: lo que hay en sus lotes disponibles, sin leer la tabla de lotes (una
+  // llamada por componente, como fijó WP-B18), nunca más que el disponible de la variante.
+  const bomAvailability: BomAvailability[] = [];
+  for (const line of lines) {
+    const supplyLots =
+      line.variantUom === line.perUnit.uom
+        ? await repo.listPlanLots(tx, line.componentVariantId)
+        : [];
+    bomAvailability.push({
+      componentId: line.componentVariantId,
+      available: smaller(
+        supplyLots.reduce(
+          (sum, lot) => sum.plus(toQuantity(lot.available.toNumber(), line.perUnit.uom)),
+          Quantity.zero(line.perUnit.uom),
+        ),
+        variantAvailable(line.componentVariantId, line.perUnit.uom),
       ),
-      variantAvailable(line.componentVariantId, line.perUnit.uom),
-    ),
-    perUnit: line.perUnit,
-  }));
+      perUnit: line.perUnit,
+    });
+  }
 
   // El granel lo elige el servidor salvo que el admin pida uno: el abierto de
   // apertura más antigua que alcance para la orden COMPLETA. Si ninguno
   // alcanza solo se rechaza; nunca se abre un frasco desde acá (irreversible).
-  let candidates: repo.LotWithVariantRow[];
+  let candidates: PlanLotCandidate[];
   if (input.sourceLotId !== undefined) {
     const lot = await repo.findLotWithVariant(tx, input.sourceLotId);
     if (!lot) throw toTRPCError(NOT_FOUND_ERROR);
     if (lot.variant_id !== sourceVariantId) throw toTRPCError(SOURCE_LOT_VARIANT_MISMATCH_ERROR);
-    candidates = [lot];
-  } else {
-    candidates = await repo.listOpenBulkLots(tx, sourceVariantId);
-  }
-  // Lo libre de cada lote candidato: su saldo menos lo que otras órdenes reservaron
-  // atado a él, y nunca más que el disponible de la variante (que además descuenta
-  // las reservas sin lote del granel).
-  const reservedByLot = await reservationsRepo.sumLiveReservedByLot(
-    tx,
-    session.tenantId,
-    candidates.map((lot) => lot.id),
-  );
-  const bulkVariantAvailable = variantAvailable(sourceVariantId, "ml");
-  const freeOf = (lot: repo.LotWithVariantRow): Quantity => {
-    const free = Quantity.ml(lot.inventory_balances?.on_hand.toNumber() ?? 0).minus(
-      Quantity.ml(reservedByLot.get(lot.id) ?? 0),
+    const reservedOnLot = await reservationsRepo.sumLiveReservedByLot(tx, session.tenantId, [
+      lot.id,
+    ]);
+    const freeOnLot = toQuantity(lot.inventory_balances?.on_hand.toNumber() ?? 0, "ml").minus(
+      Quantity.ml(reservedOnLot.get(lot.id) ?? 0),
     );
-    return free.isNegative() ? Quantity.zero("ml") : smaller(free, bulkVariantAvailable);
-  };
+    candidates = [
+      {
+        id: lot.id,
+        variantId: lot.variant_id,
+        free: freeOnLot.isNegative() ? Quantity.zero("ml") : freeOnLot,
+        status: lot.status,
+        variantType: lot.product_variants.variant_type,
+        uom: lot.product_variants.uom,
+      },
+    ];
+  } else {
+    const [sourceKind] = await repo.listVariantLabels(tx, [sourceVariantId]);
+    if (!sourceKind) throw toTRPCError(NOT_FOUND_ERROR);
+    candidates = (await repo.listPlanLots(tx, sourceVariantId)).map((lot) => ({
+      id: lot.lot_id,
+      variantId: sourceVariantId,
+      free: toQuantity(lot.available.toNumber(), sourceKind.uom),
+      status: planLotStatus(sourceKind.variant_type),
+      variantType: sourceKind.variant_type,
+      uom: sourceKind.uom,
+    }));
+  }
+  // Lo libre de cada lote candidato, y nunca más que el disponible de la variante (que
+  // además descuenta las reservas sin lote del granel).
+  const bulkVariantAvailable = variantAvailable(sourceVariantId, "ml");
+  const freeOf = (lot: PlanLotCandidate): Quantity => smaller(lot.free, bulkVariantAvailable);
 
-  let chosen: { lot: repo.LotWithVariantRow; plan: DecantPlan } | undefined;
+  let chosen: { lot: PlanLotCandidate; plan: DecantPlan } | undefined;
   let lastShortage: DecantError | undefined;
   let largestAvailableMl = 0;
   for (const lot of candidates) {
@@ -462,7 +575,12 @@ export async function createPlannedWorkOrder(
       unitsRequested: input.qtyUnits,
       mlPerUnit,
       wasteFactor: Percentage.of(wasteFactor),
-      bulkLot: toLotSnapshot(lot, freeOf(lot)),
+      bulkLot: {
+        available: freeOf(lot),
+        status: lot.status,
+        variantType: lot.variantType,
+        uom: lot.uom,
+      },
       bomAvailability,
     });
     if (planned.ok) {
@@ -488,17 +606,29 @@ export async function createPlannedWorkOrder(
   }
 
   const { lot, plan } = chosen;
-  const order = await repo.insertWorkOrder(tx, {
-    tenantId: session.tenantId,
-    saleOrderId: input.saleOrderId,
-    sourceLotId: lot.id,
-    targetVariantId: variant.id,
-    qtyUnits: input.qtyUnits,
-    mlPerUnit,
-    mlExpected: plan.mlExpected.value,
-    wasteExpected: plan.wasteExpected.value,
-    createdBy: session.userId,
-  });
+  let order: repo.DecantWorkOrderRow;
+  try {
+    order = await repo.insertWorkOrder(tx, {
+      tenantId: session.tenantId,
+      saleOrderId: saleLine.sale_order_id,
+      saleOrderLineId: saleLine.line_id,
+      sourceLotId: lot.id,
+      targetVariantId: variant.id,
+      qtyUnits: input.qtyUnits,
+      mlPerUnit,
+      mlExpected: plan.mlExpected.value,
+      wasteExpected: plan.wasteExpected.value,
+      createdBy: session.userId,
+    });
+  } catch (error) {
+    // El índice único parcial de 0039 (una orden activa por línea): dos llamadas, con
+    // claves de idempotencia distintas o sin clave, planificaron la misma línea. El
+    // bloqueo de las variantes las serializa, así que la segunda lo encuentra acá.
+    if (isPrismaKnownError(error) && error.code === "P2002") {
+      throw toTRPCError(DECANT_ORDER_ALREADY_PLANNED_ERROR);
+    }
+    throw error;
+  }
 
   // RN-FRA-01/02: el compromiso. El granel va atado al lote elegido; los insumos,
   // por variante (RN-RES-06). Una cantidad en cero (un insumo opcional que el BOM
@@ -507,7 +637,7 @@ export async function createPlannedWorkOrder(
   await reservationsRepo.insertReservations(tx, [
     {
       tenantId: session.tenantId,
-      variantId: lot.variant_id,
+      variantId: lot.variantId,
       lotId: lot.id,
       serialUnitId: null,
       qty: plan.mlToReserve.value,
@@ -517,7 +647,7 @@ export async function createPlannedWorkOrder(
       expiresAt: holdExpiresAt,
       createdBy: session.userId,
     },
-    ...bom.lines.flatMap((line, index) => {
+    ...lines.flatMap((line, index) => {
       const qty = plan.bomToReserve[index]!.qty.value;
       return qty > 0
         ? [
@@ -538,7 +668,7 @@ export async function createPlannedWorkOrder(
     }),
   ]);
 
-  const bomLines = bom.lines.map((line, index): DecantBomLine => ({
+  const bomLines = lines.map((line, index): DecantBomLine => ({
     componentVariantId: line.componentVariantId,
     qty: plan.bomToReserve[index]!.qty.value,
     uom: line.perUnit.uom,
@@ -568,7 +698,8 @@ export async function planWorkOrder(
       entityId: planned.order.id,
       before: null,
       after: {
-        saleOrderId: input.saleOrderId,
+        saleOrderId: planned.order.sale_order_id,
+        saleOrderLineId: input.saleOrderLineId,
         targetVariantId: input.targetVariantId,
         sourceLotId: planned.order.source_lot_id,
         qtyUnits: input.qtyUnits,

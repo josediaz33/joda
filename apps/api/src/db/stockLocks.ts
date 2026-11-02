@@ -12,7 +12,11 @@ import type { TenantTx } from "./withTenantTx.js";
 // `findWorkOrderForUpdate` toman la suya primero y nunca después de una
 // variante. Todo camino que decide sobre stock —reservar, cancelar un pedido
 // con reservas, abrir un frasco, ajustar, dar de alta una unidad, planificar o
-// ejecutar un decant, apagar `is_serialized`— pasa por acá. Un camino que
+// ejecutar un decant, confirmar una venta (WP-C19), apagar `is_serialized`— pasa
+// por acá. Quien no lee lotes (el vendedor que confirma una venta) no puede
+// bloquearlos desde la API —un `FOR UPDATE` bajo RLS solo toma las filas que la
+// política deja ver—: los lotes que consume los bloquea
+// `app.list_sale_allocation_lots` (0042), después de las variantes. Un camino que
 // bloquee lotes sin tomar antes la variante se interbloquea contra uno que sí
 // lo hizo; por eso no se migra uno solo ni se agrega uno con otro orden.
 //
