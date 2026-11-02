@@ -94,13 +94,48 @@ test.describe("salir cierra la sesión (docs/security-spec.md §4.1)", () => {
     await page.getByRole("button", { name: "Salir", exact: true }).click();
     await logout;
 
-    // WP-E04b: tras «Salir» el admin a veces sigue mostrando la sesión vieja hasta que algo
-    // vuelve a leerla (`useLogout` vacía la caché y revalida en la misma tanda). Por eso se
-    // espera la respuesta del cierre y se recarga: lo que importa acá es que la sesión de
-    // verdad se cerró. Cuando se corrija E04b, este spec afirma el ingreso sin recargar.
-    await page.reload();
+    // Sin recargar (WP-E04b): el admin muestra el ingreso por sí solo al cerrarse la sesión.
     await expect(page.getByRole("heading", { name: "Ingresar" })).toBeVisible();
     await page.goto("/vista-catalogo");
     await expect(page).toHaveURL(/\/ingresar$/);
+  });
+
+  // WP-E04b: «Salir» también está en la pantalla del segundo factor, que no es el encabezado del
+  // admin. Antes la cookie se revocaba pero la pantalla quedaba igual hasta recargar.
+  test("«Salir» desde «Verificar segundo factor» también vuelve al ingreso", async ({ page }) => {
+    await submitPassword(page, "owner");
+    await expect(page.getByRole("heading", { name: "Verificar segundo factor" })).toBeVisible();
+
+    const logout = page.waitForResponse(
+      (response) => response.url().includes("/trpc/auth.session.logout") && response.ok(),
+    );
+    await page.getByRole("button", { name: "Salir", exact: true }).click();
+    await logout;
+
+    await expect(page.getByRole("heading", { name: "Ingresar" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Verificar segundo factor" })).toHaveCount(0);
+  });
+});
+
+// WP-M24: `loginAs` tiene que volver con la sesión COMPLETA aunque el servidor tarde en verificar
+// el segundo factor (una máquina cargada, el CI). Con el servidor lento, un `loginAs` que diera
+// el ingreso por hecho al ver «Salir» —que también está en «Verificar segundo factor»— dejaba que
+// el `goto` siguiente tirara la verificación en vuelo y el spec terminara en /verificar-mfa.
+test.describe("el ingreso espera a que la sesión esté completa (RF-SEG-01, docs/security-spec.md §4.3)", () => {
+  test("con la verificación lenta, navegar justo después de loginAs ya encuentra la sesión", async ({
+    page,
+  }) => {
+    // Retiene el pedido de verificación 1,5 s antes de dejarlo salir: determinista, y mucho
+    // más lento que cualquier máquina cargada.
+    await page.route("**/trpc/auth.mfa.verify*", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+      await route.continue();
+    });
+
+    await loginAs(page, "owner");
+    await page.goto("/vista-catalogo");
+
+    await expect(page.getByRole("heading", { name: "Productos" })).toBeVisible();
+    await expect(page).toHaveURL(/\/vista-catalogo$/);
   });
 });

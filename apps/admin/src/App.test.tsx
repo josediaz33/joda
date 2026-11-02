@@ -149,6 +149,32 @@ describe("docs/security-spec.md §3.4 · permisos de presentación (WP-E04)", ()
   });
 });
 
+describe("docs/security-spec.md §4.1 · «Salir» cierra la sesión y el admin vuelve al ingreso sin recargar (WP-E04b, WP-M24)", () => {
+  // «Salir» también está en «Verificar segundo factor» y en «Inscribir segundo factor», pantallas
+  // que NO son `SessionBoundary`. Vaciar la caché dejaba sin consulta a la sesión que ese
+  // componente observa, y como nada lo volvía a dibujar, la pantalla seguía igual hasta recargar
+  // (la cookie sí estaba revocada).
+  it.each([
+    ["Verificar segundo factor", "pending_verification"],
+    ["Inscribir segundo factor", "pending_enrollment"],
+  ] as const)("al salir desde «%s» vuelve al ingreso sin recargar", async (heading, mfaStatus) => {
+    vi.mocked(api.current)
+      .mockResolvedValueOnce({ profile: { ...profile, mfaStatus }, permissions: [] })
+      .mockRejectedValue(
+        Object.assign(new TRPCClientError("Sin sesión"), { data: { httpStatus: 401 } }),
+      );
+    vi.mocked(api.logout).mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    renderApp("/");
+
+    expect(await screen.findByRole("heading", { name: heading })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Salir" }));
+
+    expect(await screen.findByRole("heading", { name: "Ingresar" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: heading })).toBeNull();
+  });
+});
+
 describe("docs/backlog.md WP-E04 · Dialog, Select y Popover en un flujo consumidor", () => {
   it("filtra el catálogo por tipo y estado y abre el detalle del producto", async () => {
     vi.mocked(api.current).mockResolvedValue({

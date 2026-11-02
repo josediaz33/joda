@@ -135,7 +135,7 @@ Compila los paquetes, instala Chromium de Playwright la primera vez y corre `e2e
 
 Se puede correr **cuantas veces quieras sobre la misma base**: el humo busca los productos sembrados por nombre (paginando, no por posición en la lista) y archiva por la API los que crea, así que no se rompe a medida que la base crece.
 
-Cubre: el ingreso de **cada rol** con contraseña y segundo factor (y los rechazos: contraseña mala, código malo, sin sesión, salir); la **lista de catálogo** sembrada y el **alta de un producto** desde el formulario; y que el **vendedor no ve costos**: ni el menú de contabilidad y sourcing, ni por URL directa, y la API le responde 404 en proveedores, órdenes de compra y costo de lotes mientras el dueño recibe el costo puesto.
+Cubre: el ingreso de **cada rol** con contraseña y segundo factor (y los rechazos: contraseña mala, código malo, sin sesión, salir, también desde la pantalla del segundo factor, y un ingreso con la verificación lenta); la **lista de catálogo** sembrada y el **alta de un producto** desde el formulario; y que el **vendedor no ve costos**: ni el menú de contabilidad y sourcing, ni por URL directa, y la API le responde 404 en proveedores, órdenes de compra y costo de lotes mientras el dueño recibe el costo puesto.
 
 **Cómo sumar pantallas** (WP-E06, WP-E07, …): un archivo `e2e/specs/<módulo>.spec.ts` por módulo del admin. `e2e/specs/catalog.spec.ts` es el modelo.
 
@@ -155,7 +155,11 @@ test.describe("<flujo> (<RF-XXX-nn, WP>)", () => {
 
 Si la pantalla necesita datos que la muestra no trae, se agregan **por la API** en `scripts/dev/lib/sampleData.mjs` (no en el spec). Para que el humo no envejezca, dos reglas: los productos sembrados se buscan por nombre con `findProductRow` (`e2e/helpers/catalog.ts`, que pagina hasta encontrarlos; nunca "lo que haya en la primera pantalla", porque la lista va de lo más nuevo a lo más viejo y la API no borra productos), y lo que un spec crea lleva un nombre único con un prefijo conocido y se archiva al terminar (`archiveSmokeProducts`).
 
-**Un supuesto del humo:** los `loginAs`/`apiAs` de un mismo rol usan el mismo código TOTP dentro de su ventana de 30 s. Anda porque la API hoy acepta un código ya usado en la misma ventana. Si algún día se le agrega anti-replay (un código de un solo uso), hay que ajustar `currentTotp` en `e2e/helpers/login.ts` para esperar a la ventana siguiente.
+**Cómo escribir specs estables (WP-M24).** Las reglas completas están en el encabezado de `e2e/helpers/login.ts`; las dos que más cuestan caro: (1) **`loginAs` vuelve con la sesión completa** (esperó la respuesta de `auth.mfa.verify` y la navegación «Principal»), así que el `page.goto` siguiente es seguro; si armás un ingreso a mano, no lo des por hecho al ver «Salir» —también lo tiene «Verificar segundo factor»—; (2) después de una acción que dispara pedidos, esperá su respuesta o el cambio visible antes de navegar o recargar, porque un `goto` o un `reload` aborta lo que esté en vuelo. Nada de `waitForTimeout`, nada de `retries`.
+
+**Si un spec falla "a veces"** hay una causa; no la tapes con reintentos. Reproducila: `cd e2e && pnpm exec playwright test --repeat-each=20 --trace on` (con la máquina cargada, mejor), mirá el `trace.zip` de la corrida que falló (`pnpm exec playwright show-trace <ruta>`) y volvé la carrera determinista con `page.route` retrasando la respuesta o el pedido sospechoso (así se encontró la de WP-M24: `auth.mfa.verify` retenido 1,5 s).
+
+**Sobre el segundo factor en el humo** (medido contra la API en WP-M24): la API acepta el código del paso anterior, el actual y el siguiente (±30 s) y rechaza el de dos pasos de distancia. `currentTotp` calcula el código justo antes de usarlo, así que aunque caiga en el borde de un paso le quedan 30 s o más: no hace falta esperar. Los `loginAs`/`apiAs` de un mismo rol usan el mismo código dentro de su ventana, y anda porque la API hoy acepta un código ya usado (no hay anti-replay). Si algún día se le agrega, hay que ajustar `currentTotp` en `e2e/helpers/login.ts` para esperar a la ventana siguiente.
 
 En CI corre el job `E2E smoke (entorno local)`: levanta el mismo compose, corre `pnpm dev:setup`, el contrato de auth y el humo.
 
