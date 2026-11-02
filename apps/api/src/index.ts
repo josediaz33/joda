@@ -14,6 +14,13 @@ import {
 import { systemClock } from "./adapters/systemClock.js";
 import { loadEnv, type Env } from "./config/env.js";
 import { assertRlsNotBypassed, createPrismaClient } from "./db/client.js";
+import { releaseExpiredReservations } from "./jobs/releaseExpiredReservations.js";
+import {
+  nodeTimers,
+  RESERVATION_RELEASE_INTERVAL_MS,
+  startPeriodicTasks,
+  type RunningScheduler,
+} from "./jobs/scheduler.js";
 import type { AuthServiceDeps } from "./modules/auth/service.js";
 import { registerMediaHttpRoutes } from "./modules/media/httpRoutes.js";
 import { buildMediaServer } from "./mediaServer.js";
@@ -144,9 +151,27 @@ async function main() {
   const mediaServer = buildMediaServer(env.MEDIA_STORAGE_DIR);
   const mediaPort = Number(new URL(env.MEDIA_PUBLIC_BASE_URL).port || 80);
 
+  // El hook se registra ANTES de escuchar (Fastify no admite hooks nuevos después).
+  let scheduler: RunningScheduler | null = null;
+  app.addHook("onClose", async () => scheduler?.stop());
+
   try {
     await assertRlsNotBypassed(db);
     await startListening({ app, mediaServer, env, mediaPort });
+
+    // WP-C18b (RN-RES-04): la liberación de reservas vencidas corre en este mismo
+    // proceso, como `joda_api` (la misma `db` de arriba), nunca con `service_role`.
+    // Se arranca DESPUÉS de confirmar que la credencial no elude RLS.
+    scheduler = startPeriodicTasks(
+      [
+        {
+          name: "reservations.release_expired",
+          intervalMs: RESERVATION_RELEASE_INTERVAL_MS,
+          run: () => releaseExpiredReservations({ db, clock: systemClock, logger: app.log }),
+        },
+      ],
+      { timers: nodeTimers, logger: app.log },
+    );
   } catch (error) {
     app.log.error(error);
     process.exit(1);

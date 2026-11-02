@@ -27,6 +27,7 @@ import { buildProductFacets, type Clock, type ProductFacetInput } from "@joda/do
 import type { PrismaClient, Prisma } from "@joda/db";
 import { recordAuditEntry } from "../../db/audit.js";
 import { decodeCursor, encodeCursor } from "../../db/cursor.js";
+import { lockVariantsThenLots } from "../../db/stockLocks.js";
 import { withTenantTx, type TenantTx, type TenantTxContext } from "../../db/withTenantTx.js";
 import { appError, hasSqlState, toTRPCError } from "../../middleware/errorMapper.js";
 import {
@@ -317,6 +318,7 @@ const requiresSerialUnitsRegisteredError = (registeredUnits: number) =>
  */
 async function planRequiresSerialPropagation(
   tx: TenantTx,
+  tenantId: string,
   productId: string,
   requiresSerial: boolean,
 ): Promise<{ readonly variantIds: string[]; readonly to: boolean } | null> {
@@ -341,12 +343,13 @@ async function planRequiresSerialPropagation(
       );
     }
   } else {
-    // Primero los lotes, después el conteo: el alta de una unidad bloquea su lote antes de
-    // leer el flag de la variante (ver `lockLotsAndAssertNoSerialUnits`, WP-C08d).
-    await inventoryRepo.lockLotsOfVariants(
-      tx,
-      stale.map((variant) => variant.id),
-    );
+    // Primero las variantes y sus lotes (RN-RES-07), después el conteo: el alta de una
+    // unidad bloquea su variante y su lote antes de leer el flag de la variante (ver
+    // `lockLotsAndAssertNoSerialUnits`, WP-C08d).
+    await lockVariantsThenLots(tx, tenantId, {
+      variantIds: stale.map((variant) => variant.id),
+      allLotsOfVariants: true,
+    });
     const registeredUnits = await repo.countSerializedUnitsOfVariants(
       tx,
       stale.map((variant) => variant.id),
@@ -376,7 +379,12 @@ export async function updateProduct(
       const propagation =
         input.watchDetails.requiresSerial === undefined
           ? null
-          : await planRequiresSerialPropagation(tx, input.id, input.watchDetails.requiresSerial);
+          : await planRequiresSerialPropagation(
+              tx,
+              ctx.tenantId,
+              input.id,
+              input.watchDetails.requiresSerial,
+            );
       await repo.updateWatchDetails(tx, input.id, input.watchDetails);
       if (propagation) await repo.setVariantsSerialized(tx, propagation.variantIds, propagation.to);
     }
@@ -943,8 +951,12 @@ export async function createVariant(
  * nada) y no ve un lote que nace después con sus unidades. El invariante completo
  * vive en la base: WP-B20.
  */
-async function lockLotsAndAssertNoSerialUnits(tx: TenantTx, variantId: string): Promise<void> {
-  await inventoryRepo.lockLotsOfVariant(tx, variantId);
+async function lockLotsAndAssertNoSerialUnits(
+  tx: TenantTx,
+  tenantId: string,
+  variantId: string,
+): Promise<void> {
+  await lockVariantsThenLots(tx, tenantId, { variantIds: [variantId], allLotsOfVariants: true });
   const registered = await inventoryRepo.countSerializedUnitsOfVariant(tx, variantId);
   if (registered > 0) {
     throw toTRPCError(
@@ -994,7 +1006,7 @@ export async function updateVariant(
     }
     // Solo al apagar: encender no tiene este problema (el CHECK de la base ya exige `unit`).
     if (isSerialized === false && existing.is_serialized) {
-      await lockLotsAndAssertNoSerialUnits(tx, existing.id);
+      await lockLotsAndAssertNoSerialUnits(tx, ctx.tenantId, existing.id);
     }
 
     await repo.updateVariantRow(tx, input.id, {

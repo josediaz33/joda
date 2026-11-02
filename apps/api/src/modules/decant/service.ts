@@ -16,6 +16,7 @@ import {
   computeTransferWaste,
   executeDecant,
   planDecant,
+  computeDecantHoldExpiresAt,
   selectLotsByPolicy,
   transitionDecantWorkOrder,
   type BomAvailability,
@@ -28,6 +29,7 @@ import {
 } from "@joda/domain";
 import type { PrismaClient } from "@joda/db";
 import { recordAuditEntry } from "../../db/audit.js";
+import { lockVariantsThenLots, peekLotVariantId } from "../../db/stockLocks.js";
 import { withIdempotentTx } from "../../db/withIdempotentTx.js";
 import { withTenantTx, type TenantTx, type TenantTxContext } from "../../db/withTenantTx.js";
 import { appError, toTRPCError, type ApiError } from "../../middleware/errorMapper.js";
@@ -35,16 +37,19 @@ import { buildIdempotencyRequest } from "../../middleware/idempotency.js";
 import type { RequestContext } from "../../trpc/context.js";
 import * as inventoryRepo from "../inventory/repository.js";
 import { toAdminMovement } from "../inventory/mappers.js";
+import * as reservationsRepo from "../reservations/repository.js";
+import { DECANT_WORK_ORDER_REFERENCE, releaseReservationsOf } from "../reservations/service.js";
 import { toAdminDecantWorkOrder, toDecantQueueGroups } from "./mappers.js";
 import * as repo from "./repository.js";
 
 // Fraccionamiento — WP-C13, RF-FRA-01…06, RN-FRA-01…07, RN-EST-03, ADR-010.
 // El dominio decide (`planDecant`, `executeDecant`, la máquina de estados de
 // la orden); acá se lee, se bloquea y se persiste, todo en la misma
-// transacción. Este módulo NO reserva granel ni insumos: la reserva es de
-// WP-C18 (`stock_reservations`) y, hasta entonces, dos órdenes pueden
-// comprometer el mismo granel. Tampoco abre frascos: abrir es irreversible
-// (ADR-009) y es una decisión de una persona, no un efecto de planificar.
+// transacción. Planificar RESERVA (WP-C18b, RN-FRA-01/02, RN-RES-06): el
+// granel, atado al lote elegido, y los insumos del BOM, por variante; ejecutar
+// libera todo lo que la orden reservó, y consume lo de verdad contra el saldo.
+// Tampoco abre frascos: abrir es irreversible (ADR-009) y es una decisión de
+// una persona, no un efecto de planificar.
 
 /** Lo que el servicio necesita del entorno y no puede leer solo (.claude/rules/domain.md: el reloj entra por puerto). */
 export interface DecantServiceDeps {
@@ -195,13 +200,14 @@ function toQuantity(value: number, uom: "unit" | "ml"): Quantity {
  * nunca de lo que diga el cliente. Un snapshot armado sin ellos eludiría la
  * validación.
  */
-function toLotSnapshot(row: repo.LotWithVariantRow): LotSnapshot {
+function toLotSnapshot(row: repo.LotWithVariantRow, availableOverride?: Quantity): LotSnapshot {
   const uom = row.product_variants.uom;
   return {
     id: row.id,
     receivedAt: row.received_at,
     expiryAt: row.expiry_at,
-    available: toQuantity(row.inventory_balances?.on_hand.toNumber() ?? 0, uom),
+    available:
+      availableOverride ?? toQuantity(row.inventory_balances?.on_hand.toNumber() ?? 0, uom),
     unitCost: Money.pyg(row.unit_landed_cost_pyg),
     status: row.status,
     variantType: row.product_variants.variant_type,
@@ -224,19 +230,22 @@ interface BomContext {
   readonly supplyLots: readonly repo.LotWithVariantRow[];
 }
 
-/** Lee el BOM de la variante y los lotes de sus insumos: tres consultas, no una por componente. */
-async function loadBom(tx: TenantTx, variantId: string): Promise<BomContext> {
+/**
+ * Lee el BOM de la variante (componentes y etiquetas: dos consultas). Va ANTES
+ * de bloquear —hace falta para saber QUÉ variantes bloquear (RN-RES-07)— y los
+ * lotes se leen después, ya con las variantes bloqueadas (`loadSupplyLots`).
+ */
+async function loadBomLines(tx: TenantTx, variantId: string): Promise<readonly BomLine[]> {
   const components = await repo.listBomComponents(tx, variantId);
-  if (components.length === 0) return { lines: [], supplyLots: [] };
+  if (components.length === 0) return [];
 
-  const componentIds = components.map((component) => component.component_variant_id);
-  const [labels, supplyLots] = await Promise.all([
-    repo.listVariantLabels(tx, componentIds),
-    repo.listSupplyLots(tx, componentIds),
-  ]);
+  const labels = await repo.listVariantLabels(
+    tx,
+    components.map((component) => component.component_variant_id),
+  );
   const labelById = new Map(labels.map((label) => [label.id, label]));
 
-  const lines = components.map((component): BomLine => {
+  return components.map((component): BomLine => {
     const label = labelById.get(component.component_variant_id);
     if (!label) {
       throw new Error(`el insumo ${component.component_variant_id} del BOM no se pudo leer`);
@@ -262,8 +271,67 @@ async function loadBom(tx: TenantTx, variantId: string): Promise<BomContext> {
       allocationPolicy: label.allocation_policy,
     };
   });
+}
 
-  return { lines, supplyLots };
+/** Los lotes de insumo consumibles de los componentes. Se lee con las variantes ya bloqueadas. */
+async function loadSupplyLots(
+  tx: TenantTx,
+  lines: readonly BomLine[],
+): Promise<readonly repo.LotWithVariantRow[]> {
+  if (lines.length === 0) return [];
+  return repo.listSupplyLots(
+    tx,
+    lines.map((line) => line.componentVariantId),
+  );
+}
+
+/**
+ * Bloquea las variantes que la operación toca y TODOS sus lotes, en el orden de
+ * RN-RES-07 (`db/stockLocks.ts`): la del fraccionamiento (la orden guarda su
+ * `target_variant_id` y los movimientos y reservas apuntan a las otras), la del
+ * granel y las de los insumos del BOM. Después de esto el BOM se relee: si
+ * cambió mientras se bloqueaba (un componente nuevo no quedó bloqueado) se
+ * rechaza, y quien reintenta lo bloquea completo; tomar ahora la variante que
+ * falta rompería el orden ascendente.
+ *
+ * `reservedVariantIds` son las variantes de lo que la orden ya tiene reservado
+ * (la ejecución lo libera entero, también lo de un componente que salió del
+ * BOM): entran en el MISMO bloqueo, ascendente y en una sola sentencia. Si se
+ * dejaran para `releaseReservationsOf`, esa variante se tomaría al final, con
+ * lotes y variantes de id mayor ya en la mano, y se cruzaría con quien la tiene
+ * y pide una de esas (40P01).
+ */
+async function lockDecantVariants(
+  tx: TenantTx,
+  tenantId: string,
+  targetVariantId: string,
+  sourceVariantId: string,
+  lines: readonly BomLine[],
+  reservedVariantIds: readonly string[] = [],
+): Promise<void> {
+  await lockVariantsThenLots(tx, tenantId, {
+    variantIds: [
+      targetVariantId,
+      sourceVariantId,
+      ...lines.map((line) => line.componentVariantId),
+      ...reservedVariantIds,
+    ],
+    allLotsOfVariants: true,
+  });
+  const relocked = await loadBomLines(tx, targetVariantId);
+  const before = new Set(lines.map((line) => line.componentVariantId));
+  if (
+    relocked.length !== lines.length ||
+    relocked.some((line) => !before.has(line.componentVariantId))
+  ) {
+    throw toTRPCError(
+      appError(
+        "CONFLICT_BOM_CHANGED",
+        409,
+        "El BOM del decant cambió mientras se procesaba la operación. Reintentá.",
+      ),
+    );
+  }
 }
 
 /** Los lotes de un componente que se miden en la misma unidad que pide el BOM, como snapshot. */
@@ -273,7 +341,7 @@ function supplySnapshotsOf(line: BomLine, lots: readonly repo.LotWithVariantRow[
       (lot) =>
         lot.variant_id === line.componentVariantId && lot.product_variants.uom === line.perUnit.uom,
     )
-    .map(toLotSnapshot);
+    .map((lot) => toLotSnapshot(lot));
 }
 
 // ---------------------------------------------------------------------
@@ -297,13 +365,19 @@ export interface PlannedWorkOrder {
  * RLS. NO valida el estado de la venta ni que tenga una línea de esa variante:
  * es coherencia del flujo de confirmación, que es de C19.
  *
- * No bloquea el granel: planificar no consume ni reserva, solo valida contra
- * el saldo que ve; quien bloquea y decide con el saldo real es la ejecución.
+ * **Reserva** (WP-C18b, RN-FRA-01/02, RN-RES-06): en la misma transacción que
+ * crea la orden, el granel (`mlToReserve`) atado al lote elegido y cada insumo
+ * del BOM por variante, con `reason = decant_hold`. Planifica contra el
+ * DISPONIBLE, no contra el saldo: lo que otra orden ya reservó no se vuelve a
+ * ofrecer, así que dos órdenes no comprometen el mismo granel. Antes de leer
+ * toma el bloqueo de las variantes que toca y de sus lotes, en el orden único
+ * (RN-RES-07). Dura hasta ejecutar o cancelar la orden (`computeDecantHoldExpiresAt`).
  */
 export async function createPlannedWorkOrder(
   tx: TenantTx,
   session: TenantTxContext,
   input: PlanDecantInput,
+  deps: DecantServiceDeps,
 ): Promise<PlannedWorkOrder> {
   if (!(await repo.saleOrderExists(tx, input.saleOrderId))) throw toTRPCError(NOT_FOUND_ERROR);
 
@@ -323,12 +397,31 @@ export async function createPlannedWorkOrder(
   const wasteFactor = await repo.findWasteFactor(tx, variant.product_id);
   if (wasteFactor === null) throw toTRPCError(PRODUCT_NOT_PERFUME_ERROR);
 
-  const bom = await loadBom(tx, variant.id);
+  const lines = await loadBomLines(tx, variant.id);
+  // RN-RES-07: las variantes (decant, granel e insumos) y sus lotes, ANTES de leer
+  // el saldo y las reservas. Desde acá nadie reserva, abre ni consume sobre ellas.
+  await lockDecantVariants(tx, session.tenantId, variant.id, sourceVariantId, lines);
+  const bom: BomContext = { lines, supplyLots: await loadSupplyLots(tx, lines) };
+
+  // El disponible por variante (saldo − reservas vivas, RN-RES-03): las reservas
+  // sin lote (las de un insumo) no se descuentan lote por lote, se descuentan
+  // del total de la variante.
+  const stock = await reservationsRepo.findVariantsStock(tx, [
+    sourceVariantId,
+    ...bom.lines.map((line) => line.componentVariantId),
+  ]);
+  const variantAvailable = (variantId: string, uom: "unit" | "ml"): Quantity =>
+    toQuantity(stock.get(variantId)?.available ?? 0, uom);
+  const smaller = (a: Quantity, b: Quantity): Quantity => (a.compare(b) <= 0 ? a : b);
+
   const bomAvailability: BomAvailability[] = bom.lines.map((line) => ({
     componentId: line.componentVariantId,
-    available: supplySnapshotsOf(line, bom.supplyLots).reduce(
-      (sum, lot) => sum.plus(lot.available),
-      Quantity.zero(line.perUnit.uom),
+    available: smaller(
+      supplySnapshotsOf(line, bom.supplyLots).reduce(
+        (sum, lot) => sum.plus(lot.available),
+        Quantity.zero(line.perUnit.uom),
+      ),
+      variantAvailable(line.componentVariantId, line.perUnit.uom),
     ),
     perUnit: line.perUnit,
   }));
@@ -345,6 +438,21 @@ export async function createPlannedWorkOrder(
   } else {
     candidates = await repo.listOpenBulkLots(tx, sourceVariantId);
   }
+  // Lo libre de cada lote candidato: su saldo menos lo que otras órdenes reservaron
+  // atado a él, y nunca más que el disponible de la variante (que además descuenta
+  // las reservas sin lote del granel).
+  const reservedByLot = await reservationsRepo.sumLiveReservedByLot(
+    tx,
+    session.tenantId,
+    candidates.map((lot) => lot.id),
+  );
+  const bulkVariantAvailable = variantAvailable(sourceVariantId, "ml");
+  const freeOf = (lot: repo.LotWithVariantRow): Quantity => {
+    const free = Quantity.ml(lot.inventory_balances?.on_hand.toNumber() ?? 0).minus(
+      Quantity.ml(reservedByLot.get(lot.id) ?? 0),
+    );
+    return free.isNegative() ? Quantity.zero("ml") : smaller(free, bulkVariantAvailable);
+  };
 
   let chosen: { lot: repo.LotWithVariantRow; plan: DecantPlan } | undefined;
   let lastShortage: DecantError | undefined;
@@ -354,7 +462,7 @@ export async function createPlannedWorkOrder(
       unitsRequested: input.qtyUnits,
       mlPerUnit,
       wasteFactor: Percentage.of(wasteFactor),
-      bulkLot: toLotSnapshot(lot),
+      bulkLot: toLotSnapshot(lot, freeOf(lot)),
       bomAvailability,
     });
     if (planned.ok) {
@@ -392,6 +500,44 @@ export async function createPlannedWorkOrder(
     createdBy: session.userId,
   });
 
+  // RN-FRA-01/02: el compromiso. El granel va atado al lote elegido; los insumos,
+  // por variante (RN-RES-06). Una cantidad en cero (un insumo opcional que el BOM
+  // define en cero) no se reserva: la tabla exige `qty > 0`.
+  const holdExpiresAt = new Date(computeDecantHoldExpiresAt(deps.clock.now()));
+  await reservationsRepo.insertReservations(tx, [
+    {
+      tenantId: session.tenantId,
+      variantId: lot.variant_id,
+      lotId: lot.id,
+      serialUnitId: null,
+      qty: plan.mlToReserve.value,
+      reason: "decant_hold",
+      referenceType: DECANT_WORK_ORDER_REFERENCE,
+      referenceId: order.id,
+      expiresAt: holdExpiresAt,
+      createdBy: session.userId,
+    },
+    ...bom.lines.flatMap((line, index) => {
+      const qty = plan.bomToReserve[index]!.qty.value;
+      return qty > 0
+        ? [
+            {
+              tenantId: session.tenantId,
+              variantId: line.componentVariantId,
+              lotId: null,
+              serialUnitId: null,
+              qty,
+              reason: "decant_hold" as const,
+              referenceType: DECANT_WORK_ORDER_REFERENCE,
+              referenceId: order.id,
+              expiresAt: holdExpiresAt,
+              createdBy: session.userId,
+            },
+          ]
+        : [];
+    }),
+  ]);
+
   const bomLines = bom.lines.map((line, index): DecantBomLine => ({
     componentVariantId: line.componentVariantId,
     qty: plan.bomToReserve[index]!.qty.value,
@@ -403,6 +549,7 @@ export async function createPlannedWorkOrder(
 
 export async function planWorkOrder(
   db: PrismaClient,
+  deps: DecantServiceDeps,
   ctx: RequestContext,
   input: PlanDecantInput,
 ): Promise<PlanDecantOutput> {
@@ -410,7 +557,7 @@ export async function planWorkOrder(
   const idempotency = buildIdempotencyRequest(ctx.req, input);
 
   const { result } = await withIdempotentTx(db, session, idempotency, async (tx) => {
-    const planned = await createPlannedWorkOrder(tx, session, input);
+    const planned = await createPlannedWorkOrder(tx, session, input, deps);
 
     await recordAuditEntry(tx, {
       tenantId: session.tenantId,
@@ -591,25 +738,52 @@ export async function executeWorkOrder(
     }
 
     // Se ejecuta con el BOM de HOY: la orden guarda la cantidad de unidades y
-    // los ml, no una copia del BOM del momento de planificar.
-    const bom = await loadBom(tx, variant.id);
+    // los ml, no una copia del BOM del momento de planificar. Lo que se reservó al
+    // planificar se libera entero más abajo, así que si el BOM cambió la diferencia
+    // (un insumo que ya no se consume, uno nuevo que nadie reservó) no queda colgada.
+    const lines = await loadBomLines(tx, variant.id);
 
-    // Granel y lotes de insumo, bloqueados juntos: UNA sentencia, en orden
-    // ascendente de `lot_id` (ver `lockLotsAscending`). Después se relee todo
-    // con una sentencia nueva —el saldo que cuenta es el de DESPUÉS del
-    // bloqueo— y solo de los lotes bloqueados: lo que aparezca después no se toca.
-    //
-    // Se bloquean TODOS los lotes con saldo de cada insumo, no solo el que se va
-    // a consumir, a propósito: cuál se consume se decide con el saldo ya
-    // bloqueado, y bloquear solo el elegido obligaría a leer, elegir, bloquear
-    // y volver a verificar. El costo es que una ejecución espera a cualquier
-    // otra que toque un lote de esos insumos. Los insumos no se venden (solo los
-    // consumen fraccionamientos y ajustes), así que la contención es entre
-    // ejecuciones, que de todos modos son manuales. Si se mide y importa, se
-    // acota; hoy no está medido.
-    const lotIdsToLock = [...new Set([order.source_lot_id, ...bom.supplyLots.map((l) => l.id)])];
-    await repo.lockLotsAscending(tx, lotIdsToLock);
-    const lockedLots = await repo.findLotsWithVariant(tx, lotIdsToLock);
+    // RN-RES-07 · el orden de bloqueo único. Quien solo conoce el lote lee su
+    // variante SIN bloquear (el granel de origen), bloquea las variantes —la del
+    // fraccionamiento, la del granel y las de los insumos— y todos sus lotes
+    // (UNA sentencia por nivel, ascendente de `id`), y recién después lee el saldo.
+    // Un lote que RLS oculta (`lots_read` pide `inventory.stock:read`) es la cara de
+    // un permiso insuficiente: 404, no un 500.
+    const sourceVariantId = await peekLotVariantId(tx, order.source_lot_id);
+    if (sourceVariantId === null) throw toTRPCError(NOT_FOUND_ERROR);
+    // Las variantes de lo que la orden reservó al planificar se leen ANTES de bloquear y
+    // entran en el mismo bloqueo: si el BOM cambió, una puede no estar en `lines`, y
+    // `releaseReservationsOf` (más abajo) la tomaría tarde, rompiendo el orden ascendente.
+    // La lectura es estable sin bloquear nada: la fila de la orden ya está tomada (nadie
+    // más la ejecuta ni la cancela) y las reservas de una orden solo nacen al planificarla;
+    // después solo se liberan, así que el conjunto puede achicarse, nunca crecer.
+    const reservedVariantIds = await reservationsRepo.listOpenReservationVariantIds(
+      tx,
+      session.tenantId,
+      DECANT_WORK_ORDER_REFERENCE,
+      order.id,
+    );
+    await lockDecantVariants(
+      tx,
+      session.tenantId,
+      variant.id,
+      sourceVariantId,
+      lines,
+      reservedVariantIds,
+    );
+
+    // Se bloquean TODOS los lotes de cada insumo, no solo el que se va a consumir,
+    // a propósito: cuál se consume se decide con el saldo ya bloqueado, y bloquear
+    // solo el elegido obligaría a leer, elegir, bloquear y volver a verificar. El
+    // costo es que una ejecución espera a cualquier otra que toque un lote de esos
+    // insumos. Los insumos no se venden (solo los consumen fraccionamientos y
+    // ajustes), así que la contención es entre ejecuciones, que de todos modos son
+    // manuales. Si se mide y importa, se acota; hoy no está medido.
+    const bom: BomContext = { lines, supplyLots: await loadSupplyLots(tx, lines) };
+    const lotIdsToRead = [...new Set([order.source_lot_id, ...bom.supplyLots.map((l) => l.id)])];
+    // Se relee todo con una sentencia nueva —el saldo que cuenta es el de DESPUÉS
+    // del bloqueo— y solo de los lotes bloqueados: lo que aparezca después no se toca.
+    const lockedLots = await repo.findLotsWithVariant(tx, lotIdsToRead);
     const bulkRow = lockedLots.find((lot) => lot.id === order.source_lot_id);
     if (!bulkRow) {
       // La FK impide que el lote no exista: si no se lee, RLS lo oculta
@@ -698,6 +872,15 @@ export async function executeWorkOrder(
       executedBy: session.userId,
       executedAt: deps.clock.now(),
     });
+    // RN-FRA-03: "liberar la reserva". Los movimientos de arriba son el consumo de
+    // verdad; la promesa que los respaldaba (granel e insumos) se suelta entera.
+    const reservationsReleased = await releaseReservationsOf(
+      tx,
+      session,
+      DECANT_WORK_ORDER_REFERENCE,
+      order.id,
+      deps,
+    );
 
     await recordAuditEntry(tx, {
       tenantId: session.tenantId,
@@ -712,6 +895,7 @@ export async function executeWorkOrder(
         wasteActual: String(input.wasteActual),
         cogsPyg: execution.cogs.minor.toString(),
         movementIds: movementIds.map((id) => id.toString()),
+        reservationsReleased,
         skippedOptionalComponentIds: [...execution.skippedOptionalComponents],
       },
       ip: ctx.req.ip,

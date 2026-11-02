@@ -210,6 +210,9 @@ const ROW_FILTER: Record<string, string> = {
   journal_lines: "entry_id IN (SELECT id FROM app.journal_entries WHERE status = 'draft')",
   role_permissions:
     "NOT EXISTS (SELECT 1 FROM app.roles r WHERE r.id = role_permissions.role_id AND r.is_system)",
+  // Una reserva de una unidad serializada es de qty = 1 (0041): el UPDATE de `serial_unit_id`
+  // sobre la del smoke (10,2 ml) lo frenaría el CHECK antes que la FK. Ver la reserva de beforeAll.
+  stock_reservations: "qty = 1",
 };
 
 // Blanco propio para algunas FKs, clonado de una fila real que cumpla el
@@ -307,6 +310,14 @@ describe("toda FK entre tablas con tenant_id rechaza apuntar a otro tenant, como
     db = await startTestDb();
     await runSmokeBusinessFlow(db.client);
     await db.client.query(readFileSync(FIXTURE, "utf8"));
+
+    // WP-C18b: una reserva de UNA unidad en el tenant real, para los UPDATE de las FK de
+    // `stock_reservations` (ver ROW_FILTER: la del smoke es de 10,2 ml).
+    await db.client.query(`
+      INSERT INTO app.stock_reservations (tenant_id, variant_id, qty, reason, expires_at)
+      VALUES ('${REAL_TENANT_ID}', '55555555-0000-0000-0000-000000000002', 1, 'checkout',
+              now() + interval '1 hour');
+    `);
 
     // WP-B11c: un rol personalizado con un permiso en el tenant real, para el
     // UPDATE de `role_permissions` (ver ROW_FILTER).

@@ -165,6 +165,31 @@ Los cuatro permisos de los lotes son el mapeo que aprobó José el 2026-09-25: r
 - **Una excepción registrada:** `deposito` tiene `market.purchase_order:receive` y no `market.purchase_order:read`, así que no ve la orden que recibe. No se resuelve en la capa 1: WP-C15 define que el depósito carga la recepción en borrador (`goods_receipts`, con las cantidades y sin precios) y la contabiliza quien lee la orden.
 - **Un rol personalizado** que combine un permiso de escritura con uno de lectura distinto de su par queda en ese mismo hueco. La base no lo impide; se impide al administrar roles: WP-C24 exige que asignar un permiso de escritura sobre estas cinco tablas asigne también el de lectura de su par.
 
+#### Reservas de stock (WP-C18b, `0041_stock_reservations_runtime.sql`)
+
+Desde 0010 `stock_reservations` solo exigía tenant para todo: cualquier sesión del tenant agotaba el disponible de una variante, o deshacía una promesa a un cliente, sin permiso alguno. Desde 0041, una política por comando (nunca `FOR ALL`), combinada con `tenant_isolation` (RESTRICTIVE):
+
+| Comando | Quién                                                                                                             |
+| ------- | ----------------------------------------------------------------------------------------------------------------- |
+| SELECT  | tenant (el disponible lo ve todo el tenant, 0022)                                                                 |
+| INSERT  | el permiso del `reason` de la reserva, abajo                                                                      |
+| UPDATE  | el mismo permiso sobre la fila; o la audiencia `system` (el job), si la reserva está sin liberar y queda liberada |
+| DELETE  | nadie: una reserva liberada o vencida conserva su fila                                                            |
+
+| `reason`                            | Permiso                                              |
+| ----------------------------------- | ---------------------------------------------------- |
+| `checkout`, `order_pending_payment` | `sales.order:write`                                  |
+| `decant_hold`                       | `inventory.decant:plan` o `inventory.decant:execute` |
+| `deposit_hold`, `manual_hold`       | nadie, todavía                                       |
+
+La función `app.can_write_stock_reservation(reason)` falla cerrado: un `reason` sin rama (`deposit_hold`, `manual_hold`, o uno que se agregue al enum) se rechaza hasta mapearlo a propósito. WP-C20 (la seña) y quien introduzca la retención del personal agregan su rama en una migración. **El storefront (audiencia `customer`) tampoco escribe reservas:** el checkout (WP-G11) necesita una política propia o una función `SECURITY DEFINER` acotada, no un permiso prestado.
+
+**El job de liberación corre como `joda_api` con audiencia `system`**, que no tiene sesión de staff ni, por lo tanto, ningún permiso (`has_permission` exige staff). Por eso la política de UPDATE le abre UNA cosa: la audiencia se lee del ajuste directamente (`current_setting('app.audience', true) = 'system'`; `app.current_audience()` castea a `actor_audience` sin calificar y falla con el `search_path` de la API) y `USING` exige `released_at IS NULL` y `WITH CHECK` exige `released_at IS NOT NULL`: no inserta, no borra y no toca una ya liberada (esta rama no la reactiva). **No limita qué otras columnas cambia el mismo UPDATE** (ver abajo). La audiencia `system` la fija solo `withTenantTx`, desde una sesión resuelta (`sessionContextAudit.test.ts`).
+
+**La función de los tenants con reservas vencidas** (`app.tenants_with_expired_reservations(p_as_of)`): `SECURITY DEFINER`, `search_path = app, pg_temp`, `REVOKE` de `PUBLIC` y `GRANT` solo a `joda_api`. Devuelve `SETOF uuid`: el id de cada tenant con al menos una reserva sin liberar vencida a `p_as_of`, y nada más (ni cantidades, ni variantes, ni pedidos). **Rechaza (42501) dentro del contexto de un tenant**: lista a todos, y una petición de un tenant no tiene por qué saber cuáles tienen reservas vencidas; solo el job la llama, antes de fijar un tenant. Invariantes 162 a 165.
+
+**Lo que la política no impide**, anotado como WP-B21: que una sesión con el permiso reescriba `qty` o `expires_at` de una reserva suya, o la «reactive» poniendo `released_at` en `NULL` (RN-RES-04 lo da por regla de servicio, no de base); que la rama `system` cambie `qty` o `expires_at` en el mismo UPDATE que libera (la política mira `released_at`, no qué otra columna se toca: `SET qty = 5` sin liberar se rechaza porque `released_at` sigue nulo, y `SET qty = 5, released_at = now()` pasa); y que cualquier sesión del tenant escriba `tenants.reservation_ttl_hours` (la política `tenant_self` de 0014 es `FOR ALL` y sin permiso). Un trigger de invariante (solo `released_at` pasa de nulo a no nulo, una vez) cierra lo de las reservas. **WP-B21 debe fusionarse antes de exponer el TTL por la API (WP-C18e).**
+
 **Nunca `FOR ALL` en una política de permiso.** Un `FOR ALL` permisivo también cubre `SELECT`: quien puede escribir leería la tabla entera aunque no tenga el permiso de leer. El invariante 92 lo verifica.
 
 **Solo audiencia `staff`.** `has_permission` exige una sesión de staff viva (WP-B13), así que un contexto `system` o `customer` no escribe en estas cinco tablas. Hoy ningún código lo necesita; el día que un webhook de pago tenga que registrar una seña, necesita una política propia o una función `SECURITY DEFINER` acotada, no un permiso prestado. Ese camino no está definido todavía: queda anotado en WP-C20 (señas) y WP-G13 (webhooks de pago).

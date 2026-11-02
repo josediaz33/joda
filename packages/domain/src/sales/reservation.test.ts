@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { InvalidReservationInputError } from "../shared/errors.js";
 import {
+  computeDecantHoldExpiresAt,
   computeManualHoldExpiresAt,
+  computeOrderPendingPaymentExpiresAt,
   computeReservationExpiresAt,
   MANUAL_HOLD_MAX_DAYS,
+  ORDER_PENDING_PAYMENT_DEFAULT_TTL_HOURS,
+  RESERVATION_TTL_HOURS_MAX,
+  RESERVATION_TTL_HOURS_MIN,
 } from "./reservation.js";
 
 // 2026-01-01T00:00:00.000Z = 1767225600000 (verificado con Date.getTime(),
@@ -59,5 +64,40 @@ describe("RN-RES-02 · retención manual — tope de 30 días", () => {
     expect(() => computeManualHoldExpiresAt(STARTED_AT, Number.POSITIVE_INFINITY)).toThrow(
       InvalidReservationInputError,
     );
+  });
+});
+
+describe("RN-RES-02 · pedido en espera de pago sin medio registrado — configurable por tenant (WP-C18b)", () => {
+  it("el valor por defecto es de 24 horas", () => {
+    expect(ORDER_PENDING_PAYMENT_DEFAULT_TTL_HOURS).toBe(24);
+  });
+
+  it("con 24 horas vence en +24 h (epoch ms)", () => {
+    expect(computeOrderPendingPaymentExpiresAt(STARTED_AT, 24)).toBe(1_767_312_000_000);
+  });
+
+  it("con 1 hora, el mínimo, vence en +1 h", () => {
+    expect(computeOrderPendingPaymentExpiresAt(STARTED_AT, 1)).toBe(1_767_229_200_000);
+  });
+
+  it("con 720 horas, el máximo, vence en +30 días: el mismo tope que la retención manual", () => {
+    expect(RESERVATION_TTL_HOURS_MIN).toBe(1);
+    expect(RESERVATION_TTL_HOURS_MAX).toBe(720);
+    expect(computeOrderPendingPaymentExpiresAt(STARTED_AT, 720)).toBe(1_769_817_600_000);
+  });
+
+  it.each([0, -1, 721, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "ttlHours %s es un bug de quien lo leyó (la base lo acota con un CHECK): lanza InvalidReservationInputError",
+    (ttlHours) => {
+      expect(() => computeOrderPendingPaymentExpiresAt(STARTED_AT, ttlHours)).toThrow(
+        InvalidReservationInputError,
+      );
+    },
+  );
+});
+
+describe("RN-FRA-01 · la reserva de un plan de decant dura hasta ejecutar o cancelar, con tope de 30 días", () => {
+  it("vence a los 30 días de planificar (epoch ms)", () => {
+    expect(computeDecantHoldExpiresAt(STARTED_AT)).toBe(1_769_817_600_000);
   });
 });
