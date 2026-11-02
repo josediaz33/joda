@@ -4375,6 +4375,213 @@ SELECT pg_temp.expect_true(170,
           AND indexname = 'reservations_reference_live'
           AND indexdef LIKE '%(reference_type, reference_id)%released_at IS NULL%') = 1);
 
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-C19 (0042_sale_confirmation.sql): la unidad serializada de un movimiento
+-- es de la variante del movimiento, y los lotes que una venta puede consumir
+-- le llegan al vendedor por una función acotada que además los bloquea.
+--
+-- 171 y 172 son la FK, escritas como lo hace la confirmación de una venta:
+-- el vendedor, conectado como `joda_api` (`SET LOCAL ROLE`, la credencial del
+-- runtime y no el superusuario), inserta el movimiento `sale` SIN `RETURNING`
+-- (0037). 173 mira la forma de la función; 174 a 176 la ejercen como
+-- `joda_api`. Que la función toma el bloqueo de los lotes no se puede probar
+-- acá (los bloques corren en subtransacciones y un solo hilo): lo prueba
+-- `sales.integration.test.ts` con dos conexiones.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 171 ─ Un movimiento no puede llevar la unidad serializada de OTRA variante.
+-- La unidad es de la variante `SUP-VIAL`; el movimiento declara el lote y la
+-- variante `SUP-ATOM`. Antes de 0042 la FK solo ataba unidad y tenant y el
+-- movimiento se aceptaba, con el costo y el saldo de una variante y la unidad
+-- de otra. Lo único que puede rechazarlo es la FK compuesta.
+SELECT pg_temp.expect_fail_like(171, 'Movimiento sale con la unidad serializada de otra variante',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.serialized_units (id, tenant_id, variant_id, serial_number)
+      VALUES ('b1710000-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 'SN-INV-171');
+      PERFORM pg_temp.b18_actor('vendedor', 171);
+      SET LOCAL ROLE joda_api;
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000000171', true),
+              set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000000171', true);
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, serial_unit_id, qty, uom, movement_type, total_cost_pyg)
+      VALUES ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-0000000000a2',
+              '55555555-0000-0000-0000-00000000a002', 'b1710000-0000-0000-0000-000000000001',
+              -1, 'unit', 'sale', 2500);
+      RAISE EXCEPTION 'se aceptó el movimiento';
+    END $x$
+  $$,
+  '%inventory_movements_serial_unit_id_fkey%');
+
+-- 172 ─ Control positivo del 171: con la variante de la unidad, y sin unidad,
+-- el vendedor registra su movimiento `sale` (sin `RETURNING`: no lee el ledger).
+SELECT pg_temp.expect_fail_like(172, 'Movimiento sale con la unidad de su propia variante, y otro sin unidad',
+  $$DO $x$
+    DECLARE
+      v_filas int;
+    BEGIN
+      INSERT INTO app.serialized_units (id, tenant_id, variant_id, serial_number)
+      VALUES ('b1720000-0000-0000-0000-000000000001', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 'SN-INV-172');
+      PERFORM pg_temp.b18_actor('vendedor', 172);
+      SET LOCAL ROLE joda_api;
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000000172', true),
+              set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000000172', true);
+      INSERT INTO app.inventory_movements
+        (tenant_id, lot_id, variant_id, serial_unit_id, qty, uom, movement_type, total_cost_pyg)
+      VALUES ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-0000000000a1',
+              '55555555-0000-0000-0000-00000000a001', 'b1720000-0000-0000-0000-000000000001',
+              -1, 'unit', 'sale', 4500),
+             ('11111111-1111-1111-1111-111111111111', '99999999-0000-0000-0000-0000000000a2',
+              '55555555-0000-0000-0000-00000000a002', NULL, -1, 'unit', 'sale', 2500);
+      GET DIAGNOSTICS v_filas = ROW_COUNT;
+      IF v_filas = 2 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO filas=%', v_filas;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 173 ─ La función de los lotes que una venta consume: una sola, SECURITY
+-- DEFINER y VOLATILE (toma bloqueos de fila: una STABLE no puede), con
+-- `search_path` fijo, que devuelve exactamente esas seis columnas (ningún
+-- proveedor, moneda, tipo de cambio ni costo total), que no se puede ejecutar
+-- por PUBLIC ni por `joda_readonly` (el storefront) y sí por `joda_api`. El 30
+-- y el 40 ya cubren el dueño y el `search_path` de toda SECURITY DEFINER; acá
+-- se pide por nombre para que borrarla o ensancharla no pase desapercibido.
+WITH f AS (
+  SELECT p.oid, p.prosecdef, p.provolatile, p.proconfig, p.proacl, p.proowner,
+         p.proargnames, p.proargmodes
+    FROM pg_proc p
+   WHERE p.pronamespace = 'app'::regnamespace AND p.proname = 'list_sale_allocation_lots'
+)
+SELECT pg_temp.expect_true(173,
+  'list_sale_allocation_lots: SECURITY DEFINER volátil, devuelve solo seis columnas, solo joda_api la ejecuta',
+  (SELECT count(*) FROM f) = 1
+  AND (SELECT bool_and(prosecdef) FROM f)
+  AND (SELECT bool_and('search_path=app, pg_temp' = ANY (COALESCE(proconfig, '{}'))) FROM f)
+  AND (SELECT bool_and(provolatile = 'v') FROM f)
+  AND (SELECT bool_and(proargnames = ARRAY['p_variant_ids', 'lot_id', 'variant_id', 'received_at',
+                                           'expiry_at', 'on_hand', 'unit_landed_cost_pyg']
+                       AND proargmodes = ARRAY['i', 't', 't', 't', 't', 't', 't']::"char"[])
+         FROM f)
+  AND NOT EXISTS (SELECT 1 FROM f,
+                    aclexplode(COALESCE(f.proacl, acldefault('f', f.proowner))) a
+                   WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE')
+  AND (SELECT bool_and(has_function_privilege('joda_api', oid, 'EXECUTE')) FROM f)
+  AND NOT (SELECT bool_or(has_function_privilege('joda_readonly', oid, 'EXECUTE')) FROM f));
+
+-- 174 ─ Control positivo y la razón de ser de la función: el vendedor,
+-- conectado como `joda_api` y SIN `inventory.stock:read`, no lee ningún lote
+-- (`inventory_lots` le da cero filas) y aun así la función le entrega el lote
+-- de la variante con su saldo y su costo unitario, los mismos valores que
+-- tiene el lote.
+SELECT pg_temp.expect_fail_like(174, 'El vendedor vende sin leer lotes: la función le entrega el lote, el saldo y el costo unitario',
+  $$DO $x$
+    DECLARE
+      v_variant constant uuid := '55555555-0000-0000-0000-00000000a001';
+      v_lot constant uuid := '99999999-0000-0000-0000-0000000000a1';
+      v_hand numeric;
+      v_cost bigint;
+      v_direct int;
+      v_rows int;
+      v_got_lot text;
+      v_got_hand numeric;
+      v_got_cost bigint;
+    BEGIN
+      SELECT b.on_hand INTO v_hand FROM app.inventory_balances b WHERE b.lot_id = v_lot;
+      SELECT l.unit_landed_cost_pyg INTO v_cost FROM app.inventory_lots l WHERE l.id = v_lot;
+      PERFORM pg_temp.b18_actor('vendedor', 174);
+      SET LOCAL ROLE joda_api;
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000000174', true),
+              set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000000174', true);
+      SELECT count(*) INTO v_direct FROM app.inventory_lots;
+      SELECT count(*), min(f.lot_id::text), min(f.on_hand), min(f.unit_landed_cost_pyg)
+        INTO v_rows, v_got_lot, v_got_hand, v_got_cost
+        FROM app.list_sale_allocation_lots(ARRAY[v_variant, v_variant]) f;
+      IF v_direct = 0 AND v_rows = 1 AND v_got_lot = v_lot::text
+         AND v_got_hand = v_hand AND v_got_cost = v_cost AND v_cost = 4500 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO directo=% filas=% lote=% saldo=% (esperado %) costo=% (esperado %)',
+        v_direct, v_rows, v_got_lot, v_got_hand, v_hand, v_got_cost, v_cost;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 175 ─ La función RECHAZA, no devuelve un vacío, cuando falta el permiso, la
+-- sesión de staff o el tenant: un vacío es indistinguible de «no hay stock».
+-- Los cuatro contextos: el depósito (lee lotes, no vende), el vendedor con
+-- audiencia `system`, con una sesión que no existe, y sin tenant.
+SELECT pg_temp.expect_fail_like(175, 'La función rechaza (42501) sin sales.order:write, sin sesión de staff y sin tenant',
+  $$DO $x$
+    DECLARE
+      v_ctx record;
+      v_rechazos int := 0;
+    BEGIN
+      PERFORM pg_temp.b18_actor('deposito', 1750);
+      PERFORM pg_temp.b18_actor('vendedor', 1751);
+      SET LOCAL ROLE joda_api;
+      FOR v_ctx IN
+        SELECT * FROM (VALUES
+          (1750, 'staff',  'b1850000-0000-0000-0000-000000001750', '11111111-1111-1111-1111-111111111111'),
+          (1751, 'system', 'b1850000-0000-0000-0000-000000001751', '11111111-1111-1111-1111-111111111111'),
+          (1751, 'staff',  'b1850000-0000-0000-0000-0000000f1751', '11111111-1111-1111-1111-111111111111'),
+          (1751, 'staff',  'b1850000-0000-0000-0000-000000001751', '')
+        ) AS t(n, audience, session_id, tenant_id)
+      LOOP
+        PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-00000000' || v_ctx.n, true),
+                set_config('app.tenant_id', v_ctx.tenant_id, true),
+                set_config('app.audience', v_ctx.audience, true),
+                set_config('app.session_id', v_ctx.session_id, true);
+        BEGIN
+          PERFORM * FROM app.list_sale_allocation_lots(ARRAY['55555555-0000-0000-0000-00000000a001'::uuid]);
+        EXCEPTION WHEN insufficient_privilege THEN
+          IF SQLERRM LIKE 'Falta el permiso sales.order:write%'
+             OR SQLERRM LIKE 'No hay tenant en el contexto%' THEN
+            v_rechazos := v_rechazos + 1;
+          END IF;
+        END;
+      END LOOP;
+      IF v_rechazos = 4 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO solo % de 4 contextos rechazaron', v_rechazos;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 176 ─ La función filtra por el tenant de la sesión: el dueño de OTRO
+-- tenant, con todos los permisos, no obtiene los lotes de una variante que no
+-- es suya, y una lista con una variante propia y una ajena tampoco devuelve
+-- nada de ninguna. Un rechazo, no un vacío ni los lotes ajenos (una SECURITY
+-- DEFINER ve los de todos los tenants).
+SELECT pg_temp.expect_fail_like(176, 'El dueño de otro tenant no obtiene los lotes de una variante ajena',
+  $$DO $x$
+    BEGIN
+      INSERT INTO app.tenants (id, slug, legal_name, trade_name)
+      VALUES ('18181818-0000-0000-0000-000000000176', 'tenant-inv-176', 'Inv 176 SA', 'Inv 176');
+      PERFORM app.seed_roles('18181818-0000-0000-0000-000000000176');
+      PERFORM pg_temp.b18_actor('owner', 176, '18181818-0000-0000-0000-000000000176');
+      SET LOCAL ROLE joda_api;
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000000176', true),
+              set_config('app.tenant_id', '18181818-0000-0000-0000-000000000176', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000000176', true);
+      PERFORM * FROM app.list_sale_allocation_lots(ARRAY['55555555-0000-0000-0000-00000000a001'::uuid]);
+      RAISE EXCEPTION 'devolvió filas o un vacío';
+    END $x$
+  $$,
+  'Una de las variantes no existe en el tenant de la sesión');
+
 \echo ''
 \echo '=============================================================='
 \echo ' INVARIANTES'
