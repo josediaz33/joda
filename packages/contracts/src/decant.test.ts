@@ -1,26 +1,41 @@
 import { describe, expect, it } from "vitest";
 import {
   executeDecantInput,
+  adminDecantWorkOrderSchema,
+  decantBomLineSchema,
   executeDecantOutput,
   listDecantOrdersInput,
   planDecantInput,
+  planDecantOutput,
   startDecantInput,
 } from "./decant.js";
 
 const ORDER_ID = "11111111-1111-4111-a111-111111111111";
-const SALE_ID = "22222222-2222-4222-a222-222222222222";
+const SALE_ID = "55555555-5555-4555-a555-555555555555";
+const SALE_LINE_ID = "22222222-2222-4222-a222-222222222222";
 const VARIANT_ID = "33333333-3333-4333-a333-333333333333";
 const LOT_ID = "44444444-4444-4444-a444-444444444444";
 
-describe("RN-FRA-01 · planDecantInput — el compromiso exige la venta (WP-C13)", () => {
-  const base = { saleOrderId: SALE_ID, targetVariantId: VARIANT_ID, qtyUnits: 2 };
+describe("RN-FRA-01 · planDecantInput — el compromiso exige la línea de venta (WP-C13, WP-C19)", () => {
+  const base = { saleOrderLineId: SALE_LINE_ID, targetVariantId: VARIANT_ID, qtyUnits: 2 };
 
-  it("acepta una orden con venta, variante y cantidad", () => {
+  it("acepta una orden con línea de venta, variante y cantidad", () => {
     expect(() => planDecantInput.parse(base)).not.toThrow();
   });
 
-  it("rechaza una orden sin saleOrderId — sin venta, el líquido consumido no tiene a quién cargarle el costo", () => {
+  it("rechaza una orden sin saleOrderLineId — sin venta, el líquido consumido no tiene a quién cargarle el costo", () => {
     expect(() => planDecantInput.parse({ targetVariantId: VARIANT_ID, qtyUnits: 2 })).toThrow();
+  });
+
+  it("rechaza el saleOrderId de antes: la venta se deduce de la línea y no se acepta aparte (decisión de José, 2026-10-07)", () => {
+    expect(() =>
+      planDecantInput.parse({
+        saleOrderId: SALE_LINE_ID,
+        targetVariantId: VARIANT_ID,
+        qtyUnits: 2,
+      }),
+    ).toThrow();
+    expect(() => planDecantInput.parse({ ...base, saleOrderId: SALE_LINE_ID })).toThrow();
   });
 
   it("acepta sourceLotId para que el admin elija otro frasco", () => {
@@ -100,6 +115,7 @@ describe("RN-FRA-04 · executeDecantOutput — el COGS viaja como string (docs/a
   const order = {
     id: ORDER_ID,
     saleOrderId: SALE_ID,
+    saleOrderLineId: SALE_LINE_ID,
     sourceLotId: LOT_ID,
     targetVariantId: VARIANT_ID,
     qtyUnits: 1,
@@ -127,5 +143,52 @@ describe("RN-FRA-04 · executeDecantOutput — el COGS viaja como string (docs/a
 
   it("rechaza el COGS como number — un número pierde precisión con importes grandes", () => {
     expect(() => executeDecantOutput.parse({ ...output, cogs: 131210 })).toThrow();
+  });
+});
+
+// Claves que quien planifica no puede ver (.claude/rules/contracts.md; WP-C19,
+// decisión de José del 2026-10-07): el vendedor planifica con
+// `inventory.decant:plan` y no tiene `inventory.stock:read`, que es el permiso de los
+// costos de lote. La respuesta de `plan` es un esquema propio, sin esas claves.
+describe("RN-FRA-02 · la respuesta de plan no trae costos (WP-C19, decisión de José 2026-10-07)", () => {
+  const FORBIDDEN = ["cogs", "cost", "landed", "supplier", "margin", "fxrate"];
+  const keysOf = (shape: Record<string, unknown>) =>
+    Object.keys(shape).map((key) => key.toLowerCase().replaceAll("_", ""));
+
+  it.each([
+    ["planDecantOutput", planDecantOutput.shape],
+    ["adminDecantWorkOrderSchema", adminDecantWorkOrderSchema.shape],
+    ["decantBomLineSchema", decantBomLineSchema.shape],
+  ])("%s no tiene ninguna clave prohibida", (_name, shape) => {
+    expect(keysOf(shape).filter((key) => FORBIDDEN.some((word) => key.includes(word)))).toEqual([]);
+  });
+
+  it("rechaza una respuesta con una clave de costo: el esquema es estricto, no uno opcional", () => {
+    const output = {
+      order: {
+        id: ORDER_ID,
+        saleOrderId: SALE_ID,
+        saleOrderLineId: SALE_LINE_ID,
+        sourceLotId: LOT_ID,
+        targetVariantId: VARIANT_ID,
+        qtyUnits: 1,
+        mlPerUnit: 10,
+        mlExpected: 10,
+        wasteExpected: 0.2,
+        wasteActual: null,
+        status: "pending",
+        executedBy: null,
+        executedAt: null,
+        createdAt: "2099-01-01T11:00:00.000Z",
+        createdBy: null,
+      },
+      mlToReserve: 10.2,
+      bom: [],
+    };
+    expect(() => planDecantOutput.parse(output)).not.toThrow();
+    expect(() => planDecantOutput.parse({ ...output, unitCostPyg: "11972" })).toThrow();
+    expect(() =>
+      planDecantOutput.parse({ ...output, order: { ...output.order, cogsPyg: "1" } }),
+    ).toThrow();
   });
 });

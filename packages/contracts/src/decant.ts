@@ -23,9 +23,11 @@ export const adminDecantWorkOrderSchema = z
   .object({
     id: idSchema,
     // Nullable en la base (una orden de antes de C19, o una de producción para
-    // stock, RF-FRA-10); `plan` la exige siempre: sin venta, el líquido que
-    // se consume no tiene a quién cargarle el costo.
+    // stock, RF-FRA-10); `plan` la exige siempre, por la línea de venta: sin
+    // venta, el líquido que se consume no tiene a quién cargarle el costo.
     saleOrderId: idSchema.nullable(),
+    // La línea de venta que originó la orden (WP-B18, WP-C19): una orden activa por línea.
+    saleOrderLineId: idSchema.nullable(),
     sourceLotId: idSchema,
     targetVariantId: idSchema,
     qtyUnits: z.number().int().positive(),
@@ -50,10 +52,12 @@ const ML_SCALE = 1000;
 const ML_SCALE_EPSILON = 1e-9;
 
 // ---------------------------------------------------------------------
-// Planificación — RF-FRA-01, RN-FRA-02. `saleOrderId` es OBLIGATORIO: sin una
-// venta que se lleve el costo ni un lote de decant que reciba el líquido, la
-// ejecución consumiría granel, merma e insumos "a ningún lado". Producir para
-// stock (RF-FRA-10) es otro flujo y necesita el movimiento `decant_yield`.
+// Planificación — RF-FRA-01, RN-FRA-02. `saleOrderLineId` es OBLIGATORIO (WP-C19,
+// decisión de José del 2026-10-07): la orden nace de una línea de venta y la
+// venta se deduce de la línea. Sin una venta que se lleve el costo ni un lote
+// de decant que reciba el líquido, la ejecución consumiría granel, merma e
+// insumos "a ningún lado". Producir para stock (RF-FRA-10) es otro flujo y
+// necesita el movimiento `decant_yield`.
 //
 // El granel de origen lo elige el servidor: el lote `bulk` en
 // `open_for_decant` de apertura más antigua que alcance para la orden
@@ -62,7 +66,7 @@ const ML_SCALE_EPSILON = 1e-9;
 // ---------------------------------------------------------------------
 export const planDecantInput = z
   .object({
-    saleOrderId: idSchema,
+    saleOrderLineId: idSchema,
     targetVariantId: idSchema,
     qtyUnits: z.number().int().positive(),
     sourceLotId: idSchema.optional(),
@@ -84,7 +88,8 @@ export const planDecantOutput = z
   .object({
     order: adminDecantWorkOrderSchema,
     // Lo que la orden compromete del granel: líquido más merma esperada
-    // (RN-FRA-02). Informativo: C13 no reserva (la reserva es de WP-C18).
+    // (RN-FRA-02), reservado atado al lote (WP-C18b). Sin costos: lo lee el
+    // vendedor (`inventory.decant:plan`, WP-C19) y no tiene permiso para verlos.
     mlToReserve: z.number().positive(),
     bom: z.array(decantBomLineSchema),
   })
