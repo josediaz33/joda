@@ -27,11 +27,14 @@ configure({ asyncUtilTimeout: 8_000 });
 function renderApp(path: string) {
   window.history.pushState({}, "", path);
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      <App />
-    </QueryClientProvider>,
-  );
+  return {
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        <App />
+      </QueryClientProvider>,
+    ),
+    queryClient,
+  };
 }
 
 const profile = {
@@ -146,6 +149,91 @@ describe("docs/security-spec.md §3.4 · permisos de presentación (WP-E04)", ()
 
     await user.click(await screen.findByRole("button", { name: "Salir" }));
     expect(await screen.findByRole("heading", { name: "Ingresar" })).toBeTruthy();
+  });
+});
+
+describe("docs/security-spec.md §4.1 · «Salir» cierra la sesión y el admin vuelve al ingreso sin recargar (WP-E04b, WP-M24)", () => {
+  // «Salir» también está en «Verificar segundo factor» y en «Inscribir segundo factor», pantallas
+  // que NO son `SessionBoundary`. Vaciar la caché dejaba sin consulta a la sesión que ese
+  // componente observa, y como nada lo volvía a dibujar, la pantalla seguía igual hasta recargar
+  // (la cookie sí estaba revocada).
+  it.each([
+    ["Verificar segundo factor", "pending_verification"],
+    ["Inscribir segundo factor", "pending_enrollment"],
+  ] as const)("al salir desde «%s» vuelve al ingreso sin recargar", async (heading, mfaStatus) => {
+    vi.mocked(api.current)
+      .mockResolvedValueOnce({ profile: { ...profile, mfaStatus }, permissions: [] })
+      .mockRejectedValue(
+        Object.assign(new TRPCClientError("Sin sesión"), { data: { httpStatus: 401 } }),
+      );
+    vi.mocked(api.logout).mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    renderApp("/");
+
+    expect(await screen.findByRole("heading", { name: heading })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Salir" }));
+
+    expect(await screen.findByRole("heading", { name: "Ingresar" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: heading })).toBeNull();
+  });
+});
+
+describe("docs/security-spec.md §4.1 · al salir no queda en el caché nada del usuario que sale (WP-M24, MEDIA-1 de la revisión de #117)", () => {
+  // `useMutation` guarda las `variables` de cada mutación (aquí, el código TOTP tipeado) hasta 5 min
+  // después de desmontarse el componente. `queryClient.clear()` las borraba junto con las consultas.
+  it("tras «Salir» desde «Verificar segundo factor» el caché de mutaciones queda vacío", async () => {
+    vi.mocked(api.current)
+      .mockResolvedValueOnce({
+        profile: { ...profile, mfaStatus: "pending_verification" },
+        permissions: [],
+      })
+      .mockRejectedValue(
+        Object.assign(new TRPCClientError("Sin sesión"), { data: { httpStatus: 401 } }),
+      );
+    vi.mocked(api.verify).mockRejectedValue(new Error("El código ingresado no es válido."));
+    vi.mocked(api.logout).mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    const { queryClient } = renderApp("/");
+
+    await user.type(await screen.findByLabelText("Código de 6 dígitos"), "123456");
+    await user.click(screen.getByRole("button", { name: "Verificar" }));
+    expect(await screen.findByText("El código ingresado no es válido.")).toBeTruthy();
+    expect(queryClient.getMutationCache().getAll()).toHaveLength(1);
+    expect(queryClient.getMutationCache().getAll()[0]?.state.variables).toBe("123456");
+    await user.click(screen.getByRole("button", { name: "Salir" }));
+
+    expect(await screen.findByRole("heading", { name: "Ingresar" })).toBeTruthy();
+    expect(queryClient.getMutationCache().getAll()).toEqual([]);
+  });
+
+  // Las consultas de las pantallas (aquí, la lista del catálogo) eran del usuario que sale: solo
+  // sobrevive la de la sesión, reiniciada.
+  it("tras «Salir» desde el encabezado la única consulta que queda es la de la sesión", async () => {
+    vi.mocked(api.current)
+      .mockResolvedValueOnce({
+        profile: { ...profile, mfaStatus: "satisfied" },
+        permissions: ["catalog.product:read"],
+      })
+      .mockRejectedValue(
+        Object.assign(new TRPCClientError("Sin sesión"), { data: { httpStatus: 401 } }),
+      );
+    vi.mocked(api.listProducts).mockResolvedValue({ items: [], nextCursor: null });
+    vi.mocked(api.logout).mockResolvedValue({ ok: true });
+    const user = userEvent.setup();
+    const { queryClient } = renderApp("/vista-catalogo");
+
+    expect(await screen.findByRole("heading", { name: "Productos" })).toBeTruthy();
+    expect(queryClient.getQueryCache().getAll()).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "Salir" }));
+
+    expect(await screen.findByRole("heading", { name: "Ingresar" })).toBeTruthy();
+    expect(
+      queryClient
+        .getQueryCache()
+        .getAll()
+        .map((query) => query.queryKey),
+    ).toEqual([["staff-session"]]);
+    expect(queryClient.getMutationCache().getAll()).toEqual([]);
   });
 });
 

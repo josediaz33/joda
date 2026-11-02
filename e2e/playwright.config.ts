@@ -10,6 +10,9 @@ import { readE2eEnv } from "./helpers/env";
 // `apiAs("<rol>")` de helpers/api.ts para preparar o comprobar datos por la API. Los datos
 // de muestra están en scripts/dev/lib/sampleData.mjs: si una pantalla necesita más, se
 // agregan ahí (por la API), no en el spec.
+//
+// Antes de escribir un spec, leé las reglas para que sea estable en el encabezado de
+// helpers/login.ts (WP-M24): qué esperar tras `loginAs`, cuándo navegar, cómo buscar filas.
 const env = readE2eEnv();
 
 export default defineConfig({
