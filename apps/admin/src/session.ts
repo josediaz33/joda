@@ -30,8 +30,13 @@ export function useLogout() {
   return useMutation({
     mutationFn: api.logout,
     onSuccess: async () => {
-      // Lo que no es la sesión (listas, formularios) era del usuario que sale: se descarta.
+      // Lo que no es la sesión (listas, formularios) era del usuario que sale: se descarta. Las
+      // mutaciones también: guardan sus `variables` (correo y contraseña del ingreso, el código TOTP,
+      // la semilla de la inscripción) hasta 5 min después de desmontarse; `queryClient.clear()` las
+      // borraba y las dos instrucciones de acá abajo deben seguir haciéndolo. La que corre ahora
+      // (esta) termina igual: su `onSuccess` ya está en curso y el estado lo lleva ella misma.
       queryClient.removeQueries({ predicate: (query) => query.queryKey[0] !== SESSION_KEY[0] });
+      queryClient.getMutationCache().clear();
       // La sesión se REINICIA, no se borra (WP-E04b, WP-M24). `queryClient.clear()` la sacaba de la
       // caché y dejaba a `SessionBoundary` observando una consulta huérfana: `invalidateQueries` ya
       // no la encontraba, y solo un re-render de `SessionBoundary` la reponía. Eso pasaba al salir

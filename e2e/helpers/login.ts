@@ -15,7 +15,10 @@ import { devUser, type DevRole } from "./roles";
 // 2. Para afirmar algo de una pantalla, esperá una aserción de Playwright (`expect(...)`
 //    reintenta sola) sobre lo que ESA pantalla dibuja. Nada de `waitForTimeout` ni de leer
 //    el DOM una vez (`isVisible()`, `count()`) para decidir qué hacer a continuación: eso
-//    mira un instante y no espera.
+//    mira un instante y no espera. Única excepción: DESPUÉS de haber esperado el estado
+//    asentado, como hace `findProductRow` (e2e/helpers/catalog.ts), que espera a que
+//    desaparezca «Cargando productos…» y a que haya una fila antes de contar o de ver si hay
+//    página siguiente.
 // 3. Después de una acción que dispara pedidos (guardar, paginar, salir), esperá su respuesta
 //    (`page.waitForResponse` armado ANTES del clic) o el cambio visible que produce, antes de
 //    navegar o de recargar. Un `goto` o un `reload` aborta lo que esté en vuelo.

@@ -127,7 +127,9 @@ test.describe("el ingreso espera a que la sesión esté completa (RF-SEG-01, doc
   }) => {
     // Retiene el pedido de verificación 1,5 s antes de dejarlo salir: determinista, y mucho
     // más lento que cualquier máquina cargada.
+    let retenido = false;
     await page.route("**/trpc/auth.mfa.verify*", async (route) => {
+      retenido = true;
       await new Promise((resolve) => setTimeout(resolve, 1_500));
       await route.continue();
     });
@@ -137,5 +139,7 @@ test.describe("el ingreso espera a que la sesión esté completa (RF-SEG-01, doc
 
     await expect(page.getByRole("heading", { name: "Productos" })).toBeVisible();
     await expect(page).toHaveURL(/\/vista-catalogo$/);
+    // Si el patrón del `route` dejara de coincidir, la guarda no probaría nada y pasaría igual.
+    expect(retenido).toBe(true);
   });
 });
