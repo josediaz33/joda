@@ -63,6 +63,33 @@ export const saleOrderTransitionSchema = z
   })
   .strict();
 
+/**
+ * Una reserva de stock de la venta (RN-RES-06): lo que se prometió al pasar el
+ * pedido a `awaiting_payment`, hasta cuándo, y si ya se liberó. Sin costos: es
+ * cantidad y vencimiento, nada del costo de lo reservado. La cantidad exacta de
+ * stock que queda NO sale: `qty` es lo que ESTE pedido reservó, no el saldo.
+ */
+export const saleOrderReservationSchema = z
+  .object({
+    id: uuid,
+    variantId: uuid,
+    /** El reloj reservado, si la línea es de una variante serializada; `null` si la reserva es por variante. */
+    serialUnitId: uuid.nullable(),
+    qty: z.string(),
+    reason: z.enum([
+      "checkout",
+      "order_pending_payment",
+      "deposit_hold",
+      "decant_hold",
+      "manual_hold",
+    ]),
+    expiresAt: z.iso.datetime(),
+    /** Cuándo se liberó (cancelación, vencimiento o consumo); `null` mientras sigue prometida. */
+    releasedAt: z.iso.datetime().nullable(),
+  })
+  .strict();
+export type SaleOrderReservationDto = z.infer<typeof saleOrderReservationSchema>;
+
 export const saleOrderSchema = z
   .object({
     id: uuid,
@@ -86,6 +113,8 @@ export const saleOrderSchema = z
     updatedAt: z.iso.datetime(),
     lines: z.array(saleOrderLineSchema),
     transitions: z.array(saleOrderTransitionSchema),
+    /** Las reservas del pedido, vivas y liberadas (WP-C18b). Un borrador no tiene ninguna. */
+    reservations: z.array(saleOrderReservationSchema),
   })
   .strict();
 export type SaleOrderDto = z.infer<typeof saleOrderSchema>;

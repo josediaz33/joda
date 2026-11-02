@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   createSaleOrderInput,
   saleOrderLineSchema,
+  saleOrderReservationSchema,
   saleOrderSchema,
   saleOrderTransitionSchema,
   transitionSaleOrderInput,
@@ -127,7 +128,41 @@ describe("docs/api-conventions.md §7 · el pedido que lee el vendedor no trae e
     ["saleOrderSchema", saleOrderSchema.shape],
     ["saleOrderLineSchema", saleOrderLineSchema.shape],
     ["saleOrderTransitionSchema", saleOrderTransitionSchema.shape],
+    ["saleOrderReservationSchema", saleOrderReservationSchema.shape],
   ])("%s no tiene ninguna clave prohibida", (_name, shape) => {
     expect(keysOf(shape).filter((key) => FORBIDDEN.some((word) => key.includes(word)))).toEqual([]);
+  });
+});
+
+describe("RN-RES-06 · la reserva que sale en el pedido", () => {
+  const reservation = {
+    id: "22222222-2222-4222-a222-222222222281",
+    variantId: VARIANT,
+    serialUnitId: null,
+    qty: "2",
+    reason: "order_pending_payment",
+    expiresAt: "2026-10-31T15:00:00.000Z",
+    releasedAt: null,
+  };
+
+  it("acepta una reserva por variante y una por unidad serializada, vivas o liberadas", () => {
+    expect(saleOrderReservationSchema.safeParse(reservation).success).toBe(true);
+    expect(
+      saleOrderReservationSchema.safeParse({
+        ...reservation,
+        serialUnitId: "44444444-4444-4444-a444-444444444481",
+        qty: "1",
+        releasedAt: "2026-10-30T15:00:00.000Z",
+      }).success,
+    ).toBe(true);
+  });
+
+  it("rechaza atributos ajenos y motivos que no existen: el costo de lo reservado no es parte de la reserva", () => {
+    expect(saleOrderReservationSchema.safeParse({ ...reservation, costPyg: "1" }).success).toBe(
+      false,
+    );
+    expect(saleOrderReservationSchema.safeParse({ ...reservation, reason: "regalo" }).success).toBe(
+      false,
+    );
   });
 });

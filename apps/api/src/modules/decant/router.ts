@@ -54,7 +54,9 @@ export function createDecantRouter(db: PrismaClient | null, deps: DecantServiceD
       .meta(EXECUTE)
       .input(planDecantInput)
       .output(planDecantOutput)
-      .mutation(({ ctx, input }) => decantService.planWorkOrder(requireDb(db), ctx, input)),
+      .mutation(({ ctx, input }) =>
+        decantService.planWorkOrder(requireDb(db), requireDeps(deps), ctx, input),
+      ),
     start: staffProcedure
       .meta(EXECUTE)
       .input(startDecantInput)

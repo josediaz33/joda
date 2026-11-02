@@ -1859,7 +1859,7 @@ WITH for_all AS (
    WHERE n.nspname = 'app'
      AND c.relname IN ('suppliers', 'purchase_orders', 'inventory_lots',
                        'chart_of_accounts', 'customer_deposits', 'sourcing_scenarios',
-                       'sourcing_scenario_lines')
+                       'sourcing_scenario_lines', 'stock_reservations')
      AND p.polpermissive
      AND p.polcmd = '*'
 )
@@ -1888,7 +1888,7 @@ WITH borrado AS (
    WHERE n.nspname = 'app'
      AND c.relname IN ('suppliers', 'purchase_orders', 'inventory_lots',
                        'chart_of_accounts', 'customer_deposits', 'sourcing_scenarios',
-                       'sourcing_scenario_lines')
+                       'sourcing_scenario_lines', 'stock_reservations')
      AND p.polpermissive
      AND p.polcmd IN ('d', '*')
 ), sobran AS (
@@ -3356,6 +3356,8 @@ CREATE OR REPLACE FUNCTION pg_temp.c18a_as_api(
 BEGIN
   PERFORM pg_temp.b18_actor('owner', p_n, p_tenant);
   SET LOCAL ROLE joda_api;
+  -- Como la API: sin `app` en el search_path (una política que dependiera de él fallaría).
+  SET LOCAL search_path = public;
   PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-' || lpad(p_n::text, 12, '0'), true),
           set_config('app.tenant_id', p_tenant::text, true),
           set_config('app.audience', 'staff', true),
@@ -3382,6 +3384,19 @@ BEGIN
   INSERT INTO app.serialized_units (id, tenant_id, variant_id, serial_number)
   VALUES ('c18a0001-0000-0000-0000-0000000000d1', 'c18a0001-0000-0000-0000-000000000000',
           'c18a0001-0000-0000-0000-0000000000b1', 'SN-C18A-PEER');
+  -- Desde 0041 escribir una reserva exige permiso (`sales.order:write` para
+  -- `checkout`): el vecino necesita un dueño con sesión viva propia, o la
+  -- política rechazaría su intento antes de que llegue a la FK que se prueba.
+  PERFORM app.seed_roles('c18a0001-0000-0000-0000-000000000000');
+  INSERT INTO app.staff_users (id, tenant_id, auth_subject, email, full_name)
+  VALUES ('c18a0001-0000-0000-0000-0000000000e1', 'c18a0001-0000-0000-0000-000000000000',
+          'sub-c18a-peer', 'c18a-peer@joda.test', 'Dueño vecino C18a');
+  INSERT INTO app.staff_user_roles (staff_user_id, role_id, tenant_id)
+  SELECT 'c18a0001-0000-0000-0000-0000000000e1', r.id, r.tenant_id
+    FROM app.roles r WHERE r.tenant_id = 'c18a0001-0000-0000-0000-000000000000' AND r.code = 'owner';
+  INSERT INTO app.staff_sessions (id, tenant_id, staff_user_id, expires_at)
+  VALUES ('c18a0001-0000-0000-0000-0000000000e2', 'c18a0001-0000-0000-0000-000000000000',
+          'c18a0001-0000-0000-0000-0000000000e1', now() + interval '8 hours');
 END $$;
 
 -- 150 ─ (a) Una reserva no puede declarar otra variante que la de su lote. La
@@ -3461,10 +3476,14 @@ SELECT pg_temp.expect_fail_like(153, 'Reserva con el lote y la unidad de su vari
     DECLARE
       v_filas int;
     BEGIN
+      -- Dos unidades: desde 0041 una unidad tiene a lo sumo una reserva sin liberar.
       INSERT INTO app.serialized_units (id, tenant_id, variant_id, lot_id, serial_number)
       VALUES ('c18a0000-0000-0000-0000-000000000153', '11111111-1111-1111-1111-111111111111',
               '55555555-0000-0000-0000-00000000a001',
-              '99999999-0000-0000-0000-0000000000a1', 'SN-INV-153');
+              '99999999-0000-0000-0000-0000000000a1', 'SN-INV-153'),
+             ('c18a0000-0000-0000-0000-00000000153b', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001',
+              '99999999-0000-0000-0000-0000000000a1', 'SN-INV-153B');
       PERFORM pg_temp.c18a_as_api(153);
       INSERT INTO app.stock_reservations
         (tenant_id, variant_id, lot_id, serial_unit_id, qty, reason, expires_at)
@@ -3476,7 +3495,7 @@ SELECT pg_temp.expect_fail_like(153, 'Reserva con el lote y la unidad de su vari
               now() + interval '1 hour'),
              ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
               '99999999-0000-0000-0000-0000000000a1',
-              'c18a0000-0000-0000-0000-000000000153', 1, 'checkout',
+              'c18a0000-0000-0000-0000-00000000153b', 1, 'checkout',
               now() + interval '1 hour');
       GET DIAGNOSTICS v_filas = ROW_COUNT;
       IF v_filas = 3 THEN
@@ -3502,8 +3521,9 @@ SELECT pg_temp.expect_fail_like(153, 'Reserva con el lote y la unidad de su vari
 --   · Con el contexto del vecino, una reserva del vecino (variante suya) que
 --     apunta a un lote del tenant real. La rechaza la FK del lote (la
 --     variante del reservante es válida): por tenant y por variante a la vez,
---     que acá no se distinguen. (La política de la tabla solo mira el tenant
---     del contexto; el usuario y la sesión son los del primer intento.)
+--     que acá no se distinguen. (Desde 0041 la política de escritura de la
+--     tabla exige permiso, así que cada intento corre con un dueño con sesión
+--     viva en SU tenant; sin eso lo rechazaría la política antes que la FK.)
 SELECT pg_temp.expect_fail_like(154, 'Reserva con un lote de otro tenant, como joda_api',
   $$DO $x$
     DECLARE
@@ -3533,7 +3553,9 @@ SELECT pg_temp.expect_fail_like(154, 'Reserva con un lote de otro tenant, como j
            ARRAY['stock_reservations_lot_id_fkey'])
         ) AS t(que, tenant, sentencia, restricciones)
       LOOP
-        PERFORM set_config('app.tenant_id', v_intento.tenant, true);
+        PERFORM set_config('app.tenant_id', v_intento.tenant, true),
+                set_config('app.user_id', CASE WHEN v_intento.tenant = 'c18a0001-0000-0000-0000-000000000000' THEN 'c18a0001-0000-0000-0000-0000000000e1' ELSE 'b1800000-0000-0000-0000-000000000154' END, true),
+                set_config('app.session_id', CASE WHEN v_intento.tenant = 'c18a0001-0000-0000-0000-000000000000' THEN 'c18a0001-0000-0000-0000-0000000000e2' ELSE 'b1850000-0000-0000-0000-000000000154' END, true);
         BEGIN
           EXECUTE v_intento.sentencia;
         EXCEPTION WHEN foreign_key_violation THEN
@@ -3588,7 +3610,9 @@ SELECT pg_temp.expect_fail_like(155, 'Reserva con una unidad serializada de otro
            ARRAY['stock_reservations_serial_unit_id_fkey'])
         ) AS t(que, tenant, sentencia, restricciones)
       LOOP
-        PERFORM set_config('app.tenant_id', v_intento.tenant, true);
+        PERFORM set_config('app.tenant_id', v_intento.tenant, true),
+                set_config('app.user_id', CASE WHEN v_intento.tenant = 'c18a0001-0000-0000-0000-000000000000' THEN 'c18a0001-0000-0000-0000-0000000000e1' ELSE 'b1800000-0000-0000-0000-000000000155' END, true),
+                set_config('app.session_id', CASE WHEN v_intento.tenant = 'c18a0001-0000-0000-0000-000000000000' THEN 'c18a0001-0000-0000-0000-0000000000e2' ELSE 'b1850000-0000-0000-0000-000000000155' END, true);
         BEGIN
           EXECUTE v_intento.sentencia;
         EXCEPTION WHEN foreign_key_violation THEN
@@ -3618,9 +3642,14 @@ SELECT pg_temp.expect_fail_like(156, 'Un UPDATE no mueve una reserva a otra vari
       v_constraint text;
       v_rechazos int := 0;
     BEGIN
+      -- La segunda unidad (156b) no tiene reserva: el cuarto intento mueve a ella
+      -- una reserva de otra variante, y el índice de 0041 (una reserva sin
+      -- liberar por unidad) saltaría antes que la FK si fuera la 156.
       INSERT INTO app.serialized_units (id, tenant_id, variant_id, serial_number)
       VALUES ('c18a0000-0000-0000-0000-000000000156', '11111111-1111-1111-1111-111111111111',
-              '55555555-0000-0000-0000-00000000a001', 'SN-INV-156');
+              '55555555-0000-0000-0000-00000000a001', 'SN-INV-156'),
+             ('c18a0000-0000-0000-0000-00000000156b', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 'SN-INV-156B');
       PERFORM pg_temp.c18a_as_api(156);
       INSERT INTO app.stock_reservations
         (id, tenant_id, variant_id, lot_id, qty, reason, expires_at)
@@ -3652,7 +3681,7 @@ SELECT pg_temp.expect_fail_like(156, 'Un UPDATE no mueve una reserva a otra vari
                WHERE id = 'c18a0000-0000-0000-0000-0000000001c6'$q$,
            'stock_reservations_lot_id_fkey'),
           ('la unidad de una reserva de otra variante',
-           $q$UPDATE app.stock_reservations SET serial_unit_id = 'c18a0000-0000-0000-0000-000000000156'
+           $q$UPDATE app.stock_reservations SET serial_unit_id = 'c18a0000-0000-0000-0000-00000000156b'
                WHERE id = 'c18a0000-0000-0000-0000-0000000001c6'$q$,
            'stock_reservations_serial_unit_id_fkey')
         ) AS t(que, sentencia, restriccion)
@@ -3791,6 +3820,560 @@ SELECT pg_temp.expect_fail_like(158, 'Borrar un lote o una unidad con reservas s
     END $x$
   $$,
   'aceptado');
+
+-- ─────────────────────────────────────────────────────────────────────
+-- WP-C18b (0041_stock_reservations_runtime.sql): el TTL por tenant, una
+-- reserva sin liberar por unidad serializada, la función del job de
+-- liberación, los permisos de escritura de `stock_reservations` y los lotes
+-- candidatos de un decant sin las reservas. Además, `stock_reservations` entra
+-- en el 92 (ninguna política de permiso es FOR ALL) y en el 93 (nadie borra).
+--
+-- Los intentos corren conectados como `joda_api` (`SET LOCAL ROLE`, la
+-- credencial del runtime y no el superusuario, que elude RLS) con el contexto
+-- que fija `withTenantTx`; los datos de partida se crean antes, como
+-- superusuario, porque después de `SET LOCAL ROLE` ya no se puede. Cada
+-- bloque termina en una excepción: así se revierte todo lo que creó, incluido
+-- el `SET LOCAL ROLE`.
+-- ─────────────────────────────────────────────────────────────────────
+
+-- 159 ─ El TTL por tenant: 24 horas por defecto y solo de 1 a 720. Sin el
+-- CHECK, un 0 vencería toda reserva en el acto y un valor enorme dejaría el
+-- stock apartado para siempre; sin el default, un tenant nuevo no tendría TTL.
+SELECT pg_temp.expect_fail_like(159, 'tenants.reservation_ttl_hours: 24 por defecto y solo de 1 a 720 horas, como joda_api',
+  $$DO $x$
+    DECLARE
+      v_default int;
+      v_valor int;
+      v_filas int;
+      v_rechazos int := 0;
+      v_aceptados int := 0;
+    BEGIN
+      PERFORM pg_temp.c18a_as_api(159);
+      SELECT reservation_ttl_hours INTO v_default
+        FROM app.tenants WHERE id = '11111111-1111-1111-1111-111111111111';
+      FOREACH v_valor IN ARRAY ARRAY[0, -1, 721] LOOP
+        BEGIN
+          UPDATE app.tenants SET reservation_ttl_hours = v_valor
+           WHERE id = '11111111-1111-1111-1111-111111111111';
+        EXCEPTION WHEN check_violation THEN
+          v_rechazos := v_rechazos + 1;
+        END;
+      END LOOP;
+      FOREACH v_valor IN ARRAY ARRAY[1, 720] LOOP
+        UPDATE app.tenants SET reservation_ttl_hours = v_valor
+         WHERE id = '11111111-1111-1111-1111-111111111111';
+        GET DIAGNOSTICS v_filas = ROW_COUNT;
+        v_aceptados := v_aceptados + v_filas;
+      END LOOP;
+      IF v_default = 24 AND v_rechazos = 3 AND v_aceptados = 2 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO default=% rechazos=% aceptados=% (esperado 24, 3 y 2)',
+        v_default, v_rechazos, v_aceptados;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 160 ─ Una unidad serializada tiene a lo sumo UNA reserva sin liberar (dos
+-- borradores pueden elegir el mismo reloj, RN-VTA-06: al crear no se reserva).
+-- La segunda se rechaza por el índice único parcial, con su nombre; otra
+-- unidad reserva sin problema, y una vez liberada la primera la misma unidad
+-- admite una nueva (una reserva liberada no se reactiva: se crea otra, RN-RES-04).
+SELECT pg_temp.expect_fail_like(160, 'Una unidad serializada tiene a lo sumo una reserva sin liberar, como joda_api',
+  $$DO $x$
+    DECLARE
+      v_constraint text;
+      v_rechazada boolean := false;
+      v_total int;
+    BEGIN
+      INSERT INTO app.serialized_units (id, tenant_id, variant_id, serial_number)
+      VALUES ('c4100000-0000-0000-0000-000000000160', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 'SN-INV-160'),
+             ('c4100000-0000-0000-0000-00000000160b', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 'SN-INV-160B');
+      PERFORM pg_temp.c18a_as_api(160);
+      INSERT INTO app.stock_reservations
+        (id, tenant_id, variant_id, serial_unit_id, qty, reason, expires_at)
+      VALUES ('c4100000-0000-0000-0000-000000001601', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 'c4100000-0000-0000-0000-000000000160',
+              1, 'order_pending_payment', now() + interval '1 hour');
+      BEGIN
+        INSERT INTO app.stock_reservations
+          (tenant_id, variant_id, serial_unit_id, qty, reason, expires_at)
+        VALUES ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+                'c4100000-0000-0000-0000-000000000160', 1, 'order_pending_payment',
+                now() + interval '2 hours');
+      EXCEPTION WHEN unique_violation THEN
+        GET STACKED DIAGNOSTICS v_constraint = CONSTRAINT_NAME;
+        v_rechazada := v_constraint = 'stock_reservations_one_open_per_serial_unit';
+      END;
+      INSERT INTO app.stock_reservations
+        (tenant_id, variant_id, serial_unit_id, qty, reason, expires_at)
+      VALUES ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+              'c4100000-0000-0000-0000-00000000160b', 1, 'order_pending_payment',
+              now() + interval '1 hour');
+      UPDATE app.stock_reservations SET released_at = now()
+       WHERE id = 'c4100000-0000-0000-0000-000000001601';
+      INSERT INTO app.stock_reservations
+        (tenant_id, variant_id, serial_unit_id, qty, reason, expires_at)
+      VALUES ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+              'c4100000-0000-0000-0000-000000000160', 1, 'order_pending_payment',
+              now() + interval '1 hour');
+      SELECT count(*) INTO v_total FROM app.stock_reservations
+       WHERE serial_unit_id IN ('c4100000-0000-0000-0000-000000000160',
+                                'c4100000-0000-0000-0000-00000000160b');
+      IF v_rechazada AND v_total = 3 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO segunda rechazada por el índice=% reservas=% (esperado true y 3)',
+        v_rechazada, v_total;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 161 ─ Una reserva de una unidad serializada es de UNA unidad (RN-VTA-04). Con
+-- `qty = 2` se rechaza por su CHECK; la reserva por variante de varias unidades
+-- (sin unidad serializada) y la de una unidad con `qty = 1` se aceptan: el
+-- CHECK no toca la reserva por variante.
+SELECT pg_temp.expect_fail_like(161, 'Una reserva de unidad serializada es de qty = 1, como joda_api',
+  $$DO $x$
+    DECLARE
+      v_constraint text;
+      v_rechazada boolean := false;
+      v_filas int;
+    BEGIN
+      INSERT INTO app.serialized_units (id, tenant_id, variant_id, serial_number)
+      VALUES ('c4100000-0000-0000-0000-000000000161', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 'SN-INV-161');
+      PERFORM pg_temp.c18a_as_api(161);
+      BEGIN
+        INSERT INTO app.stock_reservations
+          (tenant_id, variant_id, serial_unit_id, qty, reason, expires_at)
+        VALUES ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+                'c4100000-0000-0000-0000-000000000161', 2, 'order_pending_payment',
+                now() + interval '1 hour');
+      EXCEPTION WHEN check_violation THEN
+        GET STACKED DIAGNOSTICS v_constraint = CONSTRAINT_NAME;
+        v_rechazada := v_constraint = 'stock_reservations_serial_unit_qty_one';
+      END;
+      INSERT INTO app.stock_reservations
+        (tenant_id, variant_id, serial_unit_id, qty, reason, expires_at)
+      VALUES ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+              'c4100000-0000-0000-0000-000000000161', 1, 'order_pending_payment',
+              now() + interval '1 hour'),
+             ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+              NULL, 3, 'order_pending_payment', now() + interval '1 hour');
+      GET DIAGNOSTICS v_filas = ROW_COUNT;
+      IF v_rechazada AND v_filas = 2 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO qty=2 rechazada por su CHECK=% aceptadas=% (esperado true y 2)',
+        v_rechazada, v_filas;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 162 ─ La función del job de liberación: una sola, SECURITY DEFINER con
+-- `search_path` fijo, que devuelve un conjunto de `uuid` (ids de tenant y nada
+-- más: ni una fila compuesta ni una columna extra), que recibe solo el instante
+-- hasta el que busca, y que no se puede ejecutar por PUBLIC ni por
+-- `joda_readonly` (el storefront). El 30 y el 40 ya cubren el dueño y el
+-- `search_path` de toda SECURITY DEFINER; acá se pide por nombre para que
+-- ensancharla (devolver más columnas) no pase desapercibido.
+WITH f AS (
+  SELECT p.oid, p.prosecdef, p.provolatile, p.proconfig, p.proacl, p.proowner,
+         p.proretset, p.prorettype, p.pronargs, p.proargtypes
+    FROM pg_proc p
+   WHERE p.pronamespace = 'app'::regnamespace AND p.proname = 'tenants_with_expired_reservations'
+)
+SELECT pg_temp.expect_true(162,
+  'tenants_with_expired_reservations: SECURITY DEFINER, devuelve solo uuid (ids de tenant), solo joda_api la ejecuta',
+  (SELECT count(*) FROM f) = 1
+  AND (SELECT bool_and(prosecdef) FROM f)
+  AND (SELECT bool_and('search_path=app, pg_temp' = ANY (COALESCE(proconfig, '{}'))) FROM f)
+  AND (SELECT bool_and(provolatile = 's') FROM f)
+  AND (SELECT bool_and(proretset AND prorettype = 'uuid'::regtype
+                       AND pronargs = 1 AND proargtypes::text = 'timestamptz'::regtype::oid::text)
+         FROM f)
+  AND NOT EXISTS (SELECT 1 FROM f,
+                    aclexplode(COALESCE(f.proacl, acldefault('f', f.proowner))) a
+                   WHERE a.grantee = 0 AND a.privilege_type = 'EXECUTE')
+  AND (SELECT bool_and(has_function_privilege('joda_api', oid, 'EXECUTE')) FROM f)
+  AND NOT (SELECT bool_or(has_function_privilege('joda_readonly', oid, 'EXECUTE')) FROM f));
+
+-- 163 ─ La función entrega exactamente los tenants con reservas SIN LIBERAR
+-- vencidas al instante pedido, conectada como `joda_api` y sin tenant en el
+-- contexto (como la llama el job). El tenant real tiene una vencida sin
+-- liberar; el vecino tiene una viva y una vencida ya liberada, y no figura.
+-- Con un instante anterior al vencimiento no figura nadie: lo que cuenta es el
+-- instante que pasa el llamador.
+SELECT pg_temp.expect_fail_like(163, 'tenants_with_expired_reservations devuelve los tenants con reservas vencidas sin liberar, como joda_api',
+  $$DO $x$
+    DECLARE
+      v_ids uuid[];
+      v_antes int;
+    BEGIN
+      PERFORM pg_temp.c18a_peer_tenant();
+      INSERT INTO app.stock_reservations
+        (tenant_id, variant_id, qty, reason, expires_at, released_at)
+      VALUES ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+              1, 'order_pending_payment', now() - interval '1 hour', NULL),
+             ('c18a0001-0000-0000-0000-000000000000', 'c18a0001-0000-0000-0000-0000000000b1',
+              1, 'order_pending_payment', now() + interval '1 hour', NULL),
+             ('c18a0001-0000-0000-0000-000000000000', 'c18a0001-0000-0000-0000-0000000000b1',
+              1, 'order_pending_payment', now() - interval '2 hours', now() - interval '1 hour');
+      SET LOCAL ROLE joda_api;
+      SET LOCAL search_path = public;
+      PERFORM set_config('app.user_id', '', true), set_config('app.tenant_id', '', true),
+              set_config('app.audience', 'system', true), set_config('app.session_id', '', true);
+      SELECT array_agg(t) INTO v_ids FROM app.tenants_with_expired_reservations(now()) t;
+      SELECT count(*) INTO v_antes
+        FROM app.tenants_with_expired_reservations(now() - interval '3 hours');
+      IF v_ids = ARRAY['11111111-1111-1111-1111-111111111111'::uuid] AND v_antes = 0 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO ids=% antes=% (esperado solo el tenant real y 0)', v_ids, v_antes;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 164 ─ Con un tenant en el contexto la función RECHAZA (42501): lista a todos
+-- los tenants, y una petición de un tenant no tiene por qué saber cuáles
+-- tienen reservas vencidas. Solo el job la llama, antes de fijar un tenant.
+SELECT pg_temp.expect_fail_like(164, 'tenants_with_expired_reservations rechaza dentro del contexto de un tenant, como joda_api',
+  $$DO $x$
+    BEGIN
+      PERFORM pg_temp.c18a_as_api(164);
+      PERFORM * FROM app.tenants_with_expired_reservations(now());
+      RAISE EXCEPTION 'devolvió filas o un vacío';
+    END $x$
+  $$,
+  'Esta función lista todos los tenants%');
+
+-- 165 ─ Sin instante (NULL) rechaza (22004), no devuelve nada: un `NULL` que
+-- pasara en silencio daría un vacío indistinguible de «no hay vencidas».
+SELECT pg_temp.expect_fail_like(165, 'tenants_with_expired_reservations rechaza un instante nulo, como joda_api',
+  $$DO $x$
+    BEGIN
+      SET LOCAL ROLE joda_api;
+      SET LOCAL search_path = public;
+      PERFORM set_config('app.tenant_id', '', true), set_config('app.audience', 'system', true);
+      PERFORM * FROM app.tenants_with_expired_reservations(NULL);
+      RAISE EXCEPTION 'devolvió filas o un vacío';
+    END $x$
+  $$,
+  'Falta el instante%');
+
+-- 166 ─ Escribir una reserva exige el permiso de su `reason`. El vendedor
+-- reserva por una venta (`checkout`, `order_pending_payment`) y planifica un
+-- decant (`decant_hold`); el depósito planifica pero no vende; `deposit_hold`
+-- y `manual_hold` no los escribe nadie todavía, ni el dueño. Antes de 0041
+-- bastaba el tenant: cualquier sesión agotaba el disponible de una variante.
+--
+-- Los cuatro roles de sistema solos NO distinguen `sales.order:write` de
+-- `sales.order:read` (ninguno lee pedidos sin escribirlos) ni la rama
+-- `inventory.decant:execute` de la de `:plan` (todos tienen `plan`), y un
+-- mapeo equivocado quedaba en verde: un rol a medida de solo lectura (WP-C24)
+-- reservaría y liberaría stock. Por eso la matriz suma tres roles a medida,
+-- creados acá adentro (y revertidos con el bloque): solo lee pedidos, solo
+-- ejecuta decants y solo lee stock.
+SELECT pg_temp.expect_fail_like(166, 'Escribir una reserva exige el permiso de su reason, como joda_api',
+  $$DO $x$
+    DECLARE
+      v_caso record;
+      v_resultado boolean;
+      v_discrepancias text := '';
+    BEGIN
+      PERFORM pg_temp.b18_actor('vendedor', 1661);
+      PERFORM pg_temp.b18_actor('deposito', 1662);
+      PERFORM pg_temp.b18_actor('owner', 1663);
+      INSERT INTO app.roles (id, tenant_id, code, name)
+      VALUES ('b1860000-0000-0000-0000-000000001664', '11111111-1111-1111-1111-111111111111',
+              'b18-166-lee-ventas', 'Solo lee pedidos'),
+             ('b1860000-0000-0000-0000-000000001665', '11111111-1111-1111-1111-111111111111',
+              'b18-166-solo-ejecuta', 'Solo ejecuta decants'),
+             ('b1860000-0000-0000-0000-000000001666', '11111111-1111-1111-1111-111111111111',
+              'b18-166-lee-stock', 'Solo lee stock');
+      INSERT INTO app.role_permissions (tenant_id, role_id, permission_code)
+      VALUES ('11111111-1111-1111-1111-111111111111', 'b1860000-0000-0000-0000-000000001664', 'sales.order:read'),
+             ('11111111-1111-1111-1111-111111111111', 'b1860000-0000-0000-0000-000000001665', 'inventory.decant:execute'),
+             ('11111111-1111-1111-1111-111111111111', 'b1860000-0000-0000-0000-000000001666', 'inventory.stock:read');
+      PERFORM pg_temp.b18_actor('b18-166-lee-ventas', 1664);
+      PERFORM pg_temp.b18_actor('b18-166-solo-ejecuta', 1665);
+      PERFORM pg_temp.b18_actor('b18-166-lee-stock', 1666);
+      SET LOCAL ROLE joda_api;
+      SET LOCAL search_path = public;
+      FOR v_caso IN
+        SELECT * FROM (VALUES
+          ('vendedor',  1661, 'order_pending_payment', true),
+          ('vendedor',  1661, 'checkout',              true),
+          ('vendedor',  1661, 'decant_hold',           true),
+          ('vendedor',  1661, 'manual_hold',           false),
+          ('deposito',  1662, 'decant_hold',           true),
+          ('deposito',  1662, 'checkout',              false),
+          ('deposito',  1662, 'order_pending_payment', false),
+          ('owner',     1663, 'deposit_hold',          false),
+          ('owner',     1663, 'manual_hold',           false),
+          ('lee-ventas',   1664, 'checkout',              false),
+          ('lee-ventas',   1664, 'order_pending_payment', false),
+          ('lee-ventas',   1664, 'decant_hold',           false),
+          ('solo-ejecuta', 1665, 'decant_hold',           true),
+          ('solo-ejecuta', 1665, 'checkout',              false),
+          ('lee-stock',    1666, 'decant_hold',           false)
+        ) AS t(rol, n, motivo, debe_aceptar)
+      LOOP
+        PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-' || lpad(v_caso.n::text, 12, '0'), true),
+                set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+                set_config('app.audience', 'staff', true),
+                set_config('app.session_id', 'b1850000-0000-0000-0000-' || lpad(v_caso.n::text, 12, '0'), true);
+        BEGIN
+          EXECUTE format($q$INSERT INTO app.stock_reservations
+                              (tenant_id, variant_id, qty, reason, expires_at)
+                            VALUES ('11111111-1111-1111-1111-111111111111',
+                                    '55555555-0000-0000-0000-00000000a001', 1, %L, now() + interval '1 hour')$q$,
+                         v_caso.motivo);
+          v_resultado := true;
+        EXCEPTION WHEN insufficient_privilege THEN
+          v_resultado := false;
+        END;
+        IF v_resultado <> v_caso.debe_aceptar THEN
+          v_discrepancias := v_discrepancias || v_caso.rol || '/' || v_caso.motivo || ' ';
+        END IF;
+      END LOOP;
+      IF v_discrepancias = '' THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO el permiso no coincide en: %', v_discrepancias;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 167 ─ Liberar una reserva (UPDATE) exige el mismo permiso que escribirla, y el
+-- job libera con la audiencia `system`, que no tiene sesión de staff ni
+-- permisos: la política le abre UNA cosa, un UPDATE sobre una reserva sin
+-- liberar cuya fila nueva queda liberada. No inserta, no deja una reserva sin
+-- liberar (un UPDATE que no fija `released_at`, como `SET qty = 5`, se rechaza
+-- por ESO y no por tocar `qty`) y no toca una ya liberada. Un UPDATE sin
+-- permiso afecta cero filas, sin error (la política lo oculta).
+--
+-- Lo que esta prueba NO verifica, porque la política no lo impide: que el
+-- UPDATE que libera deje intactas las demás columnas (`SET qty = 5,
+-- released_at = now()` pasa), ni que quien tiene el permiso del `reason` no
+-- reescriba `qty` o `expires_at` ni ponga `released_at` en `NULL`. Cerrarlo es
+-- un trigger de invariante: WP-B21(2).
+SELECT pg_temp.expect_fail_like(167, 'Liberar exige el permiso del reason; el job (system) solo libera lo sin liberar, como joda_api',
+  $$DO $x$
+    DECLARE
+      v_filas int;
+      v_error text;
+      v_malos text := '';
+    BEGIN
+      INSERT INTO app.stock_reservations
+        (id, tenant_id, variant_id, qty, reason, expires_at, released_at)
+      VALUES ('c4100000-0000-0000-0000-000000001671', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'order_pending_payment', now() + interval '1 hour', NULL),
+             ('c4100000-0000-0000-0000-000000001672', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'order_pending_payment', now() + interval '1 hour', NULL),
+             ('c4100000-0000-0000-0000-000000001673', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'decant_hold', now() + interval '1 hour', NULL),
+             ('c4100000-0000-0000-0000-000000001674', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'order_pending_payment', now() - interval '1 hour', NULL),
+             ('c4100000-0000-0000-0000-000000001675', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'order_pending_payment', now() - interval '2 hours', now() - interval '1 hour'),
+             ('c4100000-0000-0000-0000-000000001676', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'order_pending_payment', now() + interval '1 hour', NULL),
+             ('c4100000-0000-0000-0000-000000001677', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'order_pending_payment', now() + interval '1 hour', NULL),
+             ('c4100000-0000-0000-0000-000000001678', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'decant_hold', now() + interval '1 hour', NULL);
+      PERFORM pg_temp.b18_actor('vendedor', 1671);
+      PERFORM pg_temp.b18_actor('deposito', 1672);
+      -- Dos roles a medida (WP-C24), para lo que los de sistema no distinguen: uno que solo
+      -- LEE pedidos y uno que solo ejecuta decants.
+      INSERT INTO app.roles (id, tenant_id, code, name)
+      VALUES ('b1860000-0000-0000-0000-000000001677', '11111111-1111-1111-1111-111111111111',
+              'b18-167-lee-ventas', 'Solo lee pedidos'),
+             ('b1860000-0000-0000-0000-000000001678', '11111111-1111-1111-1111-111111111111',
+              'b18-167-solo-ejecuta', 'Solo ejecuta decants');
+      INSERT INTO app.role_permissions (tenant_id, role_id, permission_code)
+      VALUES ('11111111-1111-1111-1111-111111111111', 'b1860000-0000-0000-0000-000000001677', 'sales.order:read'),
+             ('11111111-1111-1111-1111-111111111111', 'b1860000-0000-0000-0000-000000001678', 'inventory.decant:execute');
+      PERFORM pg_temp.b18_actor('b18-167-lee-ventas', 1677);
+      PERFORM pg_temp.b18_actor('b18-167-solo-ejecuta', 1678);
+      SET LOCAL ROLE joda_api;
+      SET LOCAL search_path = public;
+
+      -- El vendedor libera la reserva de una venta (control positivo).
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000001671', true),
+              set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000001671', true);
+      UPDATE app.stock_reservations SET released_at = now()
+       WHERE id = 'c4100000-0000-0000-0000-000000001671';
+      GET DIAGNOSTICS v_filas = ROW_COUNT;
+      IF v_filas <> 1 THEN v_malos := v_malos || 'vendedor-libera-venta=' || v_filas || ' '; END IF;
+
+      -- El depósito no libera la reserva de una venta (no tiene sales.order:write)...
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000001672', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000001672', true);
+      UPDATE app.stock_reservations SET released_at = now()
+       WHERE id = 'c4100000-0000-0000-0000-000000001672';
+      GET DIAGNOSTICS v_filas = ROW_COUNT;
+      IF v_filas <> 0 THEN v_malos := v_malos || 'deposito-libera-venta=' || v_filas || ' '; END IF;
+      -- ... pero sí la de su fraccionamiento.
+      UPDATE app.stock_reservations SET released_at = now()
+       WHERE id = 'c4100000-0000-0000-0000-000000001673';
+      GET DIAGNOSTICS v_filas = ROW_COUNT;
+      IF v_filas <> 1 THEN v_malos := v_malos || 'deposito-libera-decant=' || v_filas || ' '; END IF;
+
+      -- Un rol que solo LEE pedidos no libera la reserva de una venta (sales.order:read no es
+      -- :write)...
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000001677', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000001677', true);
+      UPDATE app.stock_reservations SET released_at = now()
+       WHERE id = 'c4100000-0000-0000-0000-000000001677';
+      GET DIAGNOSTICS v_filas = ROW_COUNT;
+      IF v_filas <> 0 THEN v_malos := v_malos || 'lee-ventas-libera-venta=' || v_filas || ' '; END IF;
+      -- ... y uno que solo ejecuta decants sí libera la de su fraccionamiento (la rama :execute).
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000001678', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000001678', true);
+      UPDATE app.stock_reservations SET released_at = now()
+       WHERE id = 'c4100000-0000-0000-0000-000000001678';
+      GET DIAGNOSTICS v_filas = ROW_COUNT;
+      IF v_filas <> 1 THEN v_malos := v_malos || 'solo-ejecuta-libera-decant=' || v_filas || ' '; END IF;
+
+      -- El job (system, sin sesión): libera una vencida sin liberar...
+      PERFORM set_config('app.user_id', '', true), set_config('app.audience', 'system', true),
+              set_config('app.session_id', '', true);
+      UPDATE app.stock_reservations SET released_at = now()
+       WHERE id = 'c4100000-0000-0000-0000-000000001674';
+      GET DIAGNOSTICS v_filas = ROW_COUNT;
+      IF v_filas <> 1 THEN v_malos := v_malos || 'system-libera=' || v_filas || ' '; END IF;
+      -- ... no reactiva una ya liberada ...
+      UPDATE app.stock_reservations SET released_at = NULL
+       WHERE id = 'c4100000-0000-0000-0000-000000001675';
+      GET DIAGNOSTICS v_filas = ROW_COUNT;
+      IF v_filas <> 0 THEN v_malos := v_malos || 'system-reactiva=' || v_filas || ' '; END IF;
+      -- ... no edita una sin liberar sin liberarla (se rechaza porque `released_at`
+      -- sigue nulo, no porque toque `qty`: la política no mira esa columna) ...
+      BEGIN
+        UPDATE app.stock_reservations SET qty = 5 WHERE id = 'c4100000-0000-0000-0000-000000001676';
+        v_malos := v_malos || 'system-edita-sin-liberar ';
+      EXCEPTION WHEN insufficient_privilege THEN NULL;
+      END;
+      -- ... y no inserta.
+      BEGIN
+        INSERT INTO app.stock_reservations (tenant_id, variant_id, qty, reason, expires_at)
+        VALUES ('11111111-1111-1111-1111-111111111111', '55555555-0000-0000-0000-00000000a001',
+                1, 'order_pending_payment', now() + interval '1 hour');
+        v_malos := v_malos || 'system-inserta ';
+      EXCEPTION WHEN insufficient_privilege THEN NULL;
+      END;
+
+      IF v_malos = '' THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO %', v_malos;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 168 ─ Nadie borra una reserva: ni el dueño. Una liberada o vencida conserva su
+-- fila (el lote o la unidad a la que apuntó no cambia de variante, 156/157, y
+-- el historial de qué se prometió sigue ahí). Sin política de DELETE, el DELETE
+-- afecta cero filas, sin error; la fila sigue ahí.
+SELECT pg_temp.expect_fail_like(168, 'Ningún rol borra una reserva, ni el dueño, como joda_api',
+  $$DO $x$
+    DECLARE
+      v_filas int;
+      v_quedan int;
+    BEGIN
+      INSERT INTO app.stock_reservations (id, tenant_id, variant_id, qty, reason, expires_at, released_at)
+      VALUES ('c4100000-0000-0000-0000-000000001681', '11111111-1111-1111-1111-111111111111',
+              '55555555-0000-0000-0000-00000000a001', 1, 'order_pending_payment',
+              now() - interval '1 hour', now() - interval '30 minutes');
+      PERFORM pg_temp.c18a_as_api(168);
+      DELETE FROM app.stock_reservations WHERE id = 'c4100000-0000-0000-0000-000000001681';
+      GET DIAGNOSTICS v_filas = ROW_COUNT;
+      SELECT count(*) INTO v_quedan FROM app.stock_reservations
+       WHERE id = 'c4100000-0000-0000-0000-000000001681';
+      IF v_filas = 0 AND v_quedan = 1 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO borradas=% quedan=% (esperado 0 y 1)', v_filas, v_quedan;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 169 ─ `list_decant_plan_lots` descuenta las reservas VIVAS atadas al lote (0041),
+-- que es lo que evita que dos planes vean el mismo granel. Una vencida, una
+-- liberada y una sin lote no se descuentan; un lote sin nada libre deja de ser
+-- candidato. El vendedor (sin `inventory.stock:read`) la llama como siempre.
+SELECT pg_temp.expect_fail_like(169, 'list_decant_plan_lots descuenta las reservas vivas atadas al lote, como joda_api',
+  $$DO $x$
+    DECLARE
+      v_bulk constant uuid := '55555555-0000-0000-0000-000000000002';
+      v_lot constant uuid := '99999999-0000-0000-0000-000000000002';
+      v_hand numeric;
+      v_libre numeric;
+      v_sin_reservas numeric;
+      v_con_reserva numeric;
+      v_filas_al_agotar int;
+    BEGIN
+      SELECT b.on_hand INTO v_hand FROM app.inventory_balances b WHERE b.lot_id = v_lot;
+      INSERT INTO app.stock_reservations
+        (tenant_id, variant_id, lot_id, qty, reason, expires_at, released_at)
+      VALUES ('11111111-1111-1111-1111-111111111111', v_bulk, v_lot, 10.2, 'decant_hold',
+              now() + interval '1 hour', NULL),
+             ('11111111-1111-1111-1111-111111111111', v_bulk, v_lot, 50, 'decant_hold',
+              now() - interval '1 hour', NULL),
+             ('11111111-1111-1111-1111-111111111111', v_bulk, v_lot, 20, 'decant_hold',
+              now() + interval '1 hour', now()),
+             ('11111111-1111-1111-1111-111111111111', v_bulk, NULL, 30, 'checkout',
+              now() + interval '1 hour', NULL);
+      PERFORM pg_temp.b18_actor('vendedor', 169);
+      SET LOCAL ROLE joda_api;
+      SET LOCAL search_path = public;
+      PERFORM set_config('app.user_id', 'b1800000-0000-0000-0000-000000000169', true),
+              set_config('app.tenant_id', '11111111-1111-1111-1111-111111111111', true),
+              set_config('app.audience', 'staff', true),
+              set_config('app.session_id', 'b1850000-0000-0000-0000-000000000169', true);
+      SELECT f.available INTO v_con_reserva FROM app.list_decant_plan_lots(v_bulk) f WHERE f.lot_id = v_lot;
+      v_libre := v_hand - 10.2;
+      -- Lo que queda libre se reserva por completo: el lote deja de ser candidato.
+      INSERT INTO app.stock_reservations
+        (tenant_id, variant_id, lot_id, qty, reason, expires_at)
+      VALUES ('11111111-1111-1111-1111-111111111111', v_bulk, v_lot, v_libre, 'decant_hold',
+              now() + interval '1 hour');
+      SELECT count(*) INTO v_filas_al_agotar FROM app.list_decant_plan_lots(v_bulk);
+      IF v_con_reserva = v_libre AND v_filas_al_agotar = 0 THEN
+        RAISE EXCEPTION 'aceptado';
+      END IF;
+      RAISE EXCEPTION 'FALLO disponible=% (esperado %) filas al agotar=% (esperado 0)',
+        v_con_reserva, v_libre, v_filas_al_agotar;
+    END $x$
+  $$,
+  'aceptado');
+
+-- 170 ─ Los índices que usa la API al decidir: las reservas vivas atadas a un
+-- lote (apertura de frasco, plan de decant) y las de un origen (soltar las de
+-- un pedido o de una orden de fraccionamiento), y el único parcial por unidad
+-- serializada. Los tres son parciales sobre `released_at IS NULL`: sin ese
+-- predicado crecerían con el histórico de reservas liberadas.
+SELECT pg_temp.expect_true(170,
+  'Índices parciales de stock_reservations: una sin liberar por unidad (único), por lote y por origen',
+  (SELECT count(*) FROM pg_indexes
+    WHERE schemaname = 'app' AND tablename = 'stock_reservations'
+      AND indexname = 'stock_reservations_one_open_per_serial_unit'
+      AND indexdef LIKE 'CREATE UNIQUE INDEX%(serial_unit_id)%released_at IS NULL%') = 1
+  AND (SELECT count(*) FROM pg_indexes
+        WHERE schemaname = 'app' AND tablename = 'stock_reservations'
+          AND indexname = 'reservations_lot_live'
+          AND indexdef LIKE '%(lot_id)%released_at IS NULL%') = 1
+  AND (SELECT count(*) FROM pg_indexes
+        WHERE schemaname = 'app' AND tablename = 'stock_reservations'
+          AND indexname = 'reservations_reference_live'
+          AND indexdef LIKE '%(reference_type, reference_id)%released_at IS NULL%') = 1);
 
 \echo ''
 \echo '=============================================================='

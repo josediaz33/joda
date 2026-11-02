@@ -104,3 +104,49 @@ export function computeManualHoldExpiresAt(
 
   return ok(startedAt.getTime() + days * DAY_MS);
 }
+
+/**
+ * RN-RES-02 · pedido en espera de pago SIN medio de pago registrado: la
+ * reserva dura lo que el tenant tenga configurado (`tenants.reservation_ttl_hours`,
+ * 24 h por defecto), decisión de José del 2026-10-29. Es el único caso que la
+ * tabla de TTL por medio no cubre y el único que existe hoy, porque todavía no
+ * hay pagos (WP-C18b; interpretación provisional en
+ * `docs/decisiones-provisionales.md`). En cuanto el medio se registre, manda la
+ * tabla de `computeReservationExpiresAt` y esto deja de aplicar.
+ */
+export const ORDER_PENDING_PAYMENT_DEFAULT_TTL_HOURS = 24;
+/** Mismo rango que el CHECK de `tenants.reservation_ttl_hours` (0041): de 1 hora a 30 días. */
+export const RESERVATION_TTL_HOURS_MIN = 1;
+export const RESERVATION_TTL_HOURS_MAX = MANUAL_HOLD_MAX_DAYS * 24;
+
+/**
+ * Vencimiento de la reserva de un pedido que pasa a `awaiting_payment`, como
+ * epoch ms. `ttlHours` sale de la configuración del tenant, que la base ya
+ * acota con un CHECK: que llegue uno fuera de rango o no entero es un bug (de
+ * quien lo leyó, o de una migración que cambió el rango), no un fallo del
+ * negocio, así que lanza.
+ */
+export function computeOrderPendingPaymentExpiresAt(startedAt: Date, ttlHours: number): number {
+  if (
+    !Number.isInteger(ttlHours) ||
+    ttlHours < RESERVATION_TTL_HOURS_MIN ||
+    ttlHours > RESERVATION_TTL_HOURS_MAX
+  ) {
+    throw new InvalidReservationInputError(
+      `computeOrderPendingPaymentExpiresAt requiere ttlHours entero entre ${RESERVATION_TTL_HOURS_MIN} y ${RESERVATION_TTL_HOURS_MAX}, recibido ${ttlHours}.`,
+    );
+  }
+  return startedAt.getTime() + ttlHours * HOUR_MS;
+}
+
+/**
+ * RN-FRA-01 · la reserva de un plan de decant (granel e insumos) dura hasta
+ * que la orden se ejecuta o se cancela, y ahí se libera. `expires_at` es
+ * NOT NULL y un plan que quedara sin ejecutar no puede retener stock para
+ * siempre, así que lleva el tope de una retención del personal (30 días,
+ * RN-RES-02). Decisión provisional de WP-C18b: ninguna regla escrita fija
+ * cuánto dura (`docs/decisiones-provisionales.md`).
+ */
+export function computeDecantHoldExpiresAt(startedAt: Date): number {
+  return startedAt.getTime() + MANUAL_HOLD_MAX_DAYS * DAY_MS;
+}

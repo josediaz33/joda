@@ -685,4 +685,77 @@ describe("planificar un decant sin leer lotes y sin duplicar la orden (WP-B18, R
       ).rejects.toMatchObject({ code: "23505", constraint: ACTIVE_LINE_INDEX });
     });
   });
+
+  // WP-C18b (0041): el plan reserva el granel atado al lote (RN-FRA-02, RN-RES-06), así que
+  // la función tiene que descontarlo, o dos planes verían el mismo granel disponible. Mismo
+  // contrato de seguridad que arriba (SECURITY DEFINER, sin costos): solo cambia `available`.
+  describe("RN-FRA-02, RN-RES-03, RN-RES-06 · la función descuenta las reservas vivas atadas al lote (WP-C18b)", () => {
+    afterEach(async () => {
+      await db.client.query(
+        "DELETE FROM app.stock_reservations WHERE tenant_id = $1 AND reason = 'decant_hold'",
+        [REAL_TENANT_ID],
+      );
+    });
+
+    const reserve = (lotId: string | null, qty: number, expires: string, released = false) =>
+      db.client.query(
+        `INSERT INTO app.stock_reservations
+           (tenant_id, variant_id, lot_id, qty, reason, expires_at, released_at)
+         VALUES ($1, $2, $3, $4, 'decant_hold', now() + $5::interval,
+                 CASE WHEN $6 THEN now() ELSE NULL END)`,
+        [REAL_TENANT_ID, OWN_BULK_VARIANT_ID, lotId, qty, expires, released],
+      );
+
+    it("el vendedor ve el lote con el saldo menos lo reservado, y los otros lotes intactos", async () => {
+      await reserve(TIED_LOT_A_ID, 12.5, "1 hour");
+
+      const { rows } = await as(seller, CANDIDATES_OF(OWN_BULK_VARIANT_ID));
+
+      expect(rows.map((row) => [row.lot_id, row.available])).toEqual([
+        [OLDEST_LOT_ID, "50.000"],
+        [TIED_LOT_A_ID, "17.500"],
+        [TIED_LOT_B_ID, "40.000"],
+      ]);
+    });
+
+    it("las reservas del mismo lote se suman", async () => {
+      await reserve(TIED_LOT_A_ID, 10, "1 hour");
+      await reserve(TIED_LOT_A_ID, 5.25, "2 hours");
+
+      const { rows } = await as(seller, CANDIDATES_OF(OWN_BULK_VARIANT_ID));
+
+      expect(rows.find((row) => row.lot_id === TIED_LOT_A_ID)?.available).toBe("14.750");
+    });
+
+    it("una reserva vencida, una liberada y una sin lote no se descuentan", async () => {
+      await reserve(TIED_LOT_A_ID, 12, "-1 hour");
+      await reserve(TIED_LOT_A_ID, 8, "1 hour", true);
+      await reserve(null, 25, "1 hour");
+
+      const { rows } = await as(seller, CANDIDATES_OF(OWN_BULK_VARIANT_ID));
+
+      expect(rows.map((row) => [row.lot_id, row.available])).toEqual([
+        [OLDEST_LOT_ID, "50.000"],
+        [TIED_LOT_A_ID, "30.000"],
+        [TIED_LOT_B_ID, "40.000"],
+      ]);
+    });
+
+    it("un lote entero reservado deja de ser candidato: no se ofrece un granel que ya está prometido", async () => {
+      await reserve(OLDEST_LOT_ID, 50, "1 hour");
+
+      const { rows } = await as(seller, CANDIDATES_OF(OWN_BULK_VARIANT_ID));
+
+      expect(rows.map((row) => row.lot_id)).toEqual([TIED_LOT_A_ID, TIED_LOT_B_ID]);
+    });
+
+    it("sigue sin devolver más que lot_id, available y opened_at, y ningún costo, con reservas", async () => {
+      await reserve(TIED_LOT_A_ID, 12.5, "1 hour");
+
+      const { rows } = await as(seller, CANDIDATES_OF(OWN_BULK_VARIANT_ID));
+
+      expect(Object.keys(rows[0])).toEqual(["lot_id", "available", "opened_at"]);
+      expect(JSON.stringify(rows)).not.toContain(String(OWN_LOT_UNIT_COST));
+    });
+  });
 });

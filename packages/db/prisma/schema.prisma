@@ -1333,6 +1333,7 @@ model tenants {
   timezone                      String                          @default("America/Asuncion")
   created_at                    DateTime                        @default(now()) @db.Timestamptz(6)
   updated_at                    DateTime                        @default(now()) @db.Timestamptz(6)
+  reservation_ttl_hours         Int                             @default(24)
   accessory_details             accessory_details[]
   accounting_periods            accounting_periods[]
   bom_components                bom_components[]

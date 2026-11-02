@@ -149,35 +149,6 @@ export async function findLotsWithVariant(
   return tx.inventory_lots.findMany({ where: { id: { in: lotIds } }, include: LOT_INCLUDE });
 }
 
-/**
- * Bloquea los lotes (`FOR UPDATE`) en UNA sola sentencia y en orden ascendente
- * de `lot_id`. Sin un orden determinístico, dos ejecuciones que toquen los
- * mismos lotes en distinto orden se interbloquean (.claude/rules/api.md,
- * "Concurrencia"; docs/api-conventions.md §8.2): el mismo `ORDER BY` que va a
- * usar la confirmación de la venta (WP-C19) sobre estos mismos lotes. No lo
- * "limpies": la sentencia única y el orden son el contrato.
- *
- * HOY el orden también lo da el índice: bajo RLS el plan de `joda_api` recorre
- * `inventory_lots_id_tenant_key` y devuelve por `id`, así que sacar el
- * `ORDER BY` no cambia nada a simple vista. Cambia cuando el plan cambia
- * (estadísticas, un índice nuevo): el orden de bloqueo pasa a ser el del heap
- * y dos ejecuciones se interbloquean (40P01). Lo prueba, con el plan de heap
- * forzado, un test de decant.integration.test.ts.
- *
- * Prisma no expone `FOR UPDATE`, así que va por `$queryRaw`; `::uuid[]`
- * explícito porque Prisma manda el arreglo como `text[]`. La lectura tipada
- * se hace DESPUÉS, con una sentencia nueva: en READ COMMITTED ve lo que dejó
- * quien tenía el bloqueo antes.
- */
-export async function lockLotsAscending(tx: TenantTx, lotIds: string[]): Promise<void> {
-  await tx.$queryRaw`
-    SELECT l.id
-      FROM app.inventory_lots l
-     WHERE l.id = ANY(${lotIds}::uuid[])
-     ORDER BY l.id
-       FOR UPDATE OF l`;
-}
-
 // ---------------------------------------------------------------------
 // Órdenes.
 // ---------------------------------------------------------------------
